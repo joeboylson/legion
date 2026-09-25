@@ -1,0 +1,355 @@
+/* Slag Design System — tokens.
+ * Colors come from the Slag terminal/editor palette (palette.mjs).
+ * Layout follows the quiet editorial rhythm of cognition.com.
+ *
+ * Every size is a Fibonacci number in pixels: 3 5 8 13 21 34 55 89 144 233 610 987.
+ * Type steps use the ratio the series converges on, 1.618, anchored on 17px body.
+ * Light is the default; dark follows the OS, and [data-theme] overrides both. */
+
+:root {
+  /* ---- Color: Slag Light ---- */
+  --surface:        #f0f0f0;
+  --layer-1:        #e4e4e4;
+  --layer-2:        #dcdcdc;
+  --layer-3:        #d4d4d4;
+  --border:         #d9d9d9;
+  --fg:             #2a2a2a;
+  --fg-muted:       #666666;
+  --accent:         #b57614;
+  --on-accent:      #1a1a1a;
+  --selection:      #decbae;
+
+  --red:            #9d0006;
+  --green:          #6b670d;
+  --yellow:         #b57614;
+  --blue:           #076678;
+  --magenta:        #8f3f71;
+  --cyan:           #36684a;
+
+  --success:        var(--green);
+  --warning:        #af3a03;
+  --danger:         var(--red);
+  --info:           var(--blue);
+
+  /* ---- Type: five sizes, nothing else ---- */
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-label:   0.8125rem;                         /* 13 */
+  --text-body:    1.0625rem;                         /* 17 */
+  --text-lead:    1.3125rem;                         /* 21 */
+  --text-title:   clamp(1.3125rem, 3vw, 2.125rem);   /* 21 -> 34 */
+  --text-display: clamp(2.125rem, 6vw, 3.4375rem);   /* 34 -> 55 */
+
+  --leading-tight:  1.1;    /* display and titles */
+  --leading-normal: 1.4;    /* short blocks, leads, controls */
+  --leading-prose:  1.618;  /* body copy */
+
+  --tracking-tight: -0.03em;  /* display and titles */
+  --tracking-normal: -0.01em; /* everything else */
+  --tracking-wide:  0.08em;   /* mono labels only */
+
+  --weight-regular: 400;
+  --weight-medium:  500;
+
+  /* ---- Space: Fibonacci pixels ---- */
+  --space-1:  0.1875rem;   /*   3 */
+  --space-2:  0.3125rem;   /*   5 */
+  --space-3:  0.5rem;      /*   8 */
+  --space-4:  0.8125rem;   /*  13 */
+  --space-5:  1.3125rem;   /*  21 */
+  --space-6:  2.125rem;    /*  34 */
+  --space-7:  3.4375rem;   /*  55 */
+  --space-8:  5.5625rem;   /*  89 */
+  --space-9:  9rem;        /* 144 */
+  --space-10: 14.5625rem;  /* 233 */
+
+  /* ---- Layout ---- */
+  --container: 61.6875rem;  /* 987 — page frame */
+  --measure:   38.125rem;   /* 610 — reading column */
+  --gutter:    var(--space-5);
+  --section-y:    clamp(3.4375rem, 9vw, 5.5625rem);  /*  55 ->  89 */
+  --section-y-lg: clamp(5.5625rem, 14vw, 9rem);      /*  89 -> 144 */
+
+  /* ---- Shape ---- */
+  --radius-sm:   3px;
+  --radius-md:   8px;
+  --radius-lg:   13px;
+  --radius-full: 999px;
+  --hairline:    1px solid var(--border);
+
+  /* ---- Motion ---- */
+  --ease:       cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast:   144ms;
+  --dur-normal: 233ms;
+}
+
+/* ---- Color: Slag Dark ---- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface:   #282828;
+    --layer-1:   #333333;
+    --layer-2:   #3b3b3b;
+    --layer-3:   #424242;
+    --border:    #393939;
+    --fg:        #e4e4e4;
+    --fg-muted:  #9a9a9a;
+    --accent:    #fabd2f;
+    --on-accent: #282828;
+    --selection: #67552a;
+
+    --red:       #fb4934;
+    --green:     #b8bb26;
+    --yellow:    #fabd2f;
+    --blue:      #83a598;
+    --magenta:   #d3869b;
+    --cyan:      #8ec07c;
+
+    --warning:   #fabd2f;
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface:   #282828;
+  --layer-1:   #333333;
+  --layer-2:   #3b3b3b;
+  --layer-3:   #424242;
+  --border:    #393939;
+  --fg:        #e4e4e4;
+  --fg-muted:  #9a9a9a;
+  --accent:    #fabd2f;
+  --on-accent: #282828;
+  --selection: #67552a;
+
+  --red:       #fb4934;
+  --green:     #b8bb26;
+  --yellow:    #fabd2f;
+  --blue:      #83a598;
+  --magenta:   #d3869b;
+  --cyan:      #8ec07c;
+
+  --warning:   #fabd2f;
+}
+
+/* ---- Base ---- */
+:where(html, body, div, section, header, footer, main, nav, h1, h2, h3, h4, p, ul, ol, li, figure) {
+  box-sizing: border-box;
+}
+
+html {
+  box-sizing: border-box;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--leading-prose);
+  letter-spacing: var(--tracking-normal);
+  font-weight: var(--weight-regular);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: var(--selection); }
+
+/* h1 and h2 are the same size. Depth comes from position and the mono label
+ * above them, not from a new size. */
+h1, h2 {
+  margin: 0;
+  font-size: var(--text-title);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+/* h3 and h4 are body size in medium weight — a label, not a headline. */
+h3, h4 {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+  line-height: var(--leading-normal);
+}
+
+p { margin: 0 0 var(--space-4); max-width: var(--measure); }
+
+ul, ol { margin: 0 0 var(--space-4); padding-left: var(--space-5); max-width: var(--measure); }
+li { margin-block: var(--space-2); padding-left: var(--space-2); }
+li::marker { color: var(--fg-muted); }
+
+/* Weight is how text comes forward — there is no bold. */
+strong, b { font-weight: var(--weight-medium); }
+
+a {
+  color: inherit;
+  text-decoration-color: var(--border);
+  text-underline-offset: 0.2em;
+}
+a:hover { text-decoration-color: var(--accent); }
+
+code, pre, kbd { font-family: var(--font-mono); font-size: 0.9em; }
+
+hr { border: 0; border-top: var(--hairline); margin: var(--space-7) 0; }
+
+img, svg, video { max-width: 100%; height: auto; display: block; }
+
+/* ---- Layout helpers ---- */
+.container {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.section { padding-block: var(--section-y); }
+.section--lg { padding-block: var(--section-y-lg); }
+.section + .section { border-top: var(--hairline); }
+
+.prose { max-width: var(--measure); }
+
+.stack > :where(:not(:first-child)) { margin-top: var(--space-4); }
+.stack-lg > :where(:not(:first-child)) { margin-top: var(--space-6); }
+
+.grid {
+  display: grid;
+  gap: var(--space-6);
+  grid-template-columns: repeat(auto-fit, minmax(var(--space-10), 1fr));
+}
+
+/* Numbered section head: mono label on the left, content on the right. */
+.section-head {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+@media (min-width: 48rem) {
+  .section-head {
+    grid-template-columns: var(--space-8) 1fr;
+    gap: var(--space-6);
+  }
+}
+
+/* ---- Type helpers ---- */
+.display {
+  font-size: var(--text-display);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: var(--weight-medium);
+  margin: 0;
+  text-wrap: balance;
+}
+
+/* The small mono caps that number and label sections. */
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+}
+
+.lead {
+  font-size: var(--text-lead);
+  line-height: var(--leading-normal);
+  letter-spacing: var(--tracking-normal);
+  color: var(--fg-muted);
+}
+
+.muted { color: var(--fg-muted); }
+
+/* ---- Components ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--fg);
+  color: var(--surface);
+  font: inherit;
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+.btn:hover { background: var(--accent); color: var(--on-accent); }
+
+.btn--secondary {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--border);
+}
+.btn--secondary:hover {
+  background: var(--layer-1);
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--fg-muted);
+  padding-inline: var(--space-3);
+}
+.btn--ghost:hover { background: transparent; color: var(--fg); }
+
+:where(.btn, a, button, input, textarea, select):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card {
+  padding: var(--space-6);
+  border: var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.tag {
+  display: inline-block;
+  padding: var(--space-1) var(--space-4);
+  border: var(--hairline);
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  line-height: var(--leading-normal);
+}
+
+.input {
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  border: var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-label);
+}
+.input::placeholder { color: var(--fg-muted); }
+
+table { width: 100%; border-collapse: collapse; font-size: var(--text-label); }
+th, td { text-align: left; padding: var(--space-4) var(--space-5); border-bottom: var(--hairline); }
+th { font-weight: var(--weight-medium); color: var(--fg-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  :where(html) :where(a, button, .btn, .card) {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+  }
+}

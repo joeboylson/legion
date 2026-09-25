@@ -1,0 +1,59 @@
+/* App-specific styles, on top of tokens.css. Everything sizes off the
+ * Fibonacci scale and the five type sizes — see tokens.css for the source. */
+
+.squad-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.squad-card:hover {
+  border-color: var(--fg-muted);
+  background: var(--layer-1);
+}
+.squad-card .name {
+  font-size: var(--text-lead);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+}
+.squad-card .path {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-grid {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(377px, 1fr));
+  margin-top: var(--space-6);
+}
+
+.term-tile {
+  border: var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.term-tile .term-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--hairline);
+}
+
+.term-tile .term-body {
+  padding: var(--space-3);
+  height: 377px;
+}
+
+.term-tile .term-body .xterm {
+  height: 100%;
+}
