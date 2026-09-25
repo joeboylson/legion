@@ -278,6 +278,16 @@ session_flag() {
   fi
 }
 
+# The startup prompt goes to claude as a file, not inline: tmux rejects a
+# pane command over about 16 KB ("command too long"), and the commander's
+# built-in prompt plus a squad's doctrine and definition passes that.
+prompt_flag() {
+  local dir="$LEGION_LOCAL/prompts"
+  mkdir -p "$dir"
+  printf '%s\n' "$2" > "$dir/$1.md"
+  echo "--append-system-prompt-file $(printf '%q' "$dir/$1.md")"
+}
+
 # An operator name that looks like a flag (e.g. "--help") would otherwise be
 # accepted literally and spawn a real, oddly-named claude session — verified
 # live: an agent probing `legion deploy --help` did exactly that.
@@ -525,7 +535,7 @@ Additional instructions for you specifically:
 $(cat "$LEGION_OPERATORS/commander/definition.md")"
   check_operator commander || exit 1
   config_mode commander >/dev/null || exit 1
-  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag commander) --append-system-prompt $(printf '%q' "$prompt")"
+  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag commander) $(prompt_flag commander "$prompt")"
   local kickoff="${LEGION_KICKOFF:-}"
   [ -n "$mission" ] && kickoff="Get started: $mission"
   [ -n "$kickoff" ] && claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
@@ -596,7 +606,7 @@ Your operator definition:
 $(cat "$(operator_dir "$operator")/definition.md")"
   check_operator "$(operator_base "$operator")" || exit 1
   config_mode "$operator" >/dev/null || exit 1
-  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") --append-system-prompt $(printf '%q' "$prompt")"
+  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") $(prompt_flag "$operator" "$prompt")"
   # Always send an opening message, even on a resume with no mission: without
   # one a resumed session just sits there, and it must check in every start.
   local kickoff="You have just been started (or restarted). Check in with commander now, as your instructions describe — every start, even if this conversation already shows an earlier check-in."
