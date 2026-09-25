@@ -179,32 +179,61 @@ missions. The project has to be a git repo.
 ## Setting up an operator
 
 An operator works fine with nothing but the mission text you give it. To
-give one a lasting setup, create `.legion/operators/<name>/` and add any of
-these files. Each applies to that operator only, so a planner and a builder
-can have completely different setups.
+give one a lasting setup, create `.legion/operators/<name>/` with up to two
+files. Each applies to that operator only, so a planner and a builder can
+have completely different setups.
 
 - `definition.md` — who the operator is: what it's good at, how it should
   work, what it must not do. Legion adds it to the operator's instructions
   every time it starts.
-- `allowed-tools` and `disallowed-tools` — one Claude Code tool rule per
-  line, passed to `claude` as `--allowedTools` and `--disallowedTools`.
-  `claude --help` explains the format. Allowed tools run without asking you
-  for permission first. Disallowed tools are blocked. `Edit(pattern)` covers
-  every file-editing tool.
-- `settings.json` and `mcp.json` — normal Claude Code settings and MCP
-  server files (hooks, environment variables, servers), passed as
-  `--settings` and `--mcp-config`. Legion doesn't change their format.
-- `config-mode` — `layered` or `isolated` (explained below). Set this to
-  give one operator a different mode from the rest of the squad.
-- `model` — which Claude model this operator runs on: `opus`, `sonnet`,
-  `haiku`, or a full model ID. Passed to `claude` as `--model`. Leave it
-  out to use the squad's `LEGION_MODEL` from `.legion/squad`, or
-  Claude Code's own default if that's blank too.
-- `scale` — lets this operator run as several copies at once. The first
-  line is the most copies allowed; leave it blank for 5. See below.
+- `operator.json` — every setting, in one file:
+
+```json
+{
+  "model": "sonnet",
+  "configMode": "isolated",
+  "scale": 2,
+  "allowedTools": ["Edit(**/app/**)", "Bash(uv run pytest:*)"],
+  "disallowedTools": ["Bash(git push:*)"],
+  "settings": { "env": { "LEGION_OPERATOR": "builder" } },
+  "mcpServers": { "fetch": { "command": "uv", "args": ["tool", "run", "mcp-server-fetch"] } }
+}
+```
+
+All the keys are optional:
+
+- `model` — `opus`, `sonnet`, `haiku` or a full model ID, passed to
+  `claude` as `--model`. Leave it out to use `LEGION_MODEL` from
+  `.legion/squad`, or Claude Code's own default if that's blank too.
+- `configMode` — `layered` or `isolated` (explained below). Leave it out to
+  use the squad's `LEGION_CONFIG_MODE`.
+- `scale` — lets the operator run as several copies at once: `true` for up
+  to 5, or a number. See below.
+- `allowedTools` and `disallowedTools` — Claude Code tool rules, passed as
+  `--allowedTools` and `--disallowedTools`. `claude --help` explains the
+  format. Allowed tools run without asking you for permission first.
+  Disallowed tools are blocked. `Edit(pattern)` covers every file-editing
+  tool.
+- `settings` — a normal Claude Code settings object (hooks, environment
+  variables), passed as `--settings`.
+- `mcpServers` — MCP servers for this operator, keyed by name, passed as
+  `--mcp-config`.
+- `$comment` — notes for people; Legion ignores it.
+
+Before starting an operator, Legion checks its `operator.json` against the
+rules in `templates/operator.schema.json`. If anything is wrong — a key it
+doesn't know, a model that isn't a word, a server with no command — it lists
+every problem and doesn't start the operator. Run `legion check` to check all
+of them yourself. Point your editor at the same schema file to get
+suggestions while you type.
+
+Squads set up before `operator.json` keep working with separate files
+(`model`, `config-mode`, `scale`, `allowed-tools`, `disallowed-tools`,
+`settings.json`, `mcp.json`). If an operator has an `operator.json`, Legion
+uses only that.
 
 To stop a planner from editing code, list your code folders in its
-`disallowed-tools`, for example `Edit(src/**)`, and leave the builder's
+`disallowedTools`, for example `Edit(src/**)`, and leave the builder's
 empty. You can't write "block everything except this folder." Block rules
 only match the paths you list, so list each code path you want blocked.
 
@@ -218,11 +247,11 @@ any Claude session, including the commander, to help you write one.
 
 ### Running several copies of an operator
 
-Give an operator a `scale` file to let the commander run more than one
+Give an operator a `scale` setting to let the commander run more than one
 copy of it, for example several builders working on separate missions at
 the same time. The first copy is plain `builder`; the others are
-`builder-2`, `builder-3` and so on, up to the number in the file (5 if the
-file is blank). Every copy uses the same folder, so they share one
+`builder-2`, `builder-3` and so on, up to the number you set (5 if it's
+`true`). Every copy uses the same folder, so they share one
 definition, one set of tool rules and one settings file.
 
 - `legion scale up builder "<mission>"` starts the next free copy, with
@@ -247,25 +276,42 @@ settings from `~/.claude`:
   is then the only settings file that matters.
 
 `LEGION_CONFIG_MODE` in `.legion/squad` sets the default for the whole
-squad. A `config-mode` file in an operator's folder overrides it for that
-operator.
+squad. An operator's `configMode` overrides it for that operator.
 
 ## Pipelines
 
 Operators message each other whenever they need to. You don't have to set
 that up. Use a pipeline when the same steps happen in the same order every
-time and you want that order written down.
+time and you want that route written down.
 
-A pipeline is a text file at `.legion/pipelines/<name>` with one operator
-name per line, in order. An example planner, builder, reviewer pipeline
-comes with Legion in `~/.local/share/legion/templates/pipelines/`. To send a
-mission through it, add a `pipeline: <name>` line to the mission file's
-header.
+A pipeline is a Markdown file at `.legion/pipelines/<name>.md` holding a
+[Mermaid flowchart](https://mermaid.js.org/syntax/flowchart.html). Each box is
+a step named after the operator who does it. A diamond is a yes-or-no
+question, written as a statement that's either true or false, and its arrows
+are labelled `yes` and `no`. A rounded `done` box ends it. Legion never runs
+the flowchart. The operators read it to work out who goes next, and GitHub
+draws it as a diagram.
 
-When an operator finishes its step, it passes the mission straight to the
-next operator on the list. It updates the mission file, starts or messages
-the next operator, and sends the commander a one-line note. The mission
-file keeps a record of every step.
+```mermaid
+flowchart TD
+    planner[planner: write the specs and the plan] --> builder[builder: build it and commit]
+    builder -->|the plan is wrong or unclear| planner
+    builder --> reviewer[reviewer: review the change]
+    reviewer --> approved{the change is approved}
+    approved -->|yes| done([done: report to commander])
+    approved -->|no| builder
+```
+
+`legion init` writes the full rules to `.legion/pipelines/README.md`. It also
+adds a note to the project's `CLAUDE.md`, so any Claude session you ask to
+write a pipeline uses the same format. The example above comes with Legion in
+`~/.local/share/legion/templates/pipelines/feature.md`. To send a mission
+through a pipeline, add a `pipeline: <name>` line to the mission file's header.
+
+When an operator finishes its step, it answers any question that follows and
+passes the mission straight to the next operator. It updates the mission
+file, starts or messages the next operator, and sends the commander a
+one-line note. The mission file keeps a record of every step.
 
 ## License
 

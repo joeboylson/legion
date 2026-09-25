@@ -31,6 +31,7 @@ Once activated (source .legion/bin/activate):
   legion squad [mission...]         deploy commander + planner + builder + reviewer
   legion roster                     show roster/*.md (who has checked in)
   legion list                       show this squad's tmux windows
+  legion check [operator...]        check operator.json files against the schema
   legion grid                       open one tmux window tiling every position
   legion mission start <n>          give mission <n> its own git worktree and branch
   legion mission finish <n>         fast-forward the base branch to it and remove the worktree
@@ -69,12 +70,84 @@ flag_from_list() {
 # follows them (verified: without this ordering, the trailing mission prompt
 # silently vanishes into the preceding flag's value list instead of being
 # passed to claude as the prompt).
+# An operator can keep all its settings in one operator.json (see
+# templates/operator.schema.json) instead of separate files. When it has one,
+# that file is the only source; the separate files are for older squads.
+operator_json() {
+  local f="$LEGION_OPERATORS/$1/operator.json"
+  [ -f "$f" ] && echo "$f"
+}
+
+# Prints one line per problem in an operator's operator.json, following
+# templates/operator.schema.json. jq has no JSON Schema support, so the same
+# rules are written out here; keep the two in step.
+operator_json_problems() {
+  local f="$1"
+  jq empty "$f" 2>/dev/null || { echo "not valid JSON"; return; }
+  jq -r '
+    if type != "object" then "the top level must be an object" else
+      ( (keys - ["$schema", "$comment", "model", "configMode", "scale", "allowedTools", "disallowedTools", "settings", "mcpServers"])[]
+          | "unknown key \"\(.)\"" ),
+      ( select(has("model") and ((.model | type) != "string" or .model == ""))
+          | "model must be a non-empty string, like \"sonnet\"" ),
+      ( select(has("configMode") and ((.configMode | IN("layered", "isolated")) | not))
+          | "configMode must be \"layered\" or \"isolated\"" ),
+      ( select(has("scale") and (.scale != true)
+               and ((.scale | type) != "number" or .scale < 1 or (.scale | floor) != .scale))
+          | "scale must be true (up to 5) or a whole number of at least 1" ),
+      ( ("allowedTools", "disallowedTools") as $k
+          | select(has($k) and ((.[$k] | type) != "array" or any(.[$k][]; type != "string" or . == "")))
+          | "\($k) must be a list of non-empty strings" ),
+      ( select(has("settings") and (.settings | type) != "object")
+          | "settings must be an object" ),
+      ( select(has("mcpServers")) | .mcpServers
+          | if type != "object" then "mcpServers must be an object keyed by server name"
+            else to_entries[]
+              | select((.value | type) != "object" or ((.value | has("command")) or (.value | has("url")) | not))
+              | "mcpServers.\(.key) needs a command or a url"
+            end )
+    end
+  ' "$f"
+}
+
+# Checks one operator's operator.json (if it has one) and prints any problems.
+# Returns 1 when there are problems, so launches can refuse to start.
+check_operator() {
+  local op="$1" f problems
+  f="$(operator_json "$op")" || return 0
+  problems="$(operator_json_problems "$f")"
+  [ -z "$problems" ] && return 0
+  echo "legion: .legion/operators/$op/operator.json has problems:" >&2
+  printf '%s\n' "$problems" | sed 's/^/  - /' >&2
+  return 1
+}
+
+cmd_check() {
+  require_active
+  local ops op failed=0 checked=0
+  if [ $# -gt 0 ]; then ops="$*"; else
+    ops="$(for d in "$LEGION_OPERATORS"/*/; do [ -d "$d" ] && basename "$d"; done)"
+  fi
+  for op in $ops; do
+    op="$(operator_base "$op")"
+    if [ -z "$(operator_json "$op")" ]; then echo "$op: no operator.json (uses separate files)"; continue; fi
+    checked=$((checked + 1))
+    if check_operator "$op"; then echo "$op: ok"; else failed=1; fi
+  done
+  [ "$failed" -eq 0 ] || exit 1
+}
+
 # A scalable operator has a `scale` file in its folder; the first
 # non-comment line is the most copies that may run at once (5 if blank).
 # Copy 1 is plain <operator>; extra copies are <operator>-2, <operator>-3 …
 # and all of them share that one folder's definition, rules and settings.
 scale_max() {
-  local file="$LEGION_OPERATORS/$1/scale" max=""
+  local file="$LEGION_OPERATORS/$1/scale" max="" json
+  if json="$(operator_json "$1")"; then
+    max="$(jq -r 'if .scale == true then 5 elif (.scale | type) == "number" then .scale else empty end' "$json" 2>/dev/null)"
+    [ -n "$max" ] && { echo "$max"; return 0; }
+    return 1
+  fi
   [ -f "$file" ] || return 1
   max="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
   case "$max" in
@@ -103,8 +176,12 @@ operator_dir() {
 # An operator's own config-mode file (first non-comment line: layered or
 # isolated) overrides the squad-wide LEGION_CONFIG_MODE for that operator.
 config_mode() {
-  local file="$(operator_dir "$1")/config-mode" mode=""
-  [ -f "$file" ] && mode="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
+  local dir="$(operator_dir "$1")" mode="" json
+  if json="$(operator_json "$(operator_base "$1")")"; then
+    mode="$(jq -r '.configMode // empty' "$json" 2>/dev/null)"
+  elif [ -f "$dir/config-mode" ]; then
+    mode="$(sed 's/#.*//' "$dir/config-mode" | xargs | awk '{print $1}')"
+  fi
   mode="${mode:-${LEGION_CONFIG_MODE:-layered}}"
   case "$mode" in
     layered|isolated) echo "$mode" ;;
@@ -116,8 +193,12 @@ config_mode() {
 # operator's `model` file (an alias like opus, sonnet or haiku, or a full
 # model id), else LEGION_MODEL from .legion/squad, else claude's own default.
 operator_model() {
-  local file="$(operator_dir "$1")/model" model=""
-  [ -f "$file" ] && model="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
+  local dir="$(operator_dir "$1")" model="" json
+  if json="$(operator_json "$(operator_base "$1")")"; then
+    model="$(jq -r '.model // empty' "$json" 2>/dev/null)"
+  elif [ -f "$dir/model" ]; then
+    model="$(sed 's/#.*//' "$dir/model" | xargs | awk '{print $1}')"
+  fi
   # Read the squad default from the file rather than the environment, so
   # squads whose activate script predates LEGION_MODEL still pick it up.
   [ -n "$model" ] || model="$(awk -F= '$1 == "LEGION_MODEL" { gsub(/"/, "", $2); print $2; exit }' "$LEGION_ROOT/squad" 2>/dev/null)"
@@ -125,13 +206,38 @@ operator_model() {
 }
 
 claude_flags() {
-  local operator="$1" operator_dir="$(operator_dir "$1")" flags=""
+  local operator="$1" operator_dir="$(operator_dir "$1")" flags="" json rule
   flags="$flags$(flag_from_list --add-dir "$LEGION_AO")"
   [ "$(config_mode "$operator")" = "isolated" ] && flags="$flags --setting-sources project,local"
-  flags="$flags$(flag_from_list --allowedTools "$operator_dir/allowed-tools")"
-  flags="$flags$(flag_from_list --disallowedTools "$operator_dir/disallowed-tools")"
-  [ -f "$operator_dir/settings.json" ] && flags="$flags --settings $(printf '%q' "$operator_dir/settings.json")"
-  [ -f "$operator_dir/mcp.json" ] && flags="$flags --mcp-config $(printf '%q' "$operator_dir/mcp.json")"
+  if json="$(operator_json "$(operator_base "$operator")")"; then
+    # claude takes --settings and --mcp-config as files, so write this
+    # operator's sections out under local/, which stays out of git.
+    local gen="$LEGION_LOCAL/generated/$(operator_base "$operator")"
+    mkdir -p "$gen"
+    while IFS= read -r rule; do
+      [ -n "$rule" ] && flags="$flags --allowedTools $(printf '%q' "$rule")"
+    done <<EOF
+$(jq -r '.allowedTools[]?' "$json")
+EOF
+    while IFS= read -r rule; do
+      [ -n "$rule" ] && flags="$flags --disallowedTools $(printf '%q' "$rule")"
+    done <<EOF
+$(jq -r '.disallowedTools[]?' "$json")
+EOF
+    if jq -e 'has("settings")' "$json" >/dev/null; then
+      jq '.settings' "$json" > "$gen/settings.json"
+      flags="$flags --settings $(printf '%q' "$gen/settings.json")"
+    fi
+    if jq -e 'has("mcpServers")' "$json" >/dev/null; then
+      jq '{mcpServers: .mcpServers}' "$json" > "$gen/mcp.json"
+      flags="$flags --mcp-config $(printf '%q' "$gen/mcp.json")"
+    fi
+  else
+    flags="$flags$(flag_from_list --allowedTools "$operator_dir/allowed-tools")"
+    flags="$flags$(flag_from_list --disallowedTools "$operator_dir/disallowed-tools")"
+    [ -f "$operator_dir/settings.json" ] && flags="$flags --settings $(printf '%q' "$operator_dir/settings.json")"
+    [ -f "$operator_dir/mcp.json" ] && flags="$flags --mcp-config $(printf '%q' "$operator_dir/mcp.json")"
+  fi
   local model
   model="$(operator_model "$operator")"
   [ -n "$model" ] && flags="$flags --model $(printf '%q' "$model")"
@@ -264,6 +370,20 @@ cmd_init() {
   mkdir -p .legion/operators .legion/pipelines
   touch .legion/missions/todo/.gitkeep .legion/missions/active/.gitkeep .legion/missions/done/.gitkeep
   touch .legion/operators/.gitkeep .legion/pipelines/.gitkeep
+  local templates="${LEGION_TEMPLATES:-$HOME/.local/share/legion/templates}"
+  [ -f "$templates/pipelines/README.md" ] && cp "$templates/pipelines/README.md" .legion/pipelines/README.md
+  # So any Claude session in this project, not just the squad, writes
+  # pipelines in the same format.
+  if ! { [ -f CLAUDE.md ] && awk '/^## Legion pipelines/ { f = 1 } END { exit !f }' CLAUDE.md; }; then
+    [ -s CLAUDE.md ] && printf '\n' >> CLAUDE.md
+    cat >> CLAUDE.md <<'EOF'
+## Legion pipelines
+
+Pipelines live in `.legion/pipelines/<name>.md` as Mermaid flowcharts. Follow
+`.legion/pipelines/README.md` when writing or changing one.
+EOF
+    echo "added a 'Legion pipelines' note to CLAUDE.md"
+  fi
 
   # Committed — shared via git, one squad per project.
   cat > .legion/squad <<EOF
@@ -367,9 +487,9 @@ Workflow: write new missions into todo/ as you think of them (or as asked of you
 
 Every mission that changes project files gets its own git worktree: a separate checkout of the project on its own branch, so two missions (or a paused one) never leave edits in each other's way. When you move such a mission to active/, run 'legion mission start <number>' first — it creates the worktree, adds 'worktree:', 'branch:' and 'base:' lines to the mission file, and prints the worktree path; include that path when you hand the mission over. Mission files, the roster and the log always stay in the project root's .legion/, never the worktree's copy. When reviewer approves, run 'legion mission finish <number>': it fast-forwards the base branch to the mission branch and removes the worktree. If it refuses because the base branch moved on, send the mission back to builder to rebase onto the base branch in the worktree, then finish again. Then move the file to done/. A paused mission keeps its worktree as is; nothing needs saving.
 
-Some operators are scalable: their folder has a 'scale' file holding the most copies that may run at once (5 if blank). Every copy uses that folder's definition and rules; copy 1 is '$LEGION_SQUAD_NAME-<operator>' and extras are '$LEGION_SQUAD_NAME-<operator>-2' and up. When independent missions are waiting on a busy scalable operator, run 'legion scale up <operator> \"<mission>\"' to start the next free copy with that mission, and 'legion scale <operator>' to see which copies are running. Each copy takes one mission at a time, in that mission's own worktree. When a copy has nothing left in active/, stand it down with 'legion stand-down <operator>-<n>'. Only scale up for work that can really run side by side; missions that touch the same files still merge one at a time, so the later one will need a rebase.
+Some operators are scalable: their operator.json has a 'scale' setting (true for up to 5, or a number), or older squads have a 'scale' file in their folder. Every copy uses that folder's definition and rules; copy 1 is '$LEGION_SQUAD_NAME-<operator>' and extras are '$LEGION_SQUAD_NAME-<operator>-2' and up. When independent missions are waiting on a busy scalable operator, run 'legion scale up <operator> \"<mission>\"' to start the next free copy with that mission, and 'legion scale <operator>' to see which copies are running. Each copy takes one mission at a time, in that mission's own worktree. When a copy has nothing left in active/, stand it down with 'legion stand-down <operator>-<n>'. Only scale up for work that can really run side by side; missions that touch the same files still merge one at a time, so the later one will need a rebase.
 
-Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline: a plain text file at $LEGION_PIPELINES/<name>, one operator per line in order (lines starting with # are comments, not stages) (e.g. planner, then builder, then reviewer — operators don't need to exist yet, they get deployed as the pipeline reaches them). Give a mission file a 'pipeline: <name>' header field and operators hand it off directly to the next stage when they finish — the mission file still records every step (that's the audit trail), and whoever hands off also sends you a one-line FYI, so you stay aware without brokering it. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
+Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline. Pipelines are Markdown files, $LEGION_PIPELINES/<name>.md, holding a Mermaid flowchart. Each box is a step, named after the operator who does it (builder[builder: build it]); the first box is the first step. A diamond is a statement that is either true or false (approved{the change is approved}), decided by whoever just finished, and its arrows are labelled yes or no. A labelled arrow out of a step is only followed when its label is true; an unlabelled arrow is the normal next step. A rounded box named done ends the pipeline. $LEGION_PIPELINES/README.md has the full rules. An older squad may still have a plain list at $LEGION_PIPELINES/<name> instead: one operator per line, in order, with # lines as comments. Operators named in a pipeline don't need to exist yet; they get deployed as the pipeline reaches them. Give a mission file a 'pipeline: <name>' header field and operators hand it off directly to the next stage when they finish — the mission file still records every step (that's the audit trail), and whoever hands off also sends you a one-line FYI, so you stay aware without brokering it. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
 
 Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse name/operator/role and write/update that operator's file:
 name: <session name>
@@ -378,7 +498,7 @@ status: active
 last_seen: <ISO 8601>
 When asked who is active, cross-check the files against ListAgents and report the live ones; for any file whose name no longer appears there, set status: stood-down without deleting the file. This tracks presence only — what someone is working on lives in $LEGION_MISSIONS/active/ instead, don't duplicate it here.
 
-There is also a shared log file at $LEGION_LOG, committed to the repo, for freeform context and decisions that don't fit the mission or roster format — read it at startup, keep it updated. \$LEGION_OPERATORS/<operator>/definition.md is that operator's persistent identity and expertise — worth reading yourself when deciding who on the squad to point at a given need, since that's how operators know each other's strengths well enough to reach out directly. Example operator definitions (planner/builder/reviewer) live at ~/.local/share/legion/templates/operators/ if you want a starting point when defining a new one — copy and adapt, or draft one from scratch; ask the human if you want help thinking one through. Each operator's config is its own — access and tool permissions are set per operator, not squad-wide: \$LEGION_OPERATORS/<operator>/allowed-tools and disallowed-tools (one Claude Code tool pattern per line, e.g. \"Edit(src/**)\" — see 'claude --help' for the pattern syntax) restrict what that specific operator can touch, e.g. a planner that should only ever write the plan, never code. There is no single pattern meaning 'only this folder' — write concrete deny patterns for wherever this repo's real code lives. The human directing you may talk to you two ways: attached directly to this window, or as a cross-session message (from another Claude Code session addressing you as '$addr') — treat both the same. Overall mission: $mission_display"
+There is also a shared log file at $LEGION_LOG, committed to the repo, for freeform context and decisions that don't fit the mission or roster format — read it at startup, keep it updated. \$LEGION_OPERATORS/<operator>/definition.md is that operator's persistent identity and expertise — worth reading yourself when deciding who on the squad to point at a given need, since that's how operators know each other's strengths well enough to reach out directly. Example operator definitions (planner/builder/reviewer) live at ~/.local/share/legion/templates/operators/ if you want a starting point when defining a new one — copy and adapt, or draft one from scratch; ask the human if you want help thinking one through. Each operator's config is its own — model, tool permissions, settings and MCP servers are set per operator, not squad-wide, in \$LEGION_OPERATORS/<operator>/operator.json (schema: ~/.local/share/legion/templates/operator.schema.json; older squads use separate files instead). Its allowedTools and disallowedTools lists hold Claude Code tool patterns, e.g. \"Edit(**/src/**)\" (see 'claude --help' for the syntax), and restrict what that specific operator can touch, e.g. a planner that should only ever write the plan, never code. There is no single pattern meaning 'only this folder' — write concrete deny patterns for wherever this repo's real code lives. If you change an operator.json, run 'legion check <operator>' before deploying it; legion refuses to start an operator whose operator.json has problems. The human directing you may talk to you two ways: attached directly to this window, or as a cross-session message (from another Claude Code session addressing you as '$addr') — treat both the same. Overall mission: $mission_display"
   [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
 
 This squad's doctrine:
@@ -387,6 +507,7 @@ $(cat "$LEGION_DOCTRINE")"
 
 Additional instructions for you specifically:
 $(cat "$LEGION_OPERATORS/commander/definition.md")"
+  check_operator commander || exit 1
   config_mode commander >/dev/null || exit 1
   local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag commander) --append-system-prompt $(printf '%q' "$prompt")"
   local kickoff="${LEGION_KICKOFF:-}"
@@ -448,7 +569,7 @@ cmd_deploy() {
 
 If your mission file has a 'worktree:' header, that folder is where this mission's code lives: read, edit, test and commit there (use its paths for file edits, and cd into it for shell commands). Don't touch the project root's copy of those files for this mission. Mission files, the roster and the log stay in the project root's .legion/ — update those there, never in the worktree.
 
-If the mission file you were given has a 'pipeline: <name>' header, read $LEGION_PIPELINES/<name> (one operator per line, in order; lines starting with # are comments, not stages) to find your position in it. When you finish, if there is an operator listed after yours, hand off directly — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If the next stage is a scalable operator (its folder has a 'scale' file), it may be running as several copies — '$LEGION_SQUAD_NAME-<operator>', '$LEGION_SQUAD_NAME-<operator>-2' and so on, shown in ListAgents. Hand off to a copy that has no mission in \$LEGION_MISSIONS/active/ assigned to it; if every copy is busy, ask '$commander_addr' to scale up instead of queueing behind a busy copy. If you are the last stage in the pipeline, or the mission has no pipeline field, report back to '$commander_addr' when your mission is done — and along the way, reach out to any other operator directly whenever their expertise would help."
+If the mission file you were given has a 'pipeline: <name>' header, read that pipeline to find your step in it. Pipelines are Markdown files, $LEGION_PIPELINES/<name>.md, holding a Mermaid flowchart. Each box is a step, named after the operator who does it (builder[builder: build it]); the first box is the first step. A diamond is a statement that is either true or false (approved{the change is approved}), decided by whoever just finished, and its arrows are labelled yes or no. A labelled arrow out of a step is only followed when its label is true; an unlabelled arrow is the normal next step. A rounded box named done ends the pipeline. $LEGION_PIPELINES/README.md has the full rules. An older squad may still have a plain list at $LEGION_PIPELINES/<name> instead: one operator per line, in order, with # lines as comments. When you finish your step, decide any question that follows it and follow the arrows to the next step. If that step belongs to another operator, hand off directly — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If the next stage is a scalable operator (a 'scale' setting in its operator.json, or a 'scale' file in older squads), it may be running as several copies — '$LEGION_SQUAD_NAME-<operator>', '$LEGION_SQUAD_NAME-<operator>-2' and so on, shown in ListAgents. Hand off to a copy that has no mission in \$LEGION_MISSIONS/active/ assigned to it; if every copy is busy, ask '$commander_addr' to scale up instead of queueing behind a busy copy. If the arrows lead to done, or the mission has no pipeline field, report back to '$commander_addr' when your mission is done — and along the way, reach out to any other operator directly whenever their expertise would help."
   [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
 
 This squad's doctrine:
@@ -457,6 +578,7 @@ $(cat "$LEGION_DOCTRINE")"
 
 Your operator definition:
 $(cat "$(operator_dir "$operator")/definition.md")"
+  check_operator "$(operator_base "$operator")" || exit 1
   config_mode "$operator" >/dev/null || exit 1
   local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") --append-system-prompt $(printf '%q' "$prompt")"
   # Always send an opening message, even on a resume with no mission: without
@@ -692,6 +814,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   stand-down) shift; cmd_standdown "$@" ;;
   list) cmd_list ;;
+  check) shift; cmd_check "$@" ;;
   scale) shift; cmd_scale "$@" ;;
   mission) shift; cmd_mission "$@" ;;
   grid) cmd_grid ;;

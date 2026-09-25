@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joeboylson/legion/templates/operator.schema.json",
+  "title": "Legion operator",
+  "description": "Everything about one operator except its definition.md: .legion/operators/<operator>/operator.json. Legion checks this file with `legion check` before starting the operator.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "type": "string", "description": "Free-form notes; Legion ignores it." },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Claude model for this operator: opus, sonnet, haiku or a full model id. Passed as --model. Leave it out to use LEGION_MODEL from .legion/squad."
+    },
+    "configMode": {
+      "enum": ["layered", "isolated"],
+      "description": "layered loads your own ~/.claude settings too; isolated skips them. Leave it out to use LEGION_CONFIG_MODE from .legion/squad."
+    },
+    "scale": {
+      "description": "Lets the operator run as several copies (<operator>, <operator>-2, …). true means up to 5; a number sets the most copies. Leave it out for a single copy.",
+      "oneOf": [
+        { "const": true },
+        { "type": "integer", "minimum": 1 }
+      ]
+    },
+    "allowedTools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Claude Code tool rules that run without asking, passed as --allowedTools."
+    },
+    "disallowedTools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Claude Code tool rules that are blocked, passed as --disallowedTools."
+    },
+    "settings": {
+      "type": "object",
+      "description": "A normal Claude Code settings object (hooks, env, …), passed as --settings."
+    },
+    "mcpServers": {
+      "type": "object",
+      "description": "MCP servers for this operator, keyed by name, passed as --mcp-config.",
+      "additionalProperties": {
+        "type": "object",
+        "anyOf": [
+          { "required": ["command"] },
+          { "required": ["url"] }
+        ]
+      }
+    }
+  }
+}
