@@ -112,6 +112,18 @@ config_mode() {
   esac
 }
 
+# Which Claude model a position runs on: the first non-comment line of its
+# operator's `model` file (an alias like opus, sonnet or haiku, or a full
+# model id), else LEGION_MODEL from .legion/squad, else claude's own default.
+operator_model() {
+  local file="$(operator_dir "$1")/model" model=""
+  [ -f "$file" ] && model="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
+  # Read the squad default from the file rather than the environment, so
+  # squads whose activate script predates LEGION_MODEL still pick it up.
+  [ -n "$model" ] || model="$(awk -F= '$1 == "LEGION_MODEL" { gsub(/"/, "", $2); print $2; exit }' "$LEGION_ROOT/squad" 2>/dev/null)"
+  echo "$model"
+}
+
 claude_flags() {
   local operator="$1" operator_dir="$(operator_dir "$1")" flags=""
   flags="$flags$(flag_from_list --add-dir "$LEGION_AO")"
@@ -120,6 +132,9 @@ claude_flags() {
   flags="$flags$(flag_from_list --disallowedTools "$operator_dir/disallowed-tools")"
   [ -f "$operator_dir/settings.json" ] && flags="$flags --settings $(printf '%q' "$operator_dir/settings.json")"
   [ -f "$operator_dir/mcp.json" ] && flags="$flags --mcp-config $(printf '%q' "$operator_dir/mcp.json")"
+  local model
+  model="$(operator_model "$operator")"
+  [ -n "$model" ] && flags="$flags --model $(printf '%q' "$model")"
   echo "$flags"
 }
 
@@ -259,6 +274,9 @@ LEGION_SQUAD_NAME="$squad"
 #   (below) becomes the only settings source that matters for whoever has one.
 # This is the squad default; operators/<operator>/config-mode overrides it.
 LEGION_CONFIG_MODE="layered"
+# Default Claude model for every session (opus, sonnet, haiku or a full model
+# id). Blank uses claude's own default; operators/<operator>/model overrides it.
+LEGION_MODEL=""
 EOF
   cat > .legion/log.md <<EOF
 # $squad — log
@@ -299,7 +317,7 @@ fi
 
 export LEGION_ROOT="$(pwd)/.legion"
 . "$LEGION_ROOT/squad"
-export LEGION_SQUAD_NAME LEGION_CONFIG_MODE
+export LEGION_SQUAD_NAME LEGION_CONFIG_MODE LEGION_MODEL
 export LEGION_ROSTER="$LEGION_ROOT/roster"
 export LEGION_LOG="$LEGION_ROOT/log.md"
 export LEGION_MISSIONS="$LEGION_ROOT/missions"
@@ -316,7 +334,7 @@ export PS1="(legion:$LEGION_SQUAD_NAME) $PS1"
 
 deactivate() {
   export PS1="$_legion_old_ps1"
-  unset LEGION_ROOT LEGION_SQUAD_NAME LEGION_CONFIG_MODE LEGION_ROSTER LEGION_LOG LEGION_MISSIONS LEGION_OPERATORS LEGION_DOCTRINE LEGION_AO LEGION_PIPELINES LEGION_LOCAL
+  unset LEGION_ROOT LEGION_SQUAD_NAME LEGION_CONFIG_MODE LEGION_MODEL LEGION_ROSTER LEGION_LOG LEGION_MISSIONS LEGION_OPERATORS LEGION_DOCTRINE LEGION_AO LEGION_PIPELINES LEGION_LOCAL
   unset -f deactivate
   unset _legion_old_ps1
 }

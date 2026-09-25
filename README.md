@@ -196,6 +196,10 @@ can have completely different setups.
   `--settings` and `--mcp-config`. Legion doesn't change their format.
 - `config-mode` — `layered` or `isolated` (explained below). Set this to
   give one operator a different mode from the rest of the squad.
+- `model` — which Claude model this operator runs on: `opus`, `sonnet`,
+  `haiku`, or a full model ID. Passed to `claude` as `--model`. Leave it
+  out to use the squad's `LEGION_MODEL` from `.legion/squad`, or
+  Claude Code's own default if that's blank too.
 - `scale` — lets this operator run as several copies at once. The first
   line is the most copies allowed; leave it blank for 5. See below.
 
