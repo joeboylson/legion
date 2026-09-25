@@ -23,8 +23,11 @@ else
 fi
 
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/legion"
-cp "$SRC/bin/legion" "$HOME/.local/bin/legion"
-chmod +x "$HOME/.local/bin/legion"
+# Copy next to the old one, then swap it in: a legion command already running
+# keeps reading the old file instead of the middle of the new one.
+cp "$SRC/bin/legion" "$HOME/.local/bin/legion.new"
+chmod +x "$HOME/.local/bin/legion.new"
+mv "$HOME/.local/bin/legion.new" "$HOME/.local/bin/legion"
 rm -rf "$HOME/.local/share/legion/templates"
 cp -R "$SRC/templates" "$HOME/.local/share/legion/templates"
 

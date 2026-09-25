@@ -988,21 +988,30 @@ cmd_grid() {
   fi
 }
 
-case "${1:-}" in
-  init) shift; cmd_init "$@" ;;
-  src) echo "$LEGION_SRC" ;;
-  commander) shift; cmd_commander "$@" ;;
-  deploy) shift; cmd_deploy "$@" ;;
-  squad) shift; cmd_squad "$@" ;;
-  roster) cmd_roster ;;
-  attach) shift; cmd_attach "$@" ;;
-  capture) shift; cmd_capture "$@" ;;
-  stand-down) shift; cmd_standdown "$@" ;;
-  list) cmd_list ;;
-  message) shift; cmd_message "$@" ;;
-  check) shift; cmd_check "$@" ;;
-  scale) shift; cmd_scale "$@" ;;
-  mission) shift; cmd_mission "$@" ;;
-  grid) cmd_grid ;;
-  *) usage ;;
-esac
+# Bash reads a script from its file as it runs, so an edit or reinstall
+# while a long command (like `legion message wait`) is running would make it
+# read from the middle of the new file when it finishes. Everything runs from
+# inside main, and the last line calls it and exits, so bash has read the
+# whole file before running anything and never goes back to it.
+main() {
+  case "${1:-}" in
+    init) shift; cmd_init "$@" ;;
+    src) echo "$LEGION_SRC" ;;
+    commander) shift; cmd_commander "$@" ;;
+    deploy) shift; cmd_deploy "$@" ;;
+    squad) shift; cmd_squad "$@" ;;
+    roster) cmd_roster ;;
+    attach) shift; cmd_attach "$@" ;;
+    capture) shift; cmd_capture "$@" ;;
+    stand-down) shift; cmd_standdown "$@" ;;
+    list) cmd_list ;;
+    message) shift; cmd_message "$@" ;;
+    check) shift; cmd_check "$@" ;;
+    scale) shift; cmd_scale "$@" ;;
+    mission) shift; cmd_mission "$@" ;;
+    grid) cmd_grid ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"; exit
