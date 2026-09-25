@@ -1,9 +1,15 @@
 # legion
 
-A hub-and-spoke multi-agent harness for [Claude Code](https://claude.com/claude-code),
-built on tmux. One squad per project: a `commander` that partitions work and
-routes everything between operators, who only ever talk back to it — never to
-each other, except through explicitly declared pipelines.
+A multi-agent harness for [Claude Code](https://claude.com/claude-code), built
+on tmux, run on mission command: `commander` sets direction and goals, not
+method, and is the tiebreaker when a decision needs someone with the whole
+mission in view. Operators own the how within their own expertise, and
+coordinate directly with each other when they need another's skills —
+`commander` doesn't broker that. Verified live: a `builder` deployed a
+`designer` on its own initiative, the two worked out a color palette between
+themselves entirely peer-to-peer, and `commander`'s own summary of the
+exchange was "the builder asked the designer directly instead of going
+through me, as the mission required."
 
 Claude Code sessions can already address each other by name (`ListAgents` /
 `SendMessage`), and that name is stable for the process's lifetime. Legion
@@ -39,16 +45,18 @@ legion init                              # creates ./.legion/ (roster + activate
 source .legion/bin/activate              # (legion:some-project) prompt, gates the commands below
 legion squad "ship the export feature"   # commander + planner + builder + reviewer
 legion roster                            # who has checked in
+legion list                              # show tmux windows for every position
+legion attach builder                    # jump into its tmux window directly
 legion capture builder                   # read its pane without attaching
 legion stand-down builder                # kill its tmux window
 deactivate                               # leave the shell, commands stop working again
 ```
 
-`legion commander`/`deploy`/`roster`/`stand-down`/`list` all refuse to run
-outside an activated shell; `legion init` is the only thing that works
-unactivated. `deactivate` is a shell function defined by sourcing `activate`,
-undefined again on `deactivate` itself — no standing alias, just `legion`
-typed out each time.
+`legion commander`/`deploy`/`roster`/`attach`/`capture`/`stand-down`/`list`
+all refuse to run outside an activated shell; `legion init` is the only thing
+that works unactivated. `deactivate` is a shell function defined by sourcing
+`activate`, undefined again on `deactivate` itself — no standing alias, just
+`legion` typed out each time.
 
 ## One squad per project
 
@@ -87,8 +95,9 @@ order is visible from `ls` alone. `commander` writes new missions into
 to `done/` when they report back — a plain `mv`, no JSON to get wrong, and a
 history you can read straight out of `git log`. Operators check in with
 `<squad>-commander` once at startup (`SendMessage`); its system prompt tells
-it to upsert `roster/<operator>.md` accordingly and relay output between
-operators itself rather than letting them talk directly.
+it to upsert `roster/<operator>.md` accordingly. Beyond that check-in and the
+final report, commander stays out of the way — operators work out the
+details of getting there among themselves.
 
 ## Operators
 
@@ -130,17 +139,18 @@ Claude session (including `commander` itself) to help draft one from scratch.
 
 ## Pipelines
 
-The one deliberate exception to "operators only message commander" —
-declared sequences where adjacent stages hand off directly. A plain text
-file at `.legion/pipelines/<name>` lists operators in order (an example
+Operators messaging each other directly is the normal case, not something
+that needs arranging. Pipelines are for formalizing a known, repeatable
+sequence rather than leaving it ad hoc: a plain text file at
+`.legion/pipelines/<name>` lists operators in order (an example
 `planner`/`builder`/`reviewer` pipeline ships at
 `~/.local/share/legion/templates/pipelines/`); a mission file gets a
 `pipeline: <name>` header. When an operator with a pipeline mission
-finishes, it hands off straight to the next stage instead of stopping at
-`commander` — updates the mission file, deploys or messages the next
-operator directly, and separately sends `commander` a one-line FYI, so
-`commander` stays aware without brokering every step. The mission file is
-still the audit trail regardless of who's talking to whom directly.
+finishes, it hands off straight to the next stage — updates the mission
+file, deploys or messages the next operator directly, and separately sends
+`commander` a one-line FYI, so `commander` stays aware without brokering it.
+The mission file is still the audit trail regardless of who's talking to
+whom directly.
 
 ## License
 
