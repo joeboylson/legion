@@ -10,6 +10,8 @@
 #   deactivate                       # defined by the sourced script
 set -euo pipefail
 
+LEGION_SRC="https://github.com/joeboylson/legion"
+
 require_active() {
   if [ -z "${LEGION_ROOT:-}" ]; then
     echo "not inside an activated Legion shell — run: source .legion/bin/activate" >&2
@@ -23,6 +25,7 @@ usage() {
 legion — Claude Code squad over tmux, run on mission command, scoped per project
 
   legion init [squad-name]      create ./.legion (roster/missions dirs + activate script)
+  legion src                    print where legion's source code lives
 
 Once activated (source .legion/bin/activate):
   legion commander [mission...]     start/reattach the fixed commander session
@@ -806,6 +809,7 @@ cmd_grid() {
 
 case "${1:-}" in
   init) shift; cmd_init "$@" ;;
+  src) echo "$LEGION_SRC" ;;
   commander) shift; cmd_commander "$@" ;;
   deploy) shift; cmd_deploy "$@" ;;
   squad) shift; cmd_squad "$@" ;;

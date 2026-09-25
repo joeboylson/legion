@@ -67,7 +67,9 @@ legion stand-down                        # stop the whole squad
 deactivate                               # turn legion commands off again
 ```
 
-Every command except `legion init` refuses to run until you've run
+`legion src` prints the address of this repo on GitHub.
+
+Every command except `legion init` and `legion src` refuses to run until you've run
 `source .legion/bin/activate` in that shell. That keeps you from
 starting sessions in the wrong project. `deactivate` turns it off again.
 
