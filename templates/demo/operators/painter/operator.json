@@ -1,0 +1,23 @@
+{
+  "$comment": "Four copies, one per tile. Writes only its own tile.",
+  "model": "sonnet",
+  "scale": 4,
+  "allowedTools": [
+    "Bash(legion message:*)",
+    "Edit(tiles/**)",
+    "Read(**)",
+    "mcp__legion"
+  ],
+  "disallowedTools": [
+    "EnterPlanMode",
+    "Edit(brief.md)",
+    "Edit(assemble.sh)",
+    "Bash(git:*)"
+  ],
+  "settings": {
+    "permissions": {
+      "defaultMode": "auto"
+    }
+  },
+  "configMode": "isolated"
+}

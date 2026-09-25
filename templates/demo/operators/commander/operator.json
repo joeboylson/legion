@@ -1,0 +1,25 @@
+{
+  "$comment": "Runs the demo: writes the tile missions, starts painters and the critic, stitches the mural.",
+  "model": "sonnet",
+  "allowedTools": [
+    "Bash(bash assemble.sh)",
+    "Bash(legion message:*)",
+    "Bash(legion:*)",
+    "Bash(open mural.html)",
+    "Bash(xdg-open mural.html)",
+    "Read(**)",
+    "mcp__legion"
+  ],
+  "disallowedTools": [
+    "EnterPlanMode",
+    "Edit(tiles/**)",
+    "Edit(brief.md)",
+    "Bash(git:*)"
+  ],
+  "settings": {
+    "permissions": {
+      "defaultMode": "auto"
+    }
+  },
+  "configMode": "isolated"
+}

@@ -9,12 +9,33 @@ Everything Legion knows lives in plain files in your project's `.legion/`
 folder. There's no background service and no database. You can read any of
 it with `cat` and track it with git.
 
+## Why it works well
+
+- **You only start the commander.** Operators come up when the work reaches
+  them, and go away when it no longer can. A squad might define ten
+  operators, but a mission that only needs two starts only those two.
+- **One set of operators, many pipelines.** Each operator has one job,
+  like "review this branch" or "build this change", and doesn't care which
+  pipeline sent the work. A pipeline is a short flowchart that picks which
+  operators a mission goes through and in what order. Adding a new kind of
+  work means writing a new flowchart, not new operators.
+- **The pipeline decides who's next; the commander starts them.** When a
+  step finishes, the operator reads the pipeline, names the next operator
+  and hands the mission to the commander. The commander is the only one
+  that starts or stops sessions, so nobody spins up a teammate by mistake.
+- **Squad actions are tools.** Every session gets Legion's MCP server, with
+  the actions its role allows: hand off, ask the human, report done for
+  operators; start, scale and stand down for the commander. A Claude session
+  outside the squad can plug in too, to check on it and answer questions.
+- **Stopping is cheap.** A stood-down operator keeps its conversation, so
+  starting it again later picks up where it left off.
+
 ## Words used here
 
 Legion's commands and files use a few names. This is what each one means:
 
 - **Squad** — the team of sessions working on one project. Each project has
-  one squad, and its name comes from `.legion/squad`.
+  one squad, and its name comes from `.legion/legion.json`.
 - **Commander** — the lead session. It decides what needs doing, hands out
   work, and settles disagreements. It doesn't tell the others how to do
   their jobs.
@@ -33,7 +54,7 @@ session, so the others can always find it.
 
 - [Claude Code](https://claude.com/claude-code), with `claude` on your `PATH`
 - `tmux`
-- `git` and `uuidgen` (both come with macOS and most Linux systems)
+- `git`, `uuidgen` and `python3` (all come with macOS and most Linux systems)
 
 ## Install
 
@@ -48,6 +69,21 @@ the installer tells you.
 If you have a clone of this repo, run `./install.sh` from it instead. It
 installs the clone's own files, including any changes you've made. Run it
 again after each change to reinstall.
+
+## See it work: `legion demo`
+
+```bash
+legion demo
+```
+
+One command, in any terminal, and a squad paints a mural while you watch. "Signal" is an abstract circuit board in four neon colours:
+
+- The commander splits the canvas into four tiles and starts four painter copies at once.
+- Each painter draws its tile. Their traces have to meet at exact points along the seams, and two rings run through all four tiles.
+- A critic checks every tile against the brief and sends back any that break the rules.
+- When all four pass, the commander stitches them into `mural.html`, opens it, and stands everyone down.
+
+It runs in a temp folder (or one you pass) with its own squad, so it never touches a project. Its operators run isolated from your own Claude Code settings, in auto mode, with the tools the demo needs already allowed, so you shouldn't get permission prompts. It takes a few minutes, and every operator runs on Sonnet, which is the model auto mode needs. It needs `claude`, `tmux`, `jq`, `git` and `python3`.
 
 ## Quickstart
 
@@ -103,14 +139,14 @@ that session's tile.
 
 Commit `.legion/` with your project. Most of it is meant to be shared:
 
-- `squad` — the squad's name and default config mode (see below). Legion
-  writes the name once at `init`, so every clone uses the same addresses.
+- `legion.json` — every squad-wide setting: the squad's name, extra
+  folders, defaults for every operator, and the commander's own settings
+  (see [Squad settings](#squad-settings)). Legion writes the name once at
+  `init`, so every clone uses the same addresses.
 - `log.md` — shared notes and decisions. The commander reads it at startup
   and keeps it up to date.
 - `doctrine.md` — rules for everyone on the squad. Legion adds it to every
   session's instructions.
-- `ao` — extra folders every session may read and write, one full path per
-  line. They can be outside the project.
 - `operators/<name>/` — optional setup for each operator (see below).
 - `pipelines/<name>` — optional fixed orders (see below).
 - `missions/todo/`, `missions/active/`, `missions/done/` — the work queue.
@@ -155,6 +191,20 @@ Legion reopens an earlier conversation, and again when it finishes a
 mission. In between, operators talk to each other directly when
 they need help. The commander doesn't pass those messages along. An
 operator with nothing to do waits, and that's fine.
+
+### Operators come and go with the work
+
+Nobody has to start the whole squad. An operator starts the first time a
+mission reaches it: the commander starts the first step, and each time an
+operator hands off, the commander starts the next one the pipeline names.
+
+The commander also stands operators down. Each time a mission moves on, it
+checks every running operator. An operator gets stood down when it has no
+mission and nothing waiting could still reach it: no step left for it and
+no loop back to it. A planner goes once every mission is past planning,
+but a builder stays while a failed review could still send work back. The
+commander tells you each time it stands someone down, and it never stops an
+operator that holds a mission.
 
 ### One worktree per mission
 
@@ -207,6 +257,56 @@ settings, so this doesn't rely on each session remembering the steps:
 A message only counts as read once one of these hooks has shown it to the
 session. The `messages` folder stays out of git.
 
+## Squad settings
+
+`.legion/legion.json` holds everything that applies to the whole squad:
+
+```json
+{
+  "squad": "q4-v2",
+  "configMode": "layered",
+  "model": "opus",
+  "addDirs": ["/Users/me/code/shared-docs"],
+  "defaults": {
+    "scale": 3,
+    "disallowedTools": ["Bash(git push:*)"]
+  },
+  "ownFolder": "notes/{operator}",
+  "commander": { "model": "opus", "checkEvery": "1m" }
+}
+```
+
+Only `squad` is required:
+
+- `squad` — the squad's name. Every position is addressed as
+  `<squad>-<position>`, so it must be unique among squads on this machine.
+- `configMode` — `layered` or `isolated` for every session (see
+  [Config mode](#config-mode)). An operator's own `configMode` wins.
+- `model` — the default model for every session. Blank uses Claude Code's
+  own default. An operator's own `model` wins.
+- `addDirs` — extra folders every session may read and write, as full
+  paths. They can be outside the project.
+- `defaults` — settings every operator starts with, using the same keys as
+  an `operator.json`. An operator's own `operator.json` goes on top: its
+  `allowedTools` and `disallowedTools` are added to the defaults, and any
+  other key it sets replaces the default. So one shared list of blocked
+  actions lives here, and each `operator.json` holds only what's different.
+- `ownFolder` — a path inside the project with `{operator}` in it. Each
+  operator is blocked from editing every other operator's folder, so each
+  writes only in its own and reads everyone's. Copies share their
+  operator's folder. The commander isn't blocked.
+- `commander` — the commander's own settings, with the same keys as an
+  `operator.json` except `scale`. `defaults` doesn't apply to the commander.
+  - `checkEvery` — how often the commander checks the squad and gives any
+    idle operator work that doesn't wait on anyone else, like `"1m"`.
+
+Legion checks `legion.json` against `templates/legion.schema.json` before
+starting anyone, and `legion check` reports its problems along with every
+`operator.json`'s.
+
+Squads set up before `legion.json` keep working: Legion reads `.legion/squad`
+and `.legion/ao` whenever `legion.json` is missing.
+
 ## Setting up an operator
 
 An operator works fine with nothing but the mission text you give it. To
@@ -234,10 +334,10 @@ have completely different setups.
 All the keys are optional:
 
 - `model` — `opus`, `sonnet`, `haiku` or a full model ID, passed to
-  `claude` as `--model`. Leave it out to use `LEGION_MODEL` from
-  `.legion/squad`, or Claude Code's own default if that's blank too.
+  `claude` as `--model`. Leave it out to use the squad's `model` from
+  `legion.json`, or Claude Code's own default if that's blank too.
 - `configMode` — `layered` or `isolated` (explained below). Leave it out to
-  use the squad's `LEGION_CONFIG_MODE`.
+  use the squad's `configMode`.
 - `scale` — lets the operator run as several copies at once: `true` for up
   to 5, or a number. See below.
 - `allowedTools` and `disallowedTools` — Claude Code tool rules, passed as
@@ -306,8 +406,8 @@ settings from `~/.claude`:
   (`--setting-sources project,local`). The operator's own `settings.json`
   is then the only settings file that matters.
 
-`LEGION_CONFIG_MODE` in `.legion/squad` sets the default for the whole
-squad. An operator's `configMode` overrides it for that operator.
+`configMode` in `.legion/legion.json` sets the default for the whole squad.
+An operator's `configMode` overrides it for that operator.
 
 ## Pipelines
 
@@ -340,9 +440,41 @@ write a pipeline uses the same format. The example above comes with Legion in
 through a pipeline, add a `pipeline: <name>` line to the mission file's header.
 
 When an operator finishes its step, it answers any question that follows and
-passes the mission straight to the next operator. It updates the mission
-file, starts or messages the next operator, and sends the commander a
-one-line note. The mission file keeps a record of every step.
+works out who's next. It adds a note to the mission file and hands off to the
+commander with the `handoff` tool. The commander then starts the next
+operator, or messages it if it's already running. The mission file keeps a
+record of every step.
+
+## Legion's MCP server
+
+Every session Legion starts gets Legion's own MCP server (`legion mcp`),
+with the tools its role allows. Everything is still stored as plain files in
+`.legion/`.
+
+| Role | Tools |
+|---|---|
+| Operator | `handoff`, `report_done`, `ask_human`, `message`, `read_messages`, `mission_read`, `mission_note`, `mission_set`, `missions`, `list` |
+| Commander | The operator tools except `handoff` and `report_done`, plus `start`, `scale_up`, `stand_down`, `capture`, `mission_create`, `mission_move`, `questions`, `answer` |
+| Outside session | `status`, `send`, `questions`, `answer`, `capture`, `missions`, `mission_read`, `start_squad`, `stand_down` |
+
+Only the commander can start, scale or stand down sessions. Legion blocks
+those tools, and the matching `legion` commands, for every operator.
+
+**Questions for you.** An operator's `ask_human` writes
+`.legion/questions/Q-###.md`, with numbered options and a recommendation, and
+tells the commander. Answer in the commander's window, or from another
+session with `answer`. Either way the answer goes back to whoever asked and
+into the mission file.
+
+**From your own Claude session.** Add the server once, pointed at the
+project:
+
+```bash
+claude mcp add legion -- legion mcp --role human --project /path/to/project
+```
+
+Then ask that session how the squad is doing, or tell it to answer a
+question, send the commander a mission, or stand everyone down.
 
 ## License
 

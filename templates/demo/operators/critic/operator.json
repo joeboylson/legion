@@ -1,0 +1,21 @@
+{
+  "$comment": "Reads tiles and checks them against the brief. Never edits them.",
+  "model": "sonnet",
+  "disallowedTools": [
+    "EnterPlanMode",
+    "Edit(tiles/**)",
+    "Edit(brief.md)",
+    "Bash(git:*)"
+  ],
+  "settings": {
+    "permissions": {
+      "defaultMode": "auto"
+    }
+  },
+  "allowedTools": [
+    "Bash(legion message:*)",
+    "Read(**)",
+    "mcp__legion"
+  ],
+  "configMode": "isolated"
+}

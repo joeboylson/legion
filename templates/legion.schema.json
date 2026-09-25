@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joeboylson/legion/templates/legion.schema.json",
+  "title": "Legion squad",
+  "description": "Every squad-wide setting, in one file: .legion/legion.json. Replaces the older .legion/squad and .legion/ao files. Legion checks this file with `legion check`, and before starting any position.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["squad"],
+  "$defs": {
+    "operatorSettings": {
+      "type": "object",
+      "description": "The same keys as an operator.json (see operator.schema.json)."
+    }
+  },
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "type": "string", "description": "Free-form notes; Legion ignores it." },
+    "squad": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "The squad's name. Every position is addressed as <squad>-<position>, so it must be unique among squads running on this machine."
+    },
+    "configMode": {
+      "enum": ["layered", "isolated"],
+      "description": "layered: every session also loads your own ~/.claude config. isolated: it doesn't (--setting-sources project,local). An operator's own configMode overrides this."
+    },
+    "model": {
+      "type": "string",
+      "description": "Default Claude model for every session (opus, sonnet, haiku or a full model id). Blank uses claude's own default. An operator's own model overrides this."
+    },
+    "addDirs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^/" },
+      "description": "Absolute paths of extra folders or repos every session may open, beyond the project, passed as --add-dir. Replaces the old ao file."
+    },
+    "defaults": {
+      "$ref": "#/$defs/operatorSettings",
+      "description": "Settings every operator (not commander) starts with. An operator's own operator.json goes on top: its allowedTools and disallowedTools are added to these, and any other key it sets replaces the default."
+    },
+    "ownFolder": {
+      "type": "string",
+      "pattern": "\\{operator\\}",
+      "description": "A path inside the project, containing {operator}, like \"notes/{operator}\". Each operator is blocked from editing every other operator's folder, so each writes only in its own. Copies share their operator's folder; commander isn't blocked."
+    },
+    "commander": {
+      "description": "Commander's own settings: the operator.json keys except scale, plus checkEvery. An operators/commander/operator.json still goes on top.",
+      "allOf": [
+        { "$ref": "#/$defs/operatorSettings" },
+        {
+          "not": { "required": ["scale"] },
+          "properties": {
+            "checkEvery": {
+              "type": "string",
+              "pattern": "^[0-9]+[smhd]$",
+              "description": "How often commander checks the squad and gives idle operators work that doesn't wait on anyone, like \"1m\". Leave it out for no regular check."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

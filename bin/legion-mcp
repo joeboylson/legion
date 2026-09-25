@@ -1,0 +1,575 @@
+#!/usr/bin/env python3
+"""Legion's MCP server: squad actions as tools, for Claude Code sessions.
+
+    legion mcp                                  # inside a squad session: role from LEGION_POSITION
+    legion mcp --role human --project <path>    # a session outside the squad
+
+Three roles, each with its own tools:
+  operator   hand off, ask the human, report done, message, read and note missions
+  commander  everything an operator has, plus start, scale up and stand down
+             operators, capture their screens, create and move missions, and
+             answer questions
+  human      a session outside the squad: status, messages, questions and
+             answers, capture, missions, and starting or standing down the squad
+
+Everything is still plain files in .legion/. Actions that change the squad go
+through the `legion` command, so there is one way of doing each thing.
+Questions live in .legion/questions/Q-###.md. No packages beyond Python 3.
+"""
+import datetime
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+VERSION = "0.1.0"
+FOLDERS = ("active", "todo", "done")
+
+
+def die(msg):
+    sys.stderr.write("legion-mcp: %s\n" % msg)
+    sys.exit(1)
+
+
+def parse_args(argv):
+    role, project = None, None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--role" and i + 1 < len(argv):
+            role, i = argv[i + 1], i + 2
+        elif argv[i] == "--project" and i + 1 < len(argv):
+            project, i = argv[i + 1], i + 2
+        else:
+            die("unknown argument %r (want --role <operator|commander|human> --project <path>)" % argv[i])
+    return role, project
+
+
+ROLE, PROJECT = parse_args(sys.argv[1:])
+POSITION = os.environ.get("LEGION_POSITION", "")
+if ROLE is None:
+    ROLE = "commander" if POSITION == "commander" else ("operator" if POSITION else "human")
+if ROLE not in ("operator", "commander", "human"):
+    die("role must be operator, commander or human")
+if ROLE == "human":
+    POSITION = "human"
+elif ROLE == "commander":
+    POSITION = "commander"
+elif not POSITION:
+    die("an operator session needs LEGION_POSITION, which legion sets when it starts the session")
+
+if PROJECT is None:
+    root = os.environ.get("LEGION_ROOT")
+    PROJECT = os.path.dirname(root) if root else os.getcwd()
+PROJECT = os.path.abspath(os.path.expanduser(PROJECT))
+ROOT = os.path.join(PROJECT, ".legion")
+if not os.path.isdir(ROOT):
+    die("no .legion folder in %s (pass --project <path to the project>)" % PROJECT)
+MISSIONS = os.path.join(ROOT, "missions")
+QUESTIONS = os.path.join(ROOT, "questions")
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---- the legion command ------------------------------------------------------
+
+def legion(*args, stdin=None):
+    """Runs a legion command inside this squad, as this session's position."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LEGION_")}
+    env["LEGION_POSITION"] = POSITION if POSITION != "human" else ""
+    env["LEGION_MESSAGE_AS"] = POSITION
+    script = "cd %s && . .legion/bin/activate >/dev/null && %s" % (
+        shlex.quote(PROJECT), " ".join(shlex.quote(a) for a in ("legion",) + args))
+    p = subprocess.run(["bash", "-c", script], input=stdin, capture_output=True, text=True, env=env, timeout=120)
+    out = (p.stdout + p.stderr).strip()
+    if p.returncode != 0:
+        raise RuntimeError(out or "legion %s failed" % " ".join(args))
+    return out
+
+
+def send(to, text):
+    return legion("message", "send", to, "-", stdin=text)
+
+
+# ---- mission files -----------------------------------------------------------
+
+def mission_path(mission):
+    """A mission by number (5, 0005), file name or path; active/ first."""
+    name = os.path.basename(str(mission).strip())
+    if name.endswith(".md"):
+        name = name[:-3]
+    if name.isdigit():
+        name = "%04d" % int(name)
+    for folder in FOLDERS:
+        d = os.path.join(MISSIONS, folder)
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".md") and (f[:-3] == name or f.startswith(name + "-")):
+                return os.path.join(d, f)
+    raise ValueError("no mission matching %r" % mission)
+
+
+def split_mission(text):
+    head, _, body = text.partition("\n\n")
+    return head, body
+
+
+def set_header(path, key, value):
+    with open(path) as f:
+        text = f.read()
+    head, body = split_mission(text)
+    lines = head.split("\n") if head else []
+    for i, line in enumerate(lines):
+        if line.startswith(key + ": "):
+            lines[i] = "%s: %s" % (key, value)
+            break
+    else:
+        lines.append("%s: %s" % (key, value))
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n\n" + body)
+
+
+def append_section(path, heading, body):
+    with open(path) as f:
+        text = f.read().rstrip("\n")
+    with open(path, "w") as f:
+        f.write("%s\n\n## %s\n\n%s\n" % (text, heading.strip(), body.strip()))
+    return path
+
+
+HANDOFFS = "## Handoffs"
+
+
+def handoff_lines(body):
+    """Splits a mission body into its Handoffs entries and everything after them."""
+    if not body.startswith(HANDOFFS + "\n"):
+        return [], body
+    lines = body[len(HANDOFFS) + 1:].split("\n")
+    i = 0
+    while i < len(lines) and lines[i] == "":
+        i += 1
+    entries = []
+    while i < len(lines) and lines[i].startswith("- "):
+        entries.append(lines[i])
+        i += 1
+    rest = "\n".join(lines[i:]).lstrip("\n")
+    return entries, rest
+
+
+def log_handoff(path, line):
+    """Adds one line to the mission's Handoffs list, the first section of its body.
+
+    The list only grows: it's the record of who had the mission and when, and
+    its last line says who has it now. Nobody rewrites header lines for this.
+    """
+    with open(path) as f:
+        head, body = split_mission(f.read())
+    entries, rest = handoff_lines(body)
+    entries.append("- %s %s" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), line))
+    with open(path, "w") as f:
+        f.write(head + "\n\n" + HANDOFFS + "\n\n" + "\n".join(entries) + "\n\n" + rest)
+
+
+def current_holder(path):
+    with open(path) as f:
+        _, body = split_mission(f.read())
+    entries, _ = handoff_lines(body)
+    if entries:
+        m = re.search(r"→ (\S+?):", entries[-1])
+        return m.group(1) if m else None
+    return None
+
+
+def header_of(path):
+    with open(path) as f:
+        head, _ = split_mission(f.read())
+    out = {}
+    for line in head.split("\n"):
+        k, sep, v = line.partition(": ")
+        if sep:
+            out[k.strip()] = v.strip()
+    return out
+
+
+def mission_list():
+    out = {}
+    for folder in FOLDERS:
+        d = os.path.join(MISSIONS, folder)
+        rows = []
+        if os.path.isdir(d):
+            for f in sorted(os.listdir(d)):
+                if f.endswith(".md"):
+                    h = header_of(os.path.join(d, f))
+                    row = {"mission": f[:-3], **{k: h[k] for k in ("pipeline", "round") if k in h}}
+                    holder = current_holder(os.path.join(d, f))
+                    if holder:
+                        row["with"] = holder
+                    rows.append(row)
+        out[folder] = rows
+    return out
+
+
+def next_mission_number():
+    top = 0
+    for folder in FOLDERS:
+        d = os.path.join(MISSIONS, folder)
+        if os.path.isdir(d):
+            for f in os.listdir(d):
+                m = re.match(r"(\d{4})-", f)
+                if m:
+                    top = max(top, int(m.group(1)))
+    return top + 1
+
+
+# ---- questions ---------------------------------------------------------------
+
+def question_path(qid):
+    qid = str(qid).strip().upper()
+    if qid.isdigit():
+        qid = "Q-%03d" % int(qid)
+    path = os.path.join(QUESTIONS, qid + ".md")
+    if not os.path.isfile(path):
+        raise ValueError("no question %s" % qid)
+    return path
+
+
+def read_question(path):
+    with open(path) as f:
+        text = f.read()
+    m = re.match(r"---\n(.*?)\n---\n(.*)", text, re.S)
+    meta, body = {}, text
+    if m:
+        body = m.group(2)
+        for line in m.group(1).split("\n"):
+            k, sep, v = line.partition(": ")
+            if sep:
+                meta[k] = v
+    return meta, body
+
+
+def write_question(path, meta, body):
+    head = "\n".join("%s: %s" % (k, v) for k, v in meta.items())
+    with open(path, "w") as f:
+        f.write("---\n%s\n---\n%s" % (head, body))
+
+
+# ---- tools -------------------------------------------------------------------
+
+def t_handoff(mission, next, note=""):
+    path = mission_path(mission)
+    name = os.path.basename(path)[:-3]
+    log_handoff(path, "%s → %s: %s" % (POSITION, next, note or "step done"))
+    send("commander", "HANDOFF %s: %s next — %s" % (name, next, note or "step done"))
+    return "Handed %s to commander for %s. Wait for your next mission." % (name, next)
+
+
+def t_report_done(mission, summary):
+    path = mission_path(mission)
+    name = os.path.basename(path)[:-3]
+    log_handoff(path, "%s → done: %s" % (POSITION, summary.split("\n")[0]))
+    send("commander", "DONE %s: %s" % (name, summary))
+    return "Reported %s done to commander." % name
+
+
+def t_ask_human(question, mission="", options=None, recommendation=""):
+    os.makedirs(QUESTIONS, exist_ok=True)
+    nums = [int(m.group(1)) for f in os.listdir(QUESTIONS) for m in [re.match(r"Q-(\d+)\.md$", f)] if m]
+    qid = "Q-%03d" % (max(nums, default=0) + 1)
+    lines = ["# %s" % qid, "", question.strip(), ""]
+    for i, opt in enumerate(options or [], 1):
+        if isinstance(opt, dict):
+            label = opt.get("label", "")
+            example = opt.get("example", "")
+            lines.append("%d. **%s**%s" % (i, label, (" — " + example) if example else ""))
+        else:
+            lines.append("%d. %s" % (i, opt))
+    if recommendation:
+        lines += ["", "**Recommendation:** %s" % recommendation]
+    meta = {"id": qid, "status": "open", "asked_by": POSITION, "asked_at": now()}
+    if mission:
+        meta["mission"] = os.path.basename(mission_path(mission))[:-3]
+    write_question(os.path.join(QUESTIONS, qid + ".md"), meta, "\n".join(lines) + "\n")
+    if POSITION != "commander":
+        send("commander", "QUESTION %s from %s%s: %s (full text: .legion/questions/%s.md). Ask the human, "
+             "then answer it with the answer tool." % (qid, POSITION, (" on " + meta["mission"]) if mission else "",
+                                                        question.strip(), qid))
+    return "Asked as %s. Wait: the answer comes back as a message." % qid
+
+
+def t_questions(status="open"):
+    rows = []
+    if os.path.isdir(QUESTIONS):
+        for f in sorted(os.listdir(QUESTIONS)):
+            if f.endswith(".md"):
+                meta, body = read_question(os.path.join(QUESTIONS, f))
+                if status in ("all", meta.get("status")):
+                    rows.append({**meta, "text": body.strip()})
+    return rows
+
+
+def t_answer(id, answer):
+    path = question_path(id)
+    meta, body = read_question(path)
+    if meta.get("status") == "answered":
+        raise ValueError("%s is already answered: %s" % (meta["id"], meta.get("answer", "")))
+    meta.update({"status": "answered", "answer": " ".join(answer.split()), "answered_by": POSITION, "answered_at": now()})
+    write_question(path, meta, body + "\n## Answer\n\n%s\n" % answer.strip())
+    if meta.get("mission"):
+        try:
+            append_section(mission_path(meta["mission"]), "Decision %s" % meta["id"],
+                           "Asked by %s. Answer (%s): %s" % (meta.get("asked_by"), POSITION, answer.strip()))
+        except ValueError:
+            pass
+    asker = meta.get("asked_by")
+    if asker and asker != POSITION:
+        send(asker, "ANSWER %s: %s" % (meta["id"], answer.strip()))
+    if asker != "commander" and POSITION != "commander":
+        send("commander", "ANSWERED %s (asked by %s): %s" % (meta["id"], asker, answer.strip()))
+    return "Answered %s and told %s." % (meta["id"], asker)
+
+
+def t_message(to, text):
+    return send(to, text)
+
+
+def t_read_messages():
+    return legion("message", "read")
+
+
+def t_mission_read(mission):
+    path = mission_path(mission)
+    with open(path) as f:
+        return {"path": path, "text": f.read()}
+
+
+def t_mission_note(mission, heading, body):
+    path = append_section(mission_path(mission), heading, body)
+    return "Added '## %s' to %s." % (heading, os.path.basename(path))
+
+
+def t_mission_set(mission, key, value):
+    if not re.match(r"^[a-z][a-z0-9_-]*$", key):
+        raise ValueError("header keys are lower-case words, like round or worktree")
+    path = mission_path(mission)
+    set_header(path, key, value)
+    return "Set %s: %s in %s." % (key, value, os.path.basename(path))
+
+
+def t_missions():
+    return mission_list()
+
+
+def t_list():
+    return legion("list")
+
+
+def note_start(operator, mission):
+    """When commander hands a mission file to someone, log it in its Handoffs list."""
+    for word in str(mission).split():
+        try:
+            path = mission_path(word.strip(".,:;'\"()"))
+        except ValueError:
+            continue
+        log_handoff(path, "commander → %s: started with this mission" % operator)
+        return
+
+
+def t_start(operator, mission=""):
+    note_start(operator, mission)
+    args = ["deploy", operator] + ([mission] if mission else [])
+    return legion(*args)
+
+
+def t_scale_up(operator, mission=""):
+    note_start(operator, mission)
+    args = ["scale", "up", operator] + ([mission] if mission else [])
+    return legion(*args)
+
+
+def t_stand_down(operator=""):
+    return legion(*(["stand-down", operator] if operator else ["stand-down"]))
+
+
+def t_capture(position, lines=40):
+    return legion("capture", position, str(int(lines)))
+
+
+def t_mission_create(slug, body, header=None, folder="todo"):
+    if folder not in ("todo", "active"):
+        raise ValueError("folder must be todo or active")
+    slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+    name = "%04d-%s" % (next_mission_number(), slug)
+    d = os.path.join(MISSIONS, folder)
+    os.makedirs(d, exist_ok=True)
+    head = {"created": now(), **(header or {})}
+    path = os.path.join(d, name + ".md")
+    with open(path, "w") as f:
+        f.write("\n".join("%s: %s" % (k, v) for k, v in head.items()) + "\n\n" + body.strip() + "\n")
+    return {"mission": name, "path": path}
+
+
+def t_mission_move(mission, to):
+    if to not in FOLDERS:
+        raise ValueError("to must be todo, active or done")
+    path = mission_path(mission)
+    dest = os.path.join(MISSIONS, to, os.path.basename(path))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    os.rename(path, dest)
+    return "Moved %s to %s/." % (os.path.basename(path), to)
+
+
+def t_status():
+    running = legion("list")
+    screens = {}
+    for line in running.split("\n"):
+        addr = line.split()[0] if line.strip() else ""
+        if "-" in addr and not line.startswith("no panes"):
+            pos = addr.split("-", 1)[1]
+            try:
+                tail = legion("capture", pos, "60").rstrip().split("\n")
+                screens[pos] = "\n".join(l for l in tail if l.strip())[-1200:]
+            except RuntimeError as e:
+                screens[pos] = str(e)
+    return {"running": running, "missions": mission_list(), "open_questions": t_questions("open"), "screens": screens}
+
+
+def t_start_squad(mission=""):
+    return legion(*(["commander", mission] if mission else ["commander"]))
+
+
+def t_send(to, text):
+    return send(to, text)
+
+
+S = {"type": "string"}
+MISSION = {"type": "string", "description": "Mission number (5), or file name like 0005-export"}
+
+OPERATOR_TOOLS = {
+    "handoff": (t_handoff, "Your step is done: tell commander who does the next step. Commander starts or messages them. "
+                "Write your notes into the mission file first (mission_note). This adds a line to the mission's Handoffs "
+                "list, so don't edit header lines to say who's next.",
+                {"mission": MISSION, "next": {"type": "string", "description": "The operator for the next step, e.g. builder"},
+                 "note": {"type": "string", "description": "One line on what you did"}}, ["mission", "next"]),
+    "report_done": (t_report_done, "The mission has reached done: report it to commander.",
+                    {"mission": MISSION, "summary": {"type": "string", "description": "A few lines: what happened, what's open"}},
+                    ["mission", "summary"]),
+    "ask_human": (t_ask_human, "Ask the human a question you can't settle yourself. Commander relays it; the answer "
+                  "comes back to you as a message. Wait for it.",
+                  {"question": S, "mission": MISSION,
+                   "options": {"type": "array", "description": "Numbered choices",
+                               "items": {"type": "object", "properties": {"label": S, "example": {"type": "string",
+                                         "description": "A short concrete example of what this option looks like"}},
+                                         "required": ["label"]}},
+                   "recommendation": {"type": "string", "description": "One line: which option and why"}}, ["question"]),
+    "message": (t_message, "Send a message to another position on the squad (commander, builder, reviewer-2 ...).",
+                {"to": S, "text": S}, ["to", "text"]),
+    "read_messages": (t_read_messages, "Show any unread messages for you and mark them read.", {}, []),
+    "mission_read": (t_mission_read, "Read a mission file.", {"mission": MISSION}, ["mission"]),
+    "mission_note": (t_mission_note, "Add a '## heading' section to the end of a mission file.",
+                     {"mission": MISSION, "heading": S, "body": S}, ["mission", "heading", "body"]),
+    "mission_set": (t_mission_set, "Set a header line (key: value) in a mission file.",
+                    {"mission": MISSION, "key": S, "value": S}, ["mission", "key", "value"]),
+    "missions": (t_missions, "List missions in todo/, active/ and done/.", {}, []),
+    "list": (t_list, "List the squad's running positions.", {}, []),
+}
+COMMANDER_TOOLS = {
+    "start": (t_start, "Start an operator (or message it the mission if it's already running).",
+              {"operator": S, "mission": {"type": "string", "description": "The mission text or file to hand it"}}, ["operator"]),
+    "scale_up": (t_scale_up, "Start the next free copy of a scalable operator with a mission.",
+                 {"operator": S, "mission": S}, ["operator"]),
+    "stand_down": (t_stand_down, "Stop one position, or the whole squad if no operator is given.",
+                   {"operator": S}, []),
+    "capture": (t_capture, "Read a position's screen without attaching.",
+                {"position": S, "lines": {"type": "integer"}}, ["position"]),
+    "mission_create": (t_mission_create, "Write a new numbered mission file.",
+                       {"slug": {"type": "string", "description": "Short name, e.g. v2-core-pr-153"}, "body": S,
+                        "header": {"type": "object", "description": "Header lines, e.g. {pipeline: pr-loop, repo: v2-core}"},
+                        "folder": {"type": "string", "enum": ["todo", "active"]}}, ["slug", "body"]),
+    "mission_move": (t_mission_move, "Move a mission to todo/, active/ or done/.",
+                     {"mission": MISSION, "to": {"type": "string", "enum": list(FOLDERS)}}, ["mission", "to"]),
+    "questions": (t_questions, "List questions for the human.",
+                  {"status": {"type": "string", "enum": ["open", "answered", "all"]}}, []),
+    "answer": (t_answer, "Record the human's answer to a question. It goes back to whoever asked, and into the mission file.",
+               {"id": {"type": "string", "description": "Q-001, or 1"}, "answer": S}, ["id", "answer"]),
+}
+HUMAN_TOOLS = {
+    "status": (t_status, "The squad at a glance: who's running, missions by folder, open questions, and each screen's latest lines.", {}, []),
+    "send": (t_send, "Send a message to commander or an operator, as the human.", {"to": S, "text": S}, ["to", "text"]),
+    "questions": COMMANDER_TOOLS["questions"],
+    "answer": COMMANDER_TOOLS["answer"],
+    "capture": COMMANDER_TOOLS["capture"],
+    "missions": OPERATOR_TOOLS["missions"],
+    "mission_read": OPERATOR_TOOLS["mission_read"],
+    "start_squad": (t_start_squad, "Start the commander, optionally with a mission for it.",
+                    {"mission": S}, []),
+    "stand_down": COMMANDER_TOOLS["stand_down"],
+}
+
+if ROLE == "operator":
+    TOOLS = OPERATOR_TOOLS
+elif ROLE == "commander":
+    TOOLS = dict(OPERATOR_TOOLS, **COMMANDER_TOOLS)
+    del TOOLS["handoff"], TOOLS["report_done"]
+else:
+    TOOLS = HUMAN_TOOLS
+
+
+def tool_list():
+    return [{"name": n, "description": d,
+             "inputSchema": {"type": "object", "properties": props, "required": req}}
+            for n, (_, d, props, req) in TOOLS.items()]
+
+
+def reply(id_, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": id_}
+    if error:
+        msg["error"] = error
+    else:
+        msg["result"] = result
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except ValueError:
+            continue
+        method, id_ = req.get("method"), req.get("id")
+        if id_ is None:
+            continue
+        if method == "initialize":
+            reply(id_, {"protocolVersion": req.get("params", {}).get("protocolVersion", "2024-11-05"),
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "legion", "version": VERSION},
+                        "instructions": "Legion squad tools for the %s role (%s)." % (ROLE, POSITION)})
+        elif method == "tools/list":
+            reply(id_, {"tools": tool_list()})
+        elif method == "tools/call":
+            p = req.get("params", {})
+            entry = TOOLS.get(p.get("name"))
+            if not entry:
+                reply(id_, error={"code": -32602, "message": "unknown tool for the %s role" % ROLE})
+                continue
+            try:
+                out = entry[0](**(p.get("arguments") or {}))
+                text = out if isinstance(out, str) else json.dumps(out, indent=2, ensure_ascii=False)
+                reply(id_, {"content": [{"type": "text", "text": text}]})
+            except Exception as e:
+                reply(id_, {"content": [{"type": "text", "text": "error: %s" % e}], "isError": True})
+        elif method == "ping":
+            reply(id_, {})
+        else:
+            reply(id_, error={"code": -32601, "message": "method not found"})
+
+
+if __name__ == "__main__":
+    main()
