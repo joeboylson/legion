@@ -34,7 +34,8 @@ Once activated (source .legion/bin/activate):
   legion grid                       open one tmux window tiling every position
   legion attach <operator>           jump to an operator's tmux window
   legion capture <operator> [lines]  read an operator's tmux pane without attaching
-  legion stand-down <operator>       kill a tmux window by operator
+  legion stand-down                 stop every position in this squad
+  legion stand-down <operator>       stop one position and close its tile
   deactivate                        leave the shell (from the sourced script)
 EOF
 }
@@ -456,7 +457,8 @@ cmd_capture() {
 
 cmd_standdown() {
   require_active
-  valid_operator "${1:-}" || { echo "usage: legion stand-down <operator>" >&2; exit 1; }
+  if [ $# -eq 0 ]; then cmd_standdown_all; return; fi
+  valid_operator "${1:-}" || { echo "usage: legion stand-down [operator]" >&2; exit 1; }
   local name="$LEGION_SQUAD_NAME-$1" pane window
   pane="$(pane_of "$name")"
   [ -n "$pane" ] || { echo "'$name' not found" >&2; exit 1; }
@@ -464,6 +466,24 @@ cmd_standdown() {
   tmux kill-pane -t "$pane"
   [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
   return 0
+}
+
+# Stops operators before commander, so commander isn't left running while
+# they disappear. Each keeps its saved conversation, so the next
+# `legion deploy` picks up where it left off.
+cmd_standdown_all() {
+  local rows addr pane stopped=""
+  rows="$(squad_panes)"
+  [ -n "$rows" ] || { echo "no panes running for squad '$LEGION_SQUAD_NAME'"; return 0; }
+  while IFS="$(printf '\t')" read -r addr pane _; do
+    [ "$addr" = "$LEGION_SQUAD_NAME-commander" ] && continue
+    tmux kill-pane -t "$pane" && stopped="$stopped ${addr#"$LEGION_SQUAD_NAME"-}"
+  done <<EOF
+$rows
+EOF
+  pane="$(pane_of "$LEGION_SQUAD_NAME-commander")"
+  [ -n "$pane" ] && tmux kill-pane -t "$pane" && stopped="$stopped commander"
+  echo "stood down:$stopped"
 }
 
 cmd_list() {

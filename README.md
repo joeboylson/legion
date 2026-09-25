@@ -63,6 +63,7 @@ legion grid                              # switch to the squad's tmux window
 legion attach builder                    # switch to builder's tile
 legion capture builder                   # print builder's screen without switching
 legion stand-down builder                # stop builder and close its tile
+legion stand-down                        # stop the whole squad
 deactivate                               # turn legion commands off again
 ```
 
