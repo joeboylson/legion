@@ -196,6 +196,8 @@ can have completely different setups.
   `--settings` and `--mcp-config`. Legion doesn't change their format.
 - `config-mode` — `layered` or `isolated` (explained below). Set this to
   give one operator a different mode from the rest of the squad.
+- `scale` — lets this operator run as several copies at once. The first
+  line is the most copies allowed; leave it blank for 5. See below.
 
 To stop a planner from editing code, list your code folders in its
 `disallowed-tools`, for example `Edit(src/**)`, and leave the builder's
@@ -209,6 +211,25 @@ replacing them.
 Example planner, builder and reviewer folders come with Legion, in
 `~/.local/share/legion/templates/operators/`. Copy one and change it, or ask
 any Claude session, including the commander, to help you write one.
+
+### Running several copies of an operator
+
+Give an operator a `scale` file to let the commander run more than one
+copy of it, for example several builders working on separate missions at
+the same time. The first copy is plain `builder`; the others are
+`builder-2`, `builder-3` and so on, up to the number in the file (5 if the
+file is blank). Every copy uses the same folder, so they share one
+definition, one set of tool rules and one settings file.
+
+- `legion scale up builder "<mission>"` starts the next free copy, with
+  that mission, in a new tile.
+- `legion scale builder` shows which copies are running.
+- `legion stand-down builder-2` stops one copy.
+
+The commander does all of this on its own when independent missions are
+waiting. Each copy works on one mission at a time, in that mission's own
+worktree. When a pipeline hands off to an operator with copies, it goes to
+a copy with no mission open, or asks the commander for another one.
 
 ### Config mode
 

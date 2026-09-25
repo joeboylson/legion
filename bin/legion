@@ -36,6 +36,8 @@ Once activated (source .legion/bin/activate):
   legion mission finish <n>         fast-forward the base branch to it and remove the worktree
   legion attach <operator>           jump to an operator's tmux window
   legion capture <operator> [lines]  read an operator's tmux pane without attaching
+  legion scale <operator>           show how many copies of a scalable operator are running
+  legion scale up <operator> [mission...]   start its next free copy (<operator>-2, …)
   legion stand-down                 stop every position in this squad
   legion stand-down <operator>       stop one position and close its tile
   deactivate                        leave the shell (from the sourced script)
@@ -67,10 +69,41 @@ flag_from_list() {
 # follows them (verified: without this ordering, the trailing mission prompt
 # silently vanishes into the preceding flag's value list instead of being
 # passed to claude as the prompt).
+# A scalable operator has a `scale` file in its folder; the first
+# non-comment line is the most copies that may run at once (5 if blank).
+# Copy 1 is plain <operator>; extra copies are <operator>-2, <operator>-3 …
+# and all of them share that one folder's definition, rules and settings.
+scale_max() {
+  local file="$LEGION_OPERATORS/$1/scale" max=""
+  [ -f "$file" ] || return 1
+  max="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
+  case "$max" in
+    '') echo 5 ;;
+    *[!0-9]*|0) echo "legion: $file must hold a whole number above 0" >&2; return 1 ;;
+    *) echo "$max" ;;
+  esac
+}
+
+# The operator whose folder a position uses: itself, or for a copy like
+# builder-2, the scalable operator it's a copy of.
+operator_base() {
+  local name="$1" base
+  if [ -d "$LEGION_OPERATORS/$name" ]; then echo "$name"; return; fi
+  base="${name%-*}"
+  case "${name##*-}" in
+    ''|*[!0-9]*) echo "$name"; return ;;
+  esac
+  if [ "$base" != "$name" ] && scale_max "$base" >/dev/null 2>&1; then echo "$base"; else echo "$name"; fi
+}
+
+operator_dir() {
+  echo "$LEGION_OPERATORS/$(operator_base "$1")"
+}
+
 # An operator's own config-mode file (first non-comment line: layered or
 # isolated) overrides the squad-wide LEGION_CONFIG_MODE for that operator.
 config_mode() {
-  local file="$LEGION_OPERATORS/$1/config-mode" mode=""
+  local file="$(operator_dir "$1")/config-mode" mode=""
   [ -f "$file" ] && mode="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
   mode="${mode:-${LEGION_CONFIG_MODE:-layered}}"
   case "$mode" in
@@ -80,7 +113,7 @@ config_mode() {
 }
 
 claude_flags() {
-  local operator="$1" operator_dir="$LEGION_OPERATORS/$1" flags=""
+  local operator="$1" operator_dir="$(operator_dir "$1")" flags=""
   flags="$flags$(flag_from_list --add-dir "$LEGION_AO")"
   [ "$(config_mode "$operator")" = "isolated" ] && flags="$flags --setting-sources project,local"
   flags="$flags$(flag_from_list --allowedTools "$operator_dir/allowed-tools")"
@@ -316,6 +349,8 @@ Workflow: write new missions into todo/ as you think of them (or as asked of you
 
 Every mission that changes project files gets its own git worktree: a separate checkout of the project on its own branch, so two missions (or a paused one) never leave edits in each other's way. When you move such a mission to active/, run 'legion mission start <number>' first — it creates the worktree, adds 'worktree:', 'branch:' and 'base:' lines to the mission file, and prints the worktree path; include that path when you hand the mission over. Mission files, the roster and the log always stay in the project root's .legion/, never the worktree's copy. When reviewer approves, run 'legion mission finish <number>': it fast-forwards the base branch to the mission branch and removes the worktree. If it refuses because the base branch moved on, send the mission back to builder to rebase onto the base branch in the worktree, then finish again. Then move the file to done/. A paused mission keeps its worktree as is; nothing needs saving.
 
+Some operators are scalable: their folder has a 'scale' file holding the most copies that may run at once (5 if blank). Every copy uses that folder's definition and rules; copy 1 is '$LEGION_SQUAD_NAME-<operator>' and extras are '$LEGION_SQUAD_NAME-<operator>-2' and up. When independent missions are waiting on a busy scalable operator, run 'legion scale up <operator> \"<mission>\"' to start the next free copy with that mission, and 'legion scale <operator>' to see which copies are running. Each copy takes one mission at a time, in that mission's own worktree. When a copy has nothing left in active/, stand it down with 'legion stand-down <operator>-<n>'. Only scale up for work that can really run side by side; missions that touch the same files still merge one at a time, so the later one will need a rebase.
+
 Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline: a plain text file at $LEGION_PIPELINES/<name>, one operator per line in order (lines starting with # are comments, not stages) (e.g. planner, then builder, then reviewer — operators don't need to exist yet, they get deployed as the pipeline reaches them). Give a mission file a 'pipeline: <name>' header field and operators hand it off directly to the next stage when they finish — the mission file still records every step (that's the audit trail), and whoever hands off also sends you a one-line FYI, so you stay aware without brokering it. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
 
 Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse name/operator/role and write/update that operator's file:
@@ -382,21 +417,28 @@ cmd_deploy() {
   local mission="$*"
   local mission_display="${mission:-none yet — wait for instructions}"
   local addr="$LEGION_SQUAD_NAME-$operator"
+  local base max
+  base="$(operator_base "$operator")"
+  if [ "$base" != "$operator" ]; then
+    max="$(scale_max "$base")" || exit 1
+    [ "${operator##*-}" -ge 2 ] && [ "${operator##*-}" -le "$max" ] \
+      || { echo "legion: $base can run at most $max copies ($base, $base-2 … $base-$max)" >&2; exit 1; }
+  fi
   local commander_addr="$LEGION_SQUAD_NAME-commander"
   local prompt
   prompt="You are '$addr' on a small squad commanded by '$commander_addr', run on mission command: commander sets direction and goals, you own the how. Message '$commander_addr' to check in, to report your mission done, to ask for mission-level perspective, or to raise anything that needs a tiebreaker — a decision or disagreement only commander should settle. For your own domain, decide your approach yourself; commander gave you the what, not the method. When you need another operator's specific expertise, message them directly — this is normal, not an exception, and commander does not need to broker it. Call ListAgents to see who else is checked in, and read \$LEGION_OPERATORS/<their-operator-name>/definition.md if you want to know what they're good at before reaching out. Before doing anything else, call ListAgents to learn your own session name, then SendMessage to '$commander_addr': \"CHECK-IN: name=<your name> operator=$operator role=<one or two sentences, in your own words, on who you are and what you do on this squad — from your operator definition if you have one> mission=$mission_display\". Check in every time you are started, including when this conversation is resumed: commander may be a brand-new session that has never heard from you, so an earlier check-in in this conversation does not count — send a fresh one. Commander may start at the same moment you do, so if '$commander_addr' isn't in ListAgents yet, wait about 10 seconds and look again, for up to about a minute; only if it still isn't there, skip the check-in and carry on. Otherwise, check in once per start, not repeatedly. Your mission: $mission_display
 
 If your mission file has a 'worktree:' header, that folder is where this mission's code lives: read, edit, test and commit there (use its paths for file edits, and cd into it for shell commands). Don't touch the project root's copy of those files for this mission. Mission files, the roster and the log stay in the project root's .legion/ — update those there, never in the worktree.
 
-If the mission file you were given has a 'pipeline: <name>' header, read $LEGION_PIPELINES/<name> (one operator per line, in order; lines starting with # are comments, not stages) to find your position in it. When you finish, if there is an operator listed after yours, hand off directly — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If you are the last stage in the pipeline, or the mission has no pipeline field, report back to '$commander_addr' when your mission is done — and along the way, reach out to any other operator directly whenever their expertise would help."
+If the mission file you were given has a 'pipeline: <name>' header, read $LEGION_PIPELINES/<name> (one operator per line, in order; lines starting with # are comments, not stages) to find your position in it. When you finish, if there is an operator listed after yours, hand off directly — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If the next stage is a scalable operator (its folder has a 'scale' file), it may be running as several copies — '$LEGION_SQUAD_NAME-<operator>', '$LEGION_SQUAD_NAME-<operator>-2' and so on, shown in ListAgents. Hand off to a copy that has no mission in \$LEGION_MISSIONS/active/ assigned to it; if every copy is busy, ask '$commander_addr' to scale up instead of queueing behind a busy copy. If you are the last stage in the pipeline, or the mission has no pipeline field, report back to '$commander_addr' when your mission is done — and along the way, reach out to any other operator directly whenever their expertise would help."
   [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
 
 This squad's doctrine:
 $(cat "$LEGION_DOCTRINE")"
-  [ -s "$LEGION_OPERATORS/$operator/definition.md" ] && prompt="$prompt
+  [ -s "$(operator_dir "$operator")/definition.md" ] && prompt="$prompt
 
 Your operator definition:
-$(cat "$LEGION_OPERATORS/$operator/definition.md")"
+$(cat "$(operator_dir "$operator")/definition.md")"
   config_mode "$operator" >/dev/null || exit 1
   local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") --append-system-prompt $(printf '%q' "$prompt")"
   # Always send an opening message, even on a resume with no mission: without
@@ -569,6 +611,34 @@ cmd_mission() {
   esac
 }
 
+cmd_scale() {
+  require_active
+  local sub="${1:-}" op max n running addr
+  case "$sub" in
+    up) op="${2:-}"; shift 2 2>/dev/null || true ;;
+    *) op="$sub"; sub="status" ;;
+  esac
+  valid_operator "$op" || { echo "usage: legion scale <operator> | legion scale up <operator> [mission...]" >&2; exit 1; }
+  max="$(scale_max "$op")" || { echo "legion: $op isn't scalable — add a 'scale' file to .legion/operators/$op/ (blank means up to 5)" >&2; exit 1; }
+  running="$(squad_panes | awk -F '\t' -v p="$LEGION_SQUAD_NAME-$op" '$1 == p || (index($1, p "-") == 1 && substr($1, length(p) + 2) ~ /^[0-9]+$/) { print $1 }')"
+  if [ "$sub" = "status" ]; then
+    echo "$op: $(printf '%s\n' "$running" | awk NF | wc -l | xargs) of $max running"
+    printf '%s\n' "$running" | awk NF | sed 's/^/  /'
+    return 0
+  fi
+  n=1
+  while [ "$n" -le "$max" ]; do
+    [ "$n" -eq 1 ] && addr="$op" || addr="$op-$n"
+    if ! printf '%s\n' "$running" | awk -v a="$LEGION_SQUAD_NAME-$addr" '$0 == a { f = 1 } END { exit !f }'; then
+      cmd_deploy "$addr" "$@"
+      return
+    fi
+    n=$((n + 1))
+  done
+  echo "legion: all $max copies of $op are already running" >&2
+  exit 1
+}
+
 cmd_list() {
   require_active
   tmux list-sessions >/dev/null 2>&1 || { echo "no tmux server running"; return 0; }
@@ -604,6 +674,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   stand-down) shift; cmd_standdown "$@" ;;
   list) cmd_list ;;
+  scale) shift; cmd_scale "$@" ;;
   mission) shift; cmd_mission "$@" ;;
   grid) cmd_grid ;;
   *) usage ;;
