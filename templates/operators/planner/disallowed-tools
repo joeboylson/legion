@@ -1,0 +1,9 @@
+# One Claude Code tool pattern per line — see `claude --help` for the syntax.
+# Edit(pattern) covers all file-editing tools (Write included). There is no
+# pattern meaning "only .legion" — deny rules can't express "everything
+# except X", only concrete matches. Replace these with wherever this repo's
+# actual source lives; a planner should be editing mission/plan files, not code.
+Edit(src/**)
+Edit(**/*.py)
+Edit(**/*.js)
+Edit(**/*.ts)

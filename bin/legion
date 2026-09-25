@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+# legion — hub-and-spoke Claude Code squad over tmux. One squad per project.
+#
+# Nothing but `init` works until a project has been activated:
+#   legion init [squad-name]         # once, creates ./.legion (commit it — see log.md)
+#   source .legion/bin/activate      # per shell — scopes roster/session-id, gates commands
+#   legion squad "ship the thing"
+#   deactivate                       # defined by the sourced script
+set -euo pipefail
+
+require_active() {
+  if [ -z "${LEGION_ROOT:-}" ]; then
+    echo "not inside an activated Legion shell — run: source .legion/bin/activate" >&2
+    echo "(no ./.legion yet? run: legion init)" >&2
+    exit 1
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+legion — hub-and-spoke Claude Code squad over tmux, scoped per project
+
+  legion init [squad-name]      create ./.legion (roster/missions dirs + activate script)
+
+Once activated (source .legion/bin/activate):
+  legion commander [mission...]     start/reattach the fixed commander session
+  legion deploy <operator> [mission...]   deploy an operator reporting only to commander
+  legion squad [mission...]         deploy commander + planner + builder + reviewer
+  legion roster                     show roster/*.md (who has checked in)
+  legion list                       show tmux windows
+  legion attach <operator>           jump to an operator's tmux window
+  legion capture <operator> [lines]  read an operator's tmux pane without attaching
+  legion stand-down <operator>       kill a tmux window by operator
+  deactivate                        leave the shell (from the sourced script)
+EOF
+}
+
+# Reads a plain-text file (one entry per line, # comments, blank lines
+# skipped) and echoes it back as repeated "<flag> <value>" pairs.
+flag_from_list() {
+  local flag="$1" file="$2" out="" line
+  [ -f "$file" ] || { echo ""; return 0; }
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="$(echo "$line" | xargs)"
+    [ -n "$line" ] && out="$out $flag $(printf '%q' "$line")"
+  done < "$file"
+  echo "$out"
+}
+
+# Config is per operator, not per squad: each operator gets its own optional
+# allowed-tools/disallowed-tools/settings.json/mcp.json under
+# $LEGION_OPERATORS/<operator>/ — e.g. a planner can be denied Edit on the
+# actual code while commander and builder keep full access. AO (directory
+# access) and the layered/isolated split stay squad-wide; everything else is
+# per operator.
+# IMPORTANT: this must always be the LAST thing appended to a claude_cmd —
+# --add-dir/--allowedTools/--disallowedTools/--mcp-config are all variadic
+# CLI options that greedily swallow any bare positional argument that
+# follows them (verified: without this ordering, the trailing mission prompt
+# silently vanishes into the preceding flag's value list instead of being
+# passed to claude as the prompt).
+claude_flags() {
+  local operator="$1" operator_dir="$LEGION_OPERATORS/$1" flags=""
+  flags="$flags$(flag_from_list --add-dir "$LEGION_AO")"
+  [ "${LEGION_CONFIG_MODE:-layered}" = "isolated" ] && flags="$flags --setting-sources project,local"
+  flags="$flags$(flag_from_list --allowedTools "$operator_dir/allowed-tools")"
+  flags="$flags$(flag_from_list --disallowedTools "$operator_dir/disallowed-tools")"
+  [ -f "$operator_dir/settings.json" ] && flags="$flags --settings $(printf '%q' "$operator_dir/settings.json")"
+  [ -f "$operator_dir/mcp.json" ] && flags="$flags --mcp-config $(printf '%q' "$operator_dir/mcp.json")"
+  echo "$flags"
+}
+
+# Every position (commander and every operator) is durable, not one-shot:
+# the first launch creates a real conversation under a fresh uuid and
+# remembers it in $LEGION_LOCAL/<position>; every launch after that
+# reattaches to it. claude errors if --session-id names one already in use,
+# and errors if --resume names one that's never existed (verified) — so
+# which flag is correct depends entirely on whether we've launched this
+# position before.
+session_flag() {
+  local id_file="$LEGION_LOCAL/$1"
+  if [ -f "$id_file" ]; then
+    echo "--resume $(cat "$id_file")"
+  else
+    local id
+    id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    echo "$id" > "$id_file"
+    echo "--session-id $id"
+  fi
+}
+
+# An operator name that looks like a flag (e.g. "--help") would otherwise be
+# accepted literally and spawn a real, oddly-named claude session — verified
+# live: an agent probing `legion deploy --help` did exactly that.
+valid_operator() {
+  case "$1" in
+    -*|*[!a-zA-Z0-9_-]*|'') return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+window_exists() {
+  tmux list-windows -a -F '#W' 2>/dev/null | grep -qx "$1"
+}
+
+open_window() {
+  local name="$1" cmd="$2" operator="$3"
+  if window_exists "$name"; then
+    echo "'$name' is already running — attach with: legion attach $operator" >&2
+    return 0
+  fi
+  # Re-source activate inside the new window before exec'ing claude, so the
+  # Legion env (and therefore `legion` itself) is available to whatever the
+  # session runs via its own Bash tool — a fresh tmux window does not
+  # inherit LEGION_ROOT etc. from the shell that called `legion commander`.
+  local project_dir="$(dirname "$LEGION_ROOT")"
+  local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && exec $cmd"
+  if [ -n "${TMUX:-}" ]; then
+    tmux new-window -n "$name" "$wrapped"
+  else
+    tmux new-session -d -s "$name" "$wrapped"
+    echo "started detached tmux session '$name' — attach with: tmux attach -t $name"
+  fi
+}
+
+cmd_init() {
+  if [ -d .legion ]; then
+    echo ".legion already exists here" >&2
+    exit 1
+  fi
+  local squad
+  squad="$(echo "${1:-$(basename "$PWD")}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')"
+  [ -n "$squad" ] || squad="squad"
+  if tmux list-windows -a -F '#W' 2>/dev/null | grep -q "^$squad-"; then
+    echo "'$squad-*' is already in use by another running squad on this machine — addresses would collide." >&2
+    echo "pick an explicit, distinct name: legion init <squad-name>" >&2
+    exit 1
+  fi
+  mkdir -p .legion/bin
+  mkdir -p .legion/missions/todo .legion/missions/active .legion/missions/done
+  mkdir -p .legion/operators .legion/pipelines
+  touch .legion/missions/todo/.gitkeep .legion/missions/active/.gitkeep .legion/missions/done/.gitkeep
+  touch .legion/operators/.gitkeep .legion/pipelines/.gitkeep
+
+  # Committed — shared via git, one squad per project.
+  cat > .legion/squad <<EOF
+LEGION_SQUAD_NAME="$squad"
+# layered: every session inherits the normal user/project/local Claude config.
+# isolated: drop the user's global ~/.claude config for every session in this
+#   squad (--setting-sources project,local) — per-operator settings.json
+#   (below) becomes the only settings source that matters for whoever has one.
+LEGION_CONFIG_MODE="layered"
+EOF
+  cat > .legion/log.md <<EOF
+# $squad — log
+
+Shared context, decisions and handoff notes for this squad. \`commander\`
+reads this on startup and is expected to keep it updated — commit it like
+any other doc. The actual mission backlog lives in missions/todo,
+missions/active, missions/done, not here.
+EOF
+  cat > .legion/doctrine.md <<EOF
+# $squad — doctrine
+
+Squad-wide conventions, values and working style. Every session — commander
+and every operator — gets this spliced into its startup prompt, so put
+anything here that should apply to everyone, not just one operator.
+EOF
+  cat > .legion/ao <<'EOF'
+# One absolute path per line. Extra directories/repos this squad is allowed
+# to access beyond the project root (its Area of Operations), passed as
+# --add-dir to every session (commander and operators). Lines starting with
+# # and blank lines are ignored.
+EOF
+
+  # Machine-local — a resume session-id and live roster status mean nothing
+  # on another clone, so keep them out of git via .legion's own .gitignore.
+  cat > .legion/.gitignore <<'EOF'
+local
+roster
+EOF
+
+  cat > .legion/bin/activate <<'ACTIVATE'
+# Source this file — do not execute: source .legion/bin/activate
+if [ -n "${LEGION_ROOT:-}" ]; then
+  echo "already inside a Legion shell (${LEGION_SQUAD_NAME:-?}) — deactivate first" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+export LEGION_ROOT="$(pwd)/.legion"
+. "$LEGION_ROOT/squad"
+export LEGION_SQUAD_NAME LEGION_CONFIG_MODE
+export LEGION_ROSTER="$LEGION_ROOT/roster"
+export LEGION_LOG="$LEGION_ROOT/log.md"
+export LEGION_MISSIONS="$LEGION_ROOT/missions"
+export LEGION_OPERATORS="$LEGION_ROOT/operators"
+export LEGION_DOCTRINE="$LEGION_ROOT/doctrine.md"
+export LEGION_AO="$LEGION_ROOT/ao"
+export LEGION_PIPELINES="$LEGION_ROOT/pipelines"
+export LEGION_LOCAL="$LEGION_ROOT/local"
+mkdir -p "$LEGION_ROSTER" "$LEGION_OPERATORS" "$LEGION_PIPELINES" "$LEGION_LOCAL"
+mkdir -p "$LEGION_MISSIONS/todo" "$LEGION_MISSIONS/active" "$LEGION_MISSIONS/done"
+
+_legion_old_ps1="$PS1"
+export PS1="(legion:$LEGION_SQUAD_NAME) $PS1"
+
+deactivate() {
+  export PS1="$_legion_old_ps1"
+  unset LEGION_ROOT LEGION_SQUAD_NAME LEGION_CONFIG_MODE LEGION_ROSTER LEGION_LOG LEGION_MISSIONS LEGION_OPERATORS LEGION_DOCTRINE LEGION_AO LEGION_PIPELINES LEGION_LOCAL
+  unset -f deactivate
+  unset _legion_old_ps1
+}
+ACTIVATE
+
+  echo "created .legion/ (squad: $squad)"
+  echo "commit .legion/ — squad, log.md, doctrine.md, ao, missions/, operators/, pipelines/, .gitignore and bin/ are meant to be shared;"
+  echo "local (session-ids) and roster/ (live status) are machine-local and already excluded"
+  echo "per-operator config (allowed-tools, disallowed-tools, settings.json, mcp.json) is optional —"
+  echo "add files under operators/<operator>/ yourself, e.g. operators/planner/disallowed-tools"
+  echo "next: source .legion/bin/activate"
+}
+
+cmd_commander() {
+  require_active
+  local mission="$*"
+  local mission_display="${mission:-none yet — wait for instructions from the human or a message}"
+  local addr="$LEGION_SQUAD_NAME-commander"
+  local prompt
+  prompt="You are '$addr', the commander of a small squad. You decide what operators this squad needs — you are not limited to planner/builder/reviewer, and you may start with no one but yourself. ALL work is partitioned by you and must flow through you — operators only ever message '$addr', never each other directly; if one operator's output needs to reach another, YOU relay it, they don't. Operators hold no backlog of their own — you own the queue, they get exactly one active mission at a time, and it is fine for one to sit idle if you have nothing queued for it; that is not a problem to solve. Your shell already has legion ready to use directly — do not run 'source .legion/bin/activate' yourself, you're already in one and it will just error. To deploy an operator, run this yourself via your shell: legion deploy <operator> \"<mission>\" — it will be addressed as '$LEGION_SQUAD_NAME-<operator>' and reports only to you. Use 'legion roster' to see who has checked in, 'legion list' for tmux windows, 'legion stand-down <operator>' to let someone go.
+
+The mission backlog lives as files under $LEGION_MISSIONS/{todo,active,done}/, committed to the repo — this is the real queue, not something you keep only in your head. One markdown file per mission, named like 0001-short-slug.md (zero-padded, increasing — check existing files across all three folders before picking the next number so you never reuse one). File format: a couple of header lines, a blank line, then the mission body:
+operator: <operator this is for, or 'unassigned'>
+created: <ISO 8601>
+pipeline: <name, only if this mission should hand off between stages on its own — see below>
+
+<mission description>
+
+Workflow: write new missions into todo/ as you think of them (or as asked of you) — you don't have to dispatch them immediately. To actually assign one, move its file from todo/ to active/ (add 'assigned: <name>' to the header) and hand the same mission text to that operator (deploying them if new, or messaging them with it if already running and free). When an operator reports a mission done, move its file from active/ to done/. If you stand down an operator mid-mission, move their file back from active/ to todo/ so the work isn't lost. This is a queue per operator, not a single shared queue — the same operator shouldn't have two files in active/ at once.
+
+For multi-stage work you don't want to broker step by step, declare a pipeline: a plain text file at $LEGION_PIPELINES/<name>, one operator per line in order (e.g. planner, then builder, then reviewer — operators don't need to exist yet, they get deployed as the pipeline reaches them). Give a mission file a 'pipeline: <name>' header field and operators hand it off directly to the next stage when they finish, instead of stopping at you each time — the mission file still records every step (that's the audit trail), and whoever hands off also sends you a one-line FYI, so you stay aware without brokering every step yourself. This is the one deliberate exception to 'operators only message you' — it only covers adjacent stages in a pipeline the mission file actually declares, nothing more open-ended.
+
+Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse name/operator and write/update that operator's file:
+name: <session name>
+status: active
+last_seen: <ISO 8601>
+When asked who is active, cross-check the files against ListAgents and report the live ones; for any file whose name no longer appears there, set status: stood-down without deleting the file. This tracks presence only — what someone is working on lives in $LEGION_MISSIONS/active/ instead, don't duplicate it here.
+
+There is also a shared log file at $LEGION_LOG, committed to the repo, for freeform context and decisions that don't fit the mission or roster format — read it at startup, keep it updated. Example operator definitions (planner/builder/reviewer) live at ~/.local/share/legion/templates/operators/ if you want a starting point when defining a new operator at \$LEGION_OPERATORS/<operator>/definition.md — copy and adapt, or draft one from scratch; ask the human if you want help thinking one through. Each operator's config is its own — access and tool permissions are set per operator, not squad-wide: \$LEGION_OPERATORS/<operator>/allowed-tools and disallowed-tools (one Claude Code tool pattern per line, e.g. \"Edit(src/**)\" — see 'claude --help' for the pattern syntax) restrict what that specific operator can touch, e.g. a planner that should only ever write the plan, never code. There is no single pattern meaning 'only this folder' — write concrete deny patterns for wherever this repo's real code lives. The human directing you may talk to you two ways: attached directly to this window, or as a cross-session message (from another Claude Code session addressing you as '$addr') — treat both the same. Overall mission: $mission_display"
+  [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
+
+This squad's doctrine:
+$(cat "$LEGION_DOCTRINE")"
+  [ -s "$LEGION_OPERATORS/commander/definition.md" ] && prompt="$prompt
+
+Additional instructions for you specifically:
+$(cat "$LEGION_OPERATORS/commander/definition.md")"
+  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag commander) --append-system-prompt $(printf '%q' "$prompt")"
+  [ -n "$mission" ] && claude_cmd="$claude_cmd $(printf '%q' "Get started: $mission")"
+  claude_cmd="$claude_cmd$(claude_flags commander)"
+  open_window "$addr" "$claude_cmd" "commander"
+}
+
+cmd_deploy() {
+  require_active
+  local operator="${1:-}"
+  valid_operator "$operator" || { echo "usage: legion deploy <operator> [mission...] (operator must be a plain name, not a flag)" >&2; exit 1; }
+  shift
+  local mission="$*"
+  local mission_display="${mission:-none yet — wait for instructions}"
+  local addr="$LEGION_SQUAD_NAME-$operator"
+  local commander_addr="$LEGION_SQUAD_NAME-commander"
+  local prompt
+  prompt="You are '$addr' on a small squad commanded by '$commander_addr'. ONLY ever message '$commander_addr' — never message any other operator directly, even if you learn their name from ListAgents; send your output back to '$commander_addr' and wait for further instructions. Before doing anything else, call ListAgents to learn your own session name, then SendMessage to '$commander_addr': \"CHECK-IN: name=<your name> operator=$operator mission=$mission_display\". If '$commander_addr' does not appear in ListAgents, skip the check-in and proceed without blocking. Only check in once, at startup. Your mission: $mission_display
+
+One exception to only messaging commander: if the mission file you were given has a 'pipeline: <name>' header, read $LEGION_PIPELINES/<name> (one operator per line, in order) to find your position in it. When you finish, if there is an operator listed after yours, hand off directly instead of just reporting to commander — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If you are the last stage in the pipeline, or the mission has no pipeline field, just report back to '$commander_addr' as usual — do not message anyone else."
+  [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
+
+This squad's doctrine:
+$(cat "$LEGION_DOCTRINE")"
+  [ -s "$LEGION_OPERATORS/$operator/definition.md" ] && prompt="$prompt
+
+Your operator definition:
+$(cat "$LEGION_OPERATORS/$operator/definition.md")"
+  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") --append-system-prompt $(printf '%q' "$prompt")"
+  [ -n "$mission" ] && claude_cmd="$claude_cmd $(printf '%q' "Get started: $mission")"
+  claude_cmd="$claude_cmd$(claude_flags "$operator")"
+  open_window "$addr" "$claude_cmd" "$operator"
+}
+
+cmd_squad() {
+  require_active
+  local mission="${*:-no overall mission specified yet}"
+  cmd_commander "$mission"
+  cmd_deploy planner "Break the overall mission into a concrete plan for commander to hand out. Overall mission: $mission"
+  cmd_deploy builder "Implement whatever commander assigns you from the plan."
+  cmd_deploy reviewer "Review whatever commander sends you and report issues back to commander."
+}
+
+cmd_roster() {
+  require_active
+  local f found=0
+  for f in "$LEGION_ROSTER"/*.md; do
+    [ -e "$f" ] || continue
+    found=1
+    echo "== $(basename "$f" .md) =="
+    cat "$f"
+    echo
+  done
+  [ "$found" -eq 1 ] || echo "(no operators checked in yet)"
+}
+
+cmd_attach() {
+  require_active
+  valid_operator "${1:-}" || { echo "usage: legion attach <operator>" >&2; exit 1; }
+  local name="$LEGION_SQUAD_NAME-$1"
+  if [ -n "${TMUX:-}" ]; then
+    tmux select-window -t "$name"
+  else
+    tmux attach -t "$name"
+  fi
+}
+
+cmd_capture() {
+  require_active
+  valid_operator "${1:-}" || { echo "usage: legion capture <operator> [lines]" >&2; exit 1; }
+  local name="$LEGION_SQUAD_NAME-$1"
+  if [ -n "${2:-}" ]; then
+    tmux capture-pane -t "$name" -p -S "-$2"
+  else
+    tmux capture-pane -t "$name" -p
+  fi
+}
+
+cmd_standdown() {
+  require_active
+  valid_operator "${1:-}" || { echo "usage: legion stand-down <operator>" >&2; exit 1; }
+  local name="$LEGION_SQUAD_NAME-$1"
+  tmux kill-window -t "$name" 2>/dev/null || tmux kill-session -t "$name" 2>/dev/null \
+    || { echo "'$name' not found" >&2; exit 1; }
+}
+
+cmd_list() {
+  require_active
+  tmux list-windows -a 2>/dev/null || echo "no tmux server running"
+}
+
+case "${1:-}" in
+  init) shift; cmd_init "$@" ;;
+  commander) shift; cmd_commander "$@" ;;
+  deploy) shift; cmd_deploy "$@" ;;
+  squad) shift; cmd_squad "$@" ;;
+  roster) cmd_roster ;;
+  attach) shift; cmd_attach "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
+  stand-down) shift; cmd_standdown "$@" ;;
+  list) cmd_list ;;
+  *) usage ;;
+esac

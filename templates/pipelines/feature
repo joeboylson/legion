@@ -1,0 +1,7 @@
+# Example pipeline: planner drafts a plan, builder implements it, reviewer
+# checks the result. Copy to .legion/pipelines/feature and give a mission
+# file a "pipeline: feature" header to route it through all three stages
+# automatically, without commander brokering each handoff.
+planner
+builder
+reviewer
