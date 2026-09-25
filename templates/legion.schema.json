@@ -31,7 +31,7 @@
     "addDirs": {
       "type": "array",
       "items": { "type": "string", "pattern": "^/" },
-      "description": "Absolute paths of extra folders or repos every session may open, beyond the project, passed as --add-dir. Replaces the old ao file."
+      "description": "Absolute paths of extra folders or repos every session may open, beyond the project, passed as --add-dir. Replaces the old ao file. Paths that differ per machine go in the git-ignored .legion/legion.local.json ({\"addDirs\": [...]}), which Legion adds to these."
     },
     "defaults": {
       "$ref": "#/$defs/operatorSettings",

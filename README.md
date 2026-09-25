@@ -285,7 +285,8 @@ Only `squad` is required:
 - `model` — the default model for every session. Blank uses Claude Code's
   own default. An operator's own `model` wins.
 - `addDirs` — extra folders every session may read and write, as full
-  paths. They can be outside the project.
+  paths. They can be outside the project. Folders whose path differs on
+  each machine go in `legion.local.json` instead (see below).
 - `defaults` — settings every operator starts with, using the same keys as
   an `operator.json`. An operator's own `operator.json` goes on top: its
   `allowedTools` and `disallowedTools` are added to the defaults, and any
@@ -303,6 +304,23 @@ Only `squad` is required:
 Legion checks `legion.json` against `templates/legion.schema.json` before
 starting anyone, and `legion check` reports its problems along with every
 `operator.json`'s.
+
+### This machine's folders: `legion.local.json`
+
+`legion.json` is shared through git, but each person keeps their clones in
+a different place. Put those paths in `.legion/legion.local.json`, which
+stays on your machine (`.legion/.gitignore` keeps it out of git):
+
+```json
+{
+  "addDirs": ["/Users/me/code/other-repo", "/Users/me/code/worktrees"]
+}
+```
+
+Legion adds its `addDirs` to the ones in `legion.json`. `addDirs` is the
+only setting it can hold, so it can't change anything the squad shares.
+It's only read when the squad has a `legion.json`, and `legion check`
+checks it too.
 
 Squads set up before `legion.json` keep working: Legion reads `.legion/squad`
 and `.legion/ao` whenever `legion.json` is missing.
