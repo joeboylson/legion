@@ -26,10 +26,12 @@ legion — Claude Code squad over tmux, run on mission command, scoped per proje
 
 Once activated (source .legion/bin/activate):
   legion commander [mission...]     start/reattach the fixed commander session
+  legion deploy                     roll call: start commander + every operator in .legion/operators/, no mission
   legion deploy <operator> [mission...]   deploy an operator reporting only to commander
   legion squad [mission...]         deploy commander + planner + builder + reviewer
   legion roster                     show roster/*.md (who has checked in)
-  legion list                       show tmux windows
+  legion list                       show this squad's tmux windows
+  legion grid                       open one tmux window tiling every position
   legion attach <operator>           jump to an operator's tmux window
   legion capture <operator> [lines]  read an operator's tmux pane without attaching
   legion stand-down <operator>       kill a tmux window by operator
@@ -62,10 +64,22 @@ flag_from_list() {
 # follows them (verified: without this ordering, the trailing mission prompt
 # silently vanishes into the preceding flag's value list instead of being
 # passed to claude as the prompt).
+# An operator's own config-mode file (first non-comment line: layered or
+# isolated) overrides the squad-wide LEGION_CONFIG_MODE for that operator.
+config_mode() {
+  local file="$LEGION_OPERATORS/$1/config-mode" mode=""
+  [ -f "$file" ] && mode="$(sed 's/#.*//' "$file" | xargs | awk '{print $1}')"
+  mode="${mode:-${LEGION_CONFIG_MODE:-layered}}"
+  case "$mode" in
+    layered|isolated) echo "$mode" ;;
+    *) echo "legion: invalid config mode '$mode' for $1 (want layered or isolated)" >&2; exit 1 ;;
+  esac
+}
+
 claude_flags() {
   local operator="$1" operator_dir="$LEGION_OPERATORS/$1" flags=""
   flags="$flags$(flag_from_list --add-dir "$LEGION_AO")"
-  [ "${LEGION_CONFIG_MODE:-layered}" = "isolated" ] && flags="$flags --setting-sources project,local"
+  [ "$(config_mode "$operator")" = "isolated" ] && flags="$flags --setting-sources project,local"
   flags="$flags$(flag_from_list --allowedTools "$operator_dir/allowed-tools")"
   flags="$flags$(flag_from_list --disallowedTools "$operator_dir/disallowed-tools")"
   [ -f "$operator_dir/settings.json" ] && flags="$flags --settings $(printf '%q' "$operator_dir/settings.json")"
@@ -102,28 +116,83 @@ valid_operator() {
   esac
 }
 
-window_exists() {
-  tmux list-windows -a -F '#W' 2>/dev/null | grep -qx "$1"
+# Every position runs as a pane in one tmux window per squad, tiled into a
+# grid. Legion finds panes by the @legion_addr and @legion_squad options it
+# sets at launch, not by window name, so moving or re-tiling them is safe.
+
+# This squad's panes, commander first, one per line:
+#   <address> TAB <pane id> TAB <command>
+squad_panes() {
+  tmux list-panes -a -F '#{pane_id}	#{@legion_squad}	#{@legion_addr}	#{pane_current_command}' 2>/dev/null \
+    | awk -F '\t' -v s="$LEGION_SQUAD_NAME" -v c="$LEGION_SQUAD_NAME-commander" '
+        $2 != s || seen[$1]++ { next }
+        { printf "%s\t%s\t%s\t%s\n", ($3 == c ? 0 : 1), $3, $1, $4 }
+      ' | sort | cut -f2-
+}
+
+pane_of() {
+  squad_panes | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'
+}
+
+squad_window() {
+  tmux list-windows -a -F '#{window_id} #{@legion_grid}' 2>/dev/null \
+    | awk -v s="$LEGION_SQUAD_NAME" '$2 == s { print $1; exit }'
+}
+
+# Mark a folder as trusted in Claude Code's config, the same record its
+# "Do you trust this folder?" prompt saves when you say yes. Without it,
+# every new session stops at that prompt and never checks in. Builds the new
+# config in a temp file first so a jq failure can't leave it half-written.
+trust_folder() {
+  local dir="$1" config="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" tmp
+  command -v jq >/dev/null 2>&1 || { echo "legion: jq not found — can't pre-trust $dir; accept the trust prompt in each pane instead" >&2; return 0; }
+  [ -f "$config" ] || echo '{}' > "$config"
+  [ "$(jq -r --arg d "$dir" '.projects[$d].hasTrustDialogAccepted // false' "$config" 2>/dev/null)" = "true" ] && return 0
+  tmp="$(mktemp "$config.legion.XXXXXX")"
+  if jq --arg d "$dir" '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' "$config" > "$tmp"; then
+    # Copy back over rather than mv, so a symlinked config (dotfiles) and its
+    # permissions survive.
+    cat "$tmp" > "$config"
+    rm -f "$tmp"
+    echo "trusted $dir in Claude Code ($config)"
+  else
+    rm -f "$tmp"
+    echo "legion: couldn't update $config — accept the trust prompt in each pane instead" >&2
+  fi
 }
 
 open_window() {
   local name="$1" cmd="$2" operator="$3"
-  if window_exists "$name"; then
+  if [ -n "$(pane_of "$name")" ]; then
     echo "'$name' is already running — attach with: legion attach $operator" >&2
     return 0
   fi
-  # Re-source activate inside the new window before exec'ing claude, so the
+  trust_folder "$(dirname "$LEGION_ROOT")"
+  # Re-source activate inside the new pane before exec'ing claude, so the
   # Legion env (and therefore `legion` itself) is available to whatever the
-  # session runs via its own Bash tool — a fresh tmux window does not
-  # inherit LEGION_ROOT etc. from the shell that called `legion commander`.
+  # session runs via its own Bash tool — a fresh tmux pane does not inherit
+  # LEGION_ROOT etc. from the shell that called `legion commander`.
   local project_dir="$(dirname "$LEGION_ROOT")"
   local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && exec $cmd"
-  if [ -n "${TMUX:-}" ]; then
-    tmux new-window -n "$name" "$wrapped"
+  local window pane
+  window="$(squad_window)"
+  if [ -n "$window" ]; then
+    pane="$(tmux split-window -d -P -F '#{pane_id}' -t "$window" "$wrapped")"
+  elif [ -n "${TMUX:-}" ]; then
+    pane="$(tmux new-window -P -F '#{pane_id}' -n "$LEGION_SQUAD_NAME" "$wrapped")"
   else
-    tmux new-session -d -s "$name" "$wrapped"
-    echo "started detached tmux session '$name' — attach with: tmux attach -t $name"
+    pane="$(tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
+    echo "started detached tmux session '$LEGION_SQUAD_NAME' — see it with: legion grid"
   fi
+  tmux set-option -p -t "$pane" @legion_squad "$LEGION_SQUAD_NAME" \
+    \; set-option -p -t "$pane" @legion_addr "$name"
+  if [ -z "$window" ]; then
+    window="$(tmux display-message -p -t "$pane" '#{window_id}')"
+    tmux set-option -w -t "$window" @legion_grid "$LEGION_SQUAD_NAME" \
+      \; set-option -w -t "$window" pane-border-status top \
+      \; set-option -w -t "$window" pane-border-format ' #{@legion_addr} '
+  fi
+  tmux select-layout -t "$window" tiled
 }
 
 cmd_init() {
@@ -134,7 +203,7 @@ cmd_init() {
   local squad
   squad="$(echo "${1:-$(basename "$PWD")}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')"
   [ -n "$squad" ] || squad="squad"
-  if tmux list-windows -a -F '#W' 2>/dev/null | grep -q "^$squad-"; then
+  if tmux list-panes -a -F '#{@legion_squad}' 2>/dev/null | awk -v s="$squad" '$0 == s { f = 1 } END { exit !f }'; then
     echo "'$squad-*' is already in use by another running squad on this machine — addresses would collide." >&2
     echo "pick an explicit, distinct name: legion init <squad-name>" >&2
     exit 1
@@ -152,6 +221,7 @@ LEGION_SQUAD_NAME="$squad"
 # isolated: drop the user's global ~/.claude config for every session in this
 #   squad (--setting-sources project,local) — per-operator settings.json
 #   (below) becomes the only settings source that matters for whoever has one.
+# This is the squad default; operators/<operator>/config-mode overrides it.
 LEGION_CONFIG_MODE="layered"
 EOF
   cat > .legion/log.md <<EOF
@@ -242,8 +312,9 @@ Workflow: write new missions into todo/ as you think of them (or as asked of you
 
 Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline: a plain text file at $LEGION_PIPELINES/<name>, one operator per line in order (e.g. planner, then builder, then reviewer — operators don't need to exist yet, they get deployed as the pipeline reaches them). Give a mission file a 'pipeline: <name>' header field and operators hand it off directly to the next stage when they finish — the mission file still records every step (that's the audit trail), and whoever hands off also sends you a one-line FYI, so you stay aware without brokering it. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
 
-Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse name/operator and write/update that operator's file:
+Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse name/operator/role and write/update that operator's file:
 name: <session name>
+role: <their role, as they described it>
 status: active
 last_seen: <ISO 8601>
 When asked who is active, cross-check the files against ListAgents and report the live ones; for any file whose name no longer appears there, set status: stood-down without deleting the file. This tracks presence only — what someone is working on lives in $LEGION_MISSIONS/active/ instead, don't duplicate it here.
@@ -257,14 +328,48 @@ $(cat "$LEGION_DOCTRINE")"
 
 Additional instructions for you specifically:
 $(cat "$LEGION_OPERATORS/commander/definition.md")"
+  config_mode commander >/dev/null || exit 1
   local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag commander) --append-system-prompt $(printf '%q' "$prompt")"
-  [ -n "$mission" ] && claude_cmd="$claude_cmd $(printf '%q' "Get started: $mission")"
+  local kickoff="${LEGION_KICKOFF:-}"
+  [ -n "$mission" ] && kickoff="Get started: $mission"
+  [ -n "$kickoff" ] && claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
   claude_cmd="$claude_cmd$(claude_flags commander)"
   open_window "$addr" "$claude_cmd" "commander"
 }
 
+defined_operators() {
+  local dir name
+  for dir in "$LEGION_OPERATORS"/*/; do
+    [ -d "$dir" ] || continue
+    name="$(basename "$dir")"
+    [ "$name" = "commander" ] && continue
+    valid_operator "$name" && echo "$name"
+  done
+}
+
+# `legion deploy` with no operator: start commander and every defined
+# operator with no mission. Each checks in with who it is and what it does,
+# and commander prints the roll call once everyone has answered.
+cmd_rollcall() {
+  local ops
+  ops="$(defined_operators)"
+  [ -n "$ops" ] || { echo "no operators defined yet — add a folder per operator under .legion/operators/, or: legion deploy <operator> [mission...]" >&2; exit 1; }
+  local list
+  list="$(echo "$ops" | paste -sd, - | sed 's/,/, /g')"
+  LEGION_KICKOFF="Roll call. No mission yet. You're expecting check-ins from: $list. As each CHECK-IN arrives, update the roster as usual. Once all of them have checked in (or after a few minutes, noting who didn't), print a short roll call here: each operator's name and, in a line, who they are and what they do. Then wait for a mission from the human." \
+    cmd_commander
+  local op
+  for op in $ops; do
+    LEGION_KICKOFF="wait for a mission — this is a roll call, there is no work yet." \
+      cmd_deploy "$op"
+  done
+  echo "roll call started: commander + $list"
+  cmd_grid
+}
+
 cmd_deploy() {
   require_active
+  if [ $# -eq 0 ]; then cmd_rollcall; return; fi
   local operator="${1:-}"
   valid_operator "$operator" || { echo "usage: legion deploy <operator> [mission...] (operator must be a plain name, not a flag)" >&2; exit 1; }
   shift
@@ -273,7 +378,7 @@ cmd_deploy() {
   local addr="$LEGION_SQUAD_NAME-$operator"
   local commander_addr="$LEGION_SQUAD_NAME-commander"
   local prompt
-  prompt="You are '$addr' on a small squad commanded by '$commander_addr', run on mission command: commander sets direction and goals, you own the how. Message '$commander_addr' to check in, to report your mission done, to ask for mission-level perspective, or to raise anything that needs a tiebreaker — a decision or disagreement only commander should settle. For your own domain, decide your approach yourself; commander gave you the what, not the method. When you need another operator's specific expertise, message them directly — this is normal, not an exception, and commander does not need to broker it. Call ListAgents to see who else is checked in, and read \$LEGION_OPERATORS/<their-operator-name>/definition.md if you want to know what they're good at before reaching out. Before doing anything else, call ListAgents to learn your own session name, then SendMessage to '$commander_addr': \"CHECK-IN: name=<your name> operator=$operator mission=$mission_display\". If '$commander_addr' does not appear in ListAgents, skip the check-in and proceed without blocking. Only check in once, at startup. Your mission: $mission_display
+  prompt="You are '$addr' on a small squad commanded by '$commander_addr', run on mission command: commander sets direction and goals, you own the how. Message '$commander_addr' to check in, to report your mission done, to ask for mission-level perspective, or to raise anything that needs a tiebreaker — a decision or disagreement only commander should settle. For your own domain, decide your approach yourself; commander gave you the what, not the method. When you need another operator's specific expertise, message them directly — this is normal, not an exception, and commander does not need to broker it. Call ListAgents to see who else is checked in, and read \$LEGION_OPERATORS/<their-operator-name>/definition.md if you want to know what they're good at before reaching out. Before doing anything else, call ListAgents to learn your own session name, then SendMessage to '$commander_addr': \"CHECK-IN: name=<your name> operator=$operator role=<one or two sentences, in your own words, on who you are and what you do on this squad — from your operator definition if you have one> mission=$mission_display\". Check in every time you are started, including when this conversation is resumed: commander may be a brand-new session that has never heard from you, so an earlier check-in in this conversation does not count — send a fresh one. Commander may start at the same moment you do, so if '$commander_addr' isn't in ListAgents yet, wait about 10 seconds and look again, for up to about a minute; only if it still isn't there, skip the check-in and carry on. Otherwise, check in once per start, not repeatedly. Your mission: $mission_display
 
 If the mission file you were given has a 'pipeline: <name>' header, read $LEGION_PIPELINES/<name> (one operator per line, in order) to find your position in it. When you finish, if there is an operator listed after yours, hand off directly — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If you are the last stage in the pipeline, or the mission has no pipeline field, report back to '$commander_addr' when your mission is done — and along the way, reach out to any other operator directly whenever their expertise would help."
   [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
@@ -284,8 +389,17 @@ $(cat "$LEGION_DOCTRINE")"
 
 Your operator definition:
 $(cat "$LEGION_OPERATORS/$operator/definition.md")"
+  config_mode "$operator" >/dev/null || exit 1
   local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") --append-system-prompt $(printf '%q' "$prompt")"
-  [ -n "$mission" ] && claude_cmd="$claude_cmd $(printf '%q' "Get started: $mission")"
+  # Always send an opening message, even on a resume with no mission: without
+  # one a resumed session just sits there, and it must check in every start.
+  local kickoff="You have just been started (or restarted). Check in with commander now, as your instructions describe — every start, even if this conversation already shows an earlier check-in."
+  if [ -n "$mission" ]; then
+    kickoff="$kickoff Then get started: $mission"
+  else
+    kickoff="$kickoff Then ${LEGION_KICKOFF:-wait for a mission.}"
+  fi
+  claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
   claude_cmd="$claude_cmd$(claude_flags "$operator")"
   open_window "$addr" "$claude_cmd" "$operator"
 }
@@ -297,6 +411,7 @@ cmd_squad() {
   cmd_deploy planner "Break the overall mission into a concrete plan for commander to hand out. Overall mission: $mission"
   cmd_deploy builder "Implement whatever commander assigns you from the plan. Ask planner or reviewer directly if you need their input."
   cmd_deploy reviewer "Review whatever commander sends you and report issues back to commander. Message builder directly if you need to clarify something with them."
+  cmd_grid
 }
 
 cmd_roster() {
@@ -315,36 +430,65 @@ cmd_roster() {
 cmd_attach() {
   require_active
   valid_operator "${1:-}" || { echo "usage: legion attach <operator>" >&2; exit 1; }
-  local name="$LEGION_SQUAD_NAME-$1"
+  local name="$LEGION_SQUAD_NAME-$1" pane
+  pane="$(pane_of "$name")"
+  [ -n "$pane" ] || { echo "'$name' is not running" >&2; exit 1; }
+  tmux select-window -t "$pane" \; select-pane -t "$pane"
   if [ -n "${TMUX:-}" ]; then
-    tmux select-window -t "$name"
+    tmux switch-client -t "$pane"
   else
-    tmux attach -t "$name"
+    tmux attach-session -t "$pane"
   fi
 }
 
 cmd_capture() {
   require_active
   valid_operator "${1:-}" || { echo "usage: legion capture <operator> [lines]" >&2; exit 1; }
-  local name="$LEGION_SQUAD_NAME-$1"
+  local name="$LEGION_SQUAD_NAME-$1" pane
+  pane="$(pane_of "$name")"
+  [ -n "$pane" ] || { echo "'$name' is not running" >&2; exit 1; }
   if [ -n "${2:-}" ]; then
-    tmux capture-pane -t "$name" -p -S "-$2"
+    tmux capture-pane -t "$pane" -p -S "-$2"
   else
-    tmux capture-pane -t "$name" -p
+    tmux capture-pane -t "$pane" -p
   fi
 }
 
 cmd_standdown() {
   require_active
   valid_operator "${1:-}" || { echo "usage: legion stand-down <operator>" >&2; exit 1; }
-  local name="$LEGION_SQUAD_NAME-$1"
-  tmux kill-window -t "$name" 2>/dev/null || tmux kill-session -t "$name" 2>/dev/null \
-    || { echo "'$name' not found" >&2; exit 1; }
+  local name="$LEGION_SQUAD_NAME-$1" pane window
+  pane="$(pane_of "$name")"
+  [ -n "$pane" ] || { echo "'$name' not found" >&2; exit 1; }
+  window="$(squad_window)"
+  tmux kill-pane -t "$pane"
+  [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
+  return 0
 }
 
 cmd_list() {
   require_active
-  tmux list-windows -a 2>/dev/null || echo "no tmux server running"
+  tmux list-sessions >/dev/null 2>&1 || { echo "no tmux server running"; return 0; }
+  local out
+  out="$(squad_panes | awk -F '\t' '{ printf "%s  %s  (%s)\n", $1, $2, $3 }')"
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  else
+    echo "no panes running for squad '$LEGION_SQUAD_NAME'"
+  fi
+}
+
+cmd_grid() {
+  require_active
+  local window
+  window="$(squad_window)"
+  [ -n "$window" ] || { echo "no panes running for squad '$LEGION_SQUAD_NAME'" >&2; exit 1; }
+  tmux select-layout -t "$window" tiled \; select-window -t "$window"
+  if [ -n "${TMUX:-}" ]; then
+    tmux switch-client -t "$window" 2>/dev/null || true
+  else
+    tmux attach-session -t "$window"
+  fi
 }
 
 case "${1:-}" in
@@ -357,5 +501,6 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   stand-down) shift; cmd_standdown "$@" ;;
   list) cmd_list ;;
+  grid) cmd_grid ;;
   *) usage ;;
 esac
