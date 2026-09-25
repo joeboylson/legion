@@ -178,6 +178,35 @@ separate checkout of the project, on its own branch, inside
 The commander runs both commands as part of handing out and closing
 missions. The project has to be a git repo.
 
+### Messages between sessions
+
+Sessions on a squad message each other with `legion message`, not Claude
+Code's own messages between sessions. Claude Code cuts off a chain of
+replies that loops back through a session it already passed. A squad
+trading orders and results back and forth hits that limit quickly.
+
+- `legion message send builder "the plan is ready"` saves the message as a
+  file in `.legion/messages/builder/new/`. A full session name such as
+  `myapp-builder` works too.
+- Each session keeps `legion message wait` running in the background. It
+  finishes when new mail arrives, and Claude Code wakes the session when a
+  background command it started finishes.
+- `legion message read` shows anything waiting, and `legion message log
+  <name>` shows everything a position has received.
+
+Legion adds three Claude Code hooks to every session, on top of its own
+settings, so this doesn't rely on each session remembering the steps:
+
+- **When the session tries to go idle,** it's handed any unread messages
+  instead. It also can't go idle without a wait running.
+- **After each tool it uses,** any new messages are added to what it sees.
+- **Before a shell command,** starting the wait with a trailing `&` is turned
+  back. Claude Code would stop that command to ask a person, and the
+  session would sit there without hearing anything.
+
+A message only counts as read once one of these hooks has shown it to the
+session. The `messages` folder stays out of git.
+
 ## Setting up an operator
 
 An operator works fine with nothing but the mission text you give it. To
