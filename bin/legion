@@ -32,6 +32,8 @@ Once activated (source .legion/bin/activate):
   legion roster                     show roster/*.md (who has checked in)
   legion list                       show this squad's tmux windows
   legion grid                       open one tmux window tiling every position
+  legion mission start <n>          give mission <n> its own git worktree and branch
+  legion mission finish <n>         fast-forward the base branch to it and remove the worktree
   legion attach <operator>           jump to an operator's tmux window
   legion capture <operator> [lines]  read an operator's tmux pane without attaching
   legion stand-down                 stop every position in this squad
@@ -252,6 +254,7 @@ EOF
   cat > .legion/.gitignore <<'EOF'
 local
 roster
+worktrees
 EOF
 
   cat > .legion/bin/activate <<'ACTIVATE'
@@ -310,6 +313,8 @@ pipeline: <name, only if this mission should hand off between stages on its own 
 <mission description>
 
 Workflow: write new missions into todo/ as you think of them (or as asked of you) — you don't have to dispatch them immediately. To actually assign one, move its file from todo/ to active/ (add 'assigned: <name>' to the header) and hand the same mission text to that operator (deploying them if new, or messaging them with it if already running and free). When an operator reports a mission done, move its file from active/ to done/. If you stand down an operator mid-mission, move their file back from active/ to todo/ so the work isn't lost. This is a queue per operator, not a single shared queue — the same operator shouldn't have two files in active/ at once.
+
+Every mission that changes project files gets its own git worktree: a separate checkout of the project on its own branch, so two missions (or a paused one) never leave edits in each other's way. When you move such a mission to active/, run 'legion mission start <number>' first — it creates the worktree, adds 'worktree:', 'branch:' and 'base:' lines to the mission file, and prints the worktree path; include that path when you hand the mission over. Mission files, the roster and the log always stay in the project root's .legion/, never the worktree's copy. When reviewer approves, run 'legion mission finish <number>': it fast-forwards the base branch to the mission branch and removes the worktree. If it refuses because the base branch moved on, send the mission back to builder to rebase onto the base branch in the worktree, then finish again. Then move the file to done/. A paused mission keeps its worktree as is; nothing needs saving.
 
 Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline: a plain text file at $LEGION_PIPELINES/<name>, one operator per line in order (lines starting with # are comments, not stages) (e.g. planner, then builder, then reviewer — operators don't need to exist yet, they get deployed as the pipeline reaches them). Give a mission file a 'pipeline: <name>' header field and operators hand it off directly to the next stage when they finish — the mission file still records every step (that's the audit trail), and whoever hands off also sends you a one-line FYI, so you stay aware without brokering it. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
 
@@ -380,6 +385,8 @@ cmd_deploy() {
   local commander_addr="$LEGION_SQUAD_NAME-commander"
   local prompt
   prompt="You are '$addr' on a small squad commanded by '$commander_addr', run on mission command: commander sets direction and goals, you own the how. Message '$commander_addr' to check in, to report your mission done, to ask for mission-level perspective, or to raise anything that needs a tiebreaker — a decision or disagreement only commander should settle. For your own domain, decide your approach yourself; commander gave you the what, not the method. When you need another operator's specific expertise, message them directly — this is normal, not an exception, and commander does not need to broker it. Call ListAgents to see who else is checked in, and read \$LEGION_OPERATORS/<their-operator-name>/definition.md if you want to know what they're good at before reaching out. Before doing anything else, call ListAgents to learn your own session name, then SendMessage to '$commander_addr': \"CHECK-IN: name=<your name> operator=$operator role=<one or two sentences, in your own words, on who you are and what you do on this squad — from your operator definition if you have one> mission=$mission_display\". Check in every time you are started, including when this conversation is resumed: commander may be a brand-new session that has never heard from you, so an earlier check-in in this conversation does not count — send a fresh one. Commander may start at the same moment you do, so if '$commander_addr' isn't in ListAgents yet, wait about 10 seconds and look again, for up to about a minute; only if it still isn't there, skip the check-in and carry on. Otherwise, check in once per start, not repeatedly. Your mission: $mission_display
+
+If your mission file has a 'worktree:' header, that folder is where this mission's code lives: read, edit, test and commit there (use its paths for file edits, and cd into it for shell commands). Don't touch the project root's copy of those files for this mission. Mission files, the roster and the log stay in the project root's .legion/ — update those there, never in the worktree.
 
 If the mission file you were given has a 'pipeline: <name>' header, read $LEGION_PIPELINES/<name> (one operator per line, in order; lines starting with # are comments, not stages) to find your position in it. When you finish, if there is an operator listed after yours, hand off directly — update the mission file (move it if commander's convention has you do that, set operator/assigned to the next stage, add a short note of what you did), deploy that operator via 'legion deploy <operator> \"...\"' if they are not already running or SendMessage them directly if they are, and separately send '$commander_addr' a one-line FYI that you handed off. If you are the last stage in the pipeline, or the mission has no pipeline field, report back to '$commander_addr' when your mission is done — and along the way, reach out to any other operator directly whenever their expertise would help."
   [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
@@ -486,6 +493,82 @@ EOF
   echo "stood down:$stopped"
 }
 
+# Finds a mission file by number (5, 0005) or full name, active/ first.
+mission_file() {
+  local id="$1" n f
+  case "$id" in
+    *[!0-9]*) n="$id" ;;
+    *) n="$(printf '%04d' "$((10#$id))")" ;;
+  esac
+  for f in "$LEGION_MISSIONS/active/$n"*.md "$LEGION_MISSIONS/todo/$n"*.md "$LEGION_MISSIONS/done/$n"*.md; do
+    [ -f "$f" ] && { echo "$f"; return 0; }
+  done
+  return 1
+}
+
+# Sets "key: value" in a mission file's header (the lines before the first
+# blank line), replacing the key if it's already there.
+set_header() {
+  local file="$1" key="$2" value="$3" tmp
+  tmp="$(mktemp)"
+  awk -v k="$key" -v v="$value" '
+    !done && index($0, k ": ") == 1 { print k ": " v; done = 1; next }
+    !done && $0 == "" { print k ": " v; done = 1 }
+    { print }
+    END { if (!done) print k ": " v }
+  ' "$file" > "$tmp" && cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# Each mission that changes code gets its own git worktree under
+# .legion/worktrees/, on branch mission/<name>, so a paused or parallel
+# mission can't leave edits in another's way. finish only fast-forwards: if
+# the base branch has moved on, the mission branch has to be rebased first,
+# which keeps history linear and never merges on anyone's behalf.
+cmd_mission() {
+  require_active
+  local sub="${1:-}" id="${2:-}"
+  case "$sub" in
+    start|finish) [ -n "$id" ] || { echo "usage: legion mission $sub <number>" >&2; exit 1; } ;;
+    *) echo "usage: legion mission start|finish <number>" >&2; exit 1 ;;
+  esac
+  local root file slug branch path base current
+  root="$(dirname "$LEGION_ROOT")"
+  git -C "$root" rev-parse --git-dir >/dev/null 2>&1 \
+    || { echo "legion: $root isn't a git repo — mission worktrees need one" >&2; exit 1; }
+  file="$(mission_file "$id")" || { echo "no mission file matching '$id'" >&2; exit 1; }
+  slug="$(basename "$file" .md)"
+  branch="mission/$slug"
+  path="$LEGION_ROOT/worktrees/$slug"
+  current="$(git -C "$root" rev-parse --abbrev-ref HEAD)"
+  case "$sub" in
+    start)
+      if [ -d "$path" ]; then echo "$path"; return 0; fi
+      awk '$0 == "worktrees" { f = 1 } END { exit !f }' "$LEGION_ROOT/.gitignore" 2>/dev/null \
+        || echo "worktrees" >> "$LEGION_ROOT/.gitignore"
+      git -C "$root" worktree add -q -b "$branch" "$path" "$current" || exit 1
+      set_header "$file" worktree "$path"
+      set_header "$file" branch "$branch"
+      set_header "$file" base "$current"
+      echo "$path"
+      ;;
+    finish)
+      [ -d "$path" ] || { echo "no worktree for $slug" >&2; exit 1; }
+      [ -z "$(git -C "$path" status --porcelain)" ] \
+        || { echo "$path has uncommitted changes — commit or discard them first" >&2; exit 1; }
+      base="$(awk -F': ' '$0 == "" { exit } $1 == "base" { print $2; exit }' "$file")"
+      base="${base:-$current}"
+      [ "$current" = "$base" ] \
+        || { echo "the project root is on '$current', not '$base' — switch it back first" >&2; exit 1; }
+      git -C "$root" -c advice.diverging=false merge --ff-only -q "$branch" 2>/dev/null \
+        || { echo "can't fast-forward $base to $branch — rebase first: cd $path && git rebase $base" >&2; exit 1; }
+      git -C "$root" worktree remove "$path" && git -C "$root" branch -q -d "$branch"
+      set_header "$file" worktree "(merged into $base and removed)"
+      echo "merged $branch into $base"
+      ;;
+  esac
+}
+
 cmd_list() {
   require_active
   tmux list-sessions >/dev/null 2>&1 || { echo "no tmux server running"; return 0; }
@@ -521,6 +604,7 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   stand-down) shift; cmd_standdown "$@" ;;
   list) cmd_list ;;
+  mission) shift; cmd_mission "$@" ;;
   grid) cmd_grid ;;
   *) usage ;;
 esac

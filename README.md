@@ -154,6 +154,28 @@ mission. In between, operators talk to each other directly when
 they need help. The commander doesn't pass those messages along. An
 operator with nothing to do waits, and that's fine.
 
+### One worktree per mission
+
+Operators share one project folder, so a paused mission can leave
+half-finished edits where the next mission's work goes. To keep missions
+apart, each mission that changes code gets its own git worktree: a
+separate checkout of the project, on its own branch, inside
+`.legion/worktrees/`.
+
+- `legion mission start <number>` creates the worktree and a
+  `mission/<name>` branch from whatever branch the project is on. It adds
+  `worktree:`, `branch:` and `base:` lines to the mission file.
+- Operators do that mission's reading, editing, testing and committing
+  inside the worktree. Mission files, the roster and the log stay in the
+  project's own `.legion/`.
+- `legion mission finish <number>` moves the base branch up to the
+  mission branch and deletes the worktree. It only does this when the base
+  branch hasn't moved on since. If it has, the builder rebases the mission
+  branch first, so Legion never merges anything for you.
+
+The commander runs both commands as part of handing out and closing
+missions. The project has to be a git repo.
+
 ## Setting up an operator
 
 An operator works fine with nothing but the mission text you give it. To
