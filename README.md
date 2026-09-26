@@ -533,7 +533,21 @@ flowchart TD
 adds a note to the project's `CLAUDE.md`, so any Claude session you ask to
 write a pipeline uses the same format. The example above comes with Legion in
 `~/.local/share/legion/templates/pipelines/feature.md`. To send a mission
-through a pipeline, add a `pipeline: <name>` line to the mission file's header.
+through a pipeline, add a `pipeline: <name>` line to the mission file's header
+— or create the mission with one already set:
+
+```bash
+legion mission create export-api "Build the export endpoint" --pipeline feature
+```
+
+This checks `.legion/pipelines/<name>.md` (or the older plain-list file with
+no extension) actually exists before writing anything, and lists what's
+there if it doesn't — a typo'd pipeline name is otherwise a mistake nobody
+notices until an operator hits a dead end partway through the mission,
+trying to read a pipeline that was never there. The same check runs
+wherever a pipeline gets attached to a mission: the commander's own
+`mission_create` and `mission_set` MCP tools validate it too, not just this
+command.
 
 When an operator finishes its step, it answers any question that follows and
 works out who's next. It adds a note to the mission file and hands off to the
