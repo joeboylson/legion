@@ -238,6 +238,14 @@ Claude Code conversation and saves its ID in `local/`. If you close that
 operator and start it again, Legion reopens the same conversation instead
 of starting fresh. You don't need to manage this.
 
+A saved id can occasionally be one that was never actually registered — a
+session that was stopped before it took its first real turn never gets
+created server-side, so there's nothing to reopen. Legion notices a resume
+failing almost instantly (a real conversation takes many seconds minimum
+to end; a missing one fails far faster than that) and starts a fresh
+conversation instead, rather than the position's pane just disappearing
+with no explanation.
+
 ### How work moves
 
 The commander owns the work queue. Each mission is one markdown file with a
