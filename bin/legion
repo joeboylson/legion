@@ -11,6 +11,12 @@
 set -euo pipefail
 
 LEGION_SRC="https://github.com/joeboylson/legion"
+# Prefixes every squad's tmux session name, so it's visually distinct from
+# unrelated sessions and legion switch/session can group by it. No colon —
+# tmux itself uses ':' as the session:window.pane separator in targets, so
+# a session literally named with one risks misparsing anywhere it's used
+# as a -t argument.
+LEGION_TAG="[LEGION]"
 
 require_active() {
   if [ -z "${LEGION_ROOT:-}" ]; then
@@ -29,6 +35,8 @@ legion — Claude Code squad over tmux, run on mission command, scoped per proje
   legion demo [folder]          watch a squad paint a mural together (runs in its own folder)
   legion mcp [--role human --project <path>]   run legion's MCP server (squad sessions get it automatically)
   legion switch [name]          jump to a tmux session by name, or pick from a list — any session, not just squads
+  legion session                 list every legion-tagged tmux session on this machine
+  legion session detach          leave tmux entirely, back to a plain shell — every session keeps running
 
 Once activated (source .legion/bin/activate):
   legion commander [mission...]     start/reattach the fixed commander session
@@ -556,8 +564,8 @@ open_window() {
     # session full of other real projects). squad_window()/pane_of() find
     # this by the @legion_grid/@legion_squad tags regardless of which
     # session it's actually in, so nothing else needs to know or care.
-    pane="$(tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
-    echo "started tmux session '$LEGION_SQUAD_NAME' — see it with: legion grid"
+    pane="$(tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_TAG $LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
+    echo "started tmux session '$LEGION_TAG $LEGION_SQUAD_NAME' — see it with: legion grid"
   fi
   tmux set-option -p -t "$pane" @legion_squad "$LEGION_SQUAD_NAME" \
     \; set-option -p -t "$pane" @legion_addr "$name"
@@ -577,7 +585,10 @@ open_window() {
 # works whether you're inside tmux already or attaching fresh.
 cmd_switch() {
   local target="${1:-}" sessions name
-  sessions="$(tmux list-sessions -F '#{session_name}' 2>/dev/null)"
+  # Legion-tagged sessions first, then everything else, alphabetical within
+  # each — so the picker groups squads together above unrelated sessions.
+  sessions="$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+    | awk -v tag="$LEGION_TAG" '{ print (index($0, tag) == 1 ? 0 : 1) "\t" $0 }' | sort | cut -f2-)"
   [ -n "$sessions" ] || { echo "legion: no tmux sessions running" >&2; exit 1; }
   if [ -n "$target" ]; then
     if printf '%s\n' "$sessions" | grep -qxF "$target"; then
@@ -609,6 +620,30 @@ EOF
   else
     tmux attach-session -t "$name"
   fi
+}
+
+# Same non-activated, session-not-squad-specific footing as switch: this
+# looks across every squad on the machine, not just the one you're in.
+cmd_session() {
+  local sub="${1:-}"
+  case "$sub" in
+    ""|list)
+      local sessions
+      sessions="$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -F "$LEGION_TAG" || true)"
+      [ -n "$sessions" ] && printf '%s\n' "$sessions" || echo "no legion sessions running"
+      ;;
+    detach)
+      # Leaves the tmux server, and every session on it, running exactly as
+      # they were — this only detaches *this* client, same as tmux's own
+      # <prefix> d, just reachable without remembering the prefix key.
+      [ -n "${TMUX:-}" ] || { echo "legion: not inside tmux" >&2; exit 1; }
+      tmux detach-client
+      ;;
+    *)
+      echo "usage: legion session [detach]" >&2
+      exit 1
+      ;;
+  esac
 }
 
 cmd_init() {
@@ -1474,6 +1509,7 @@ main() {
     src) echo "$LEGION_SRC" ;;
     mcp) shift; exec python3 "$(cd "$(dirname "$0")" && pwd)/legion-mcp" "$@" ;;
     switch) shift; cmd_switch "$@" ;;
+    session) shift; cmd_session "$@" ;;
     commander) shift; cmd_commander "$@" ;;
     deploy) shift; cmd_deploy "$@" ;;
     squad) shift; cmd_squad "$@" ;;
