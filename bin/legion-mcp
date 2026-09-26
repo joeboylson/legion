@@ -67,6 +67,7 @@ ROOT = os.path.join(PROJECT, ".legion")
 if not os.path.isdir(ROOT):
     die("no .legion folder in %s (pass --project <path to the project>)" % PROJECT)
 MISSIONS = os.path.join(ROOT, "missions")
+PIPELINES = os.path.join(ROOT, "pipelines")
 QUESTIONS = os.path.join(ROOT, "questions")
 
 
@@ -225,6 +226,23 @@ def next_mission_number():
     return top + 1
 
 
+def pipeline_exists(name):
+    # A pipeline can be a Mermaid file (current) or, on an older squad, a
+    # plain list with no extension — see the README's Pipelines section.
+    return os.path.isfile(os.path.join(PIPELINES, name + ".md")) or os.path.isfile(os.path.join(PIPELINES, name))
+
+
+def check_pipeline(name):
+    if pipeline_exists(name):
+        return
+    available = sorted(f[:-3] for f in os.listdir(PIPELINES) if f.endswith(".md") and f != "README.md") \
+        if os.path.isdir(PIPELINES) else []
+    msg = "no pipeline called %r — looked for %s" % (name, os.path.join(PIPELINES, name + ".md"))
+    if available:
+        msg += " (available: %s)" % ", ".join(available)
+    raise ValueError(msg)
+
+
 # ---- questions ---------------------------------------------------------------
 
 def question_path(qid):
@@ -354,6 +372,8 @@ def t_mission_note(mission, heading, body):
 def t_mission_set(mission, key, value):
     if not re.match(r"^[a-z][a-z0-9_-]*$", key):
         raise ValueError("header keys are lower-case words, like round or worktree")
+    if key == "pipeline":
+        check_pipeline(value)
     path = mission_path(mission)
     set_header(path, key, value)
     return "Set %s: %s in %s." % (key, value, os.path.basename(path))
@@ -401,6 +421,8 @@ def t_capture(position, lines=40):
 def t_mission_create(slug, body, header=None, folder="todo"):
     if folder not in ("todo", "active"):
         raise ValueError("folder must be todo or active")
+    if header and header.get("pipeline"):
+        check_pipeline(header["pipeline"])
     slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
     name = "%04d-%s" % (next_mission_number(), slug)
     d = os.path.join(MISSIONS, folder)
