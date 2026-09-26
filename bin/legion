@@ -53,6 +53,7 @@ Once activated (source .legion/bin/activate):
   legion channel send <team> [--operator <name>] <text...>   relay a message to a connected team (default: their commander)
   legion channel peers                              show teams this channel knows about
   legion channel close                              stop this squad's channel daemon
+  legion activity tail [n]          watch every tool call any position makes, live
   deactivate                        leave the shell (from the sourced script)
 EOF
 }
@@ -426,7 +427,9 @@ EOF
   # them over mid-turn. The session doesn't have to remember either.
   printf '%s\n' "$base" | jq '
     .hooks.Stop = ((.hooks.Stop // []) + [{hooks: [{type: "command", command: "legion message hook stop"}]}])
-    | .hooks.PostToolUse = ((.hooks.PostToolUse // []) + [{matcher: "*", hooks: [{type: "command", command: "legion message hook tool"}]}])
+    | .hooks.PostToolUse = ((.hooks.PostToolUse // [])
+        + [{matcher: "*", hooks: [{type: "command", command: "legion message hook tool"}]}]
+        + [{matcher: "*", hooks: [{type: "command", command: "legion activity hook"}]}])
     | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: "legion message hook bash"}]}])
   ' > "$gen/settings.json"
   flags="$flags --settings $(printf '%q' "$gen/settings.json")"
@@ -620,6 +623,7 @@ roster
 worktrees
 messages
 channel
+activity.log
 legion.local.json
 EOF
 
@@ -1334,6 +1338,51 @@ cmd_channel() {
   esac
 }
 
+# One shared, append-only log for the whole squad: every tool call any
+# position makes, regardless of operator or session restarts. Machine-local
+# (out of git) since it's pure activity, not a decision or a record worth
+# keeping in history the way log.md is.
+activity_log() {
+  echo "$LEGION_ROOT/activity.log"
+}
+
+cmd_activity() {
+  require_active
+  local sub="${1:-}"; [ $# -gt 0 ] && shift
+  local log; log="$(activity_log)"
+  case "$sub" in
+    hook)
+      # Called by legion's PostToolUse hook on every session (see
+      # claude_flags). Must never fail or print anything: a broken tool
+      # call here would be a broken tool call for the session using it.
+      local input position tool summary line
+      input="$(cat)"
+      position="${LEGION_POSITION:-human}"
+      tool="$(printf '%s' "$input" | jq -r '.tool_name // "?"' 2>/dev/null)" || tool="?"
+      summary="$(printf '%s' "$input" | jq -r '
+        .tool_input as $i
+        | ($i.command // $i.pattern // $i.file_path // $i.path // $i.url // ($i | tostring))
+        | tostring | .[0:200]
+      ' 2>/dev/null)" || summary=""
+      line="$(jq -nc --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pos "$position" --arg tool "$tool" --arg sum "$summary" \
+        '{time: $t, position: $pos, tool: $tool, summary: $sum}' 2>/dev/null)" || exit 0
+      awk '$0 == "activity.log" { f = 1 } END { exit !f }' "$LEGION_ROOT/.gitignore" 2>/dev/null \
+        || echo "activity.log" >> "$LEGION_ROOT/.gitignore"
+      printf '%s\n' "$line" >> "$log" 2>/dev/null
+      exit 0
+      ;;
+    tail)
+      local n="${1:-20}"
+      [ -f "$log" ] || { echo "no activity yet"; return 0; }
+      tail -n "$n" -f "$log" | jq -r --unbuffered '"\(.time)  \(.position)\t\(.tool)\t\(.summary)"'
+      ;;
+    *)
+      echo "usage: legion activity tail [n]" >&2
+      exit 1
+      ;;
+  esac
+}
+
 cmd_list() {
   require_active
   tmux list-sessions >/dev/null 2>&1 || { echo "no tmux server running"; return 0; }
@@ -1380,6 +1429,7 @@ main() {
     list) cmd_list ;;
     message) shift; cmd_message "$@" ;;
     channel) shift; cmd_channel "$@" ;;
+    activity) shift; cmd_activity "$@" ;;
     check) shift; cmd_check "$@" ;;
     scale) shift; cmd_scale "$@" ;;
     mission) shift; cmd_mission "$@" ;;
