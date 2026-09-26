@@ -151,14 +151,17 @@ Commit `.legion/` with your project. Most of it is meant to be shared:
 - `pipelines/<name>` — optional fixed orders (see below).
 - `missions/todo/`, `missions/active/`, `missions/done/` — the work queue.
 
-Two folders only make sense on your machine, and `.legion/.gitignore` keeps
-them out of git:
+A few folders only make sense on your machine, and `.legion/.gitignore`
+keeps them out of git:
 
 - `local/` — the Claude Code session ID for each position. Legion uses it
   to reopen the same conversation next time.
 - `roster/` — one file per operator saying whether it's running. Legion
   marks an operator as stood down rather than deleting its file, so the
   folder also records everyone who has ever been on the squad.
+- `channel/` — this machine's channel to other squads, if you've opened or
+  subscribed to one (see [Talking to another squad](#talking-to-another-squad-legion-channel)):
+  who it's connected to, what's queued to send, and its log.
 
 ### Folder trust
 
@@ -493,6 +496,56 @@ claude mcp add legion -- legion mcp --role human --project /path/to/project
 
 Then ask that session how the squad is doing, or tell it to answer a
 question, send the commander a mission, or stand everyone down.
+
+## Talking to another squad: `legion channel`
+
+`legion message` is for positions on one squad. To relay to a different
+squad entirely — another project on the same laptop, another machine on
+your LAN, or over something like Tailscale — open a channel:
+
+```bash
+legion channel open --port 7000                  # accept connections on this port
+legion channel open --port 7000 --key sekret      # only from a subscriber with this key
+```
+
+Another squad reaches it with:
+
+```bash
+legion channel subscribe <host>:7000 --team myapp --key sekret
+```
+
+Either side then relays with:
+
+```bash
+legion channel send <their-team> "the export API is ready for you to build against"
+legion channel send <their-team> --operator builder "same, but straight to their builder"
+```
+
+It's delivered into the other squad's `.legion/messages/`, exactly like
+`legion message send` — the same Stop/PostToolUse hooks pick it up, so an
+operator hears it the way it hears anything else, tagged `from:
+external:<team>`. It goes to their commander unless you name an operator.
+`legion channel peers` shows every team a channel currently knows about,
+with the operators each one announced.
+
+A subscriber to your channel is also a peer of anyone else subscribed to
+it: the listening side relays between the teams connected to it, not just
+to itself, so one open channel can join several squads together.
+
+**Reachability is a network decision, not a Legion one.** The channel
+listens on every interface; whether that means only this machine, your
+LAN, your tailnet, or the open internet depends on what can actually route
+to that port. The key is the only access control Legion adds on top, and
+it's optional — skip it when reachability alone is trust enough (localhost,
+your own LAN, a tailnet you don't share with anyone else), and set one
+where it isn't (anything you'd call public). There's no encryption of its
+own: on an open network, put it behind something that has some (a VPN, an
+SSH tunnel, Tailscale) rather than trusting the key alone.
+
+A channel runs as its own background process (`legion-channeld`), separate
+from any Claude session, so it keeps relaying and answering `legion channel
+peers` even while the whole squad is stood down. `legion channel close`
+stops it.
 
 ## License
 

@@ -50,7 +50,7 @@ Once activated (source .legion/bin/activate):
   legion stand-down <operator>       stop one position and close its tile
   legion channel open [--port <n>] [--key <k>]      accept relays from other squads on a port
   legion channel subscribe <host:port> --team <name> [--key <k>]   relay to another squad's channel
-  legion channel send <team> <text...>              relay a message to a subscribed/connected team
+  legion channel send <team> [--operator <name>] <text...>   relay a message to a connected team (default: their commander)
   legion channel peers                              show teams this channel knows about
   legion channel close                              stop this squad's channel daemon
   deactivate                        leave the shell (from the sourced script)
@@ -1303,12 +1303,15 @@ cmd_channel() {
       ;;
     send)
       local team="${1:-}"; [ -n "$team" ] && shift
+      local operator=""
+      while [ "${1:-}" = "--operator" ]; do operator="${2:-}"; shift 2; done
       [ -n "$team" ] && [ $# -gt 0 ] \
-        || { echo "usage: legion channel send <team> <text...>" >&2; exit 1; }
+        || { echo "usage: legion channel send <team> [--operator <name>] <text...>" >&2; exit 1; }
       local text="$*"
-      jq -n --arg to "$team" --arg text "$text" '{to: $to, text: $text}' \
+      jq -n --arg to "$team" --arg op "$operator" --arg text "$text" \
+        '{to: $to, text: $text} + (if $op == "" then {} else {operator: $op} end)' \
         > "$dir/outbox/$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM.json"
-      echo "queued for $team"
+      echo "queued for $team$([ -n "$operator" ] && echo " ($operator)")"
       ;;
     peers)
       local f found=0
