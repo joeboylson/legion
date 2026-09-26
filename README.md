@@ -127,13 +127,14 @@ with a tile for each session. The label at the top of each tile shows whose
 it is. Legion adds a tile when a session starts, removes it when the session
 stops, and re-arranges the tiles to fit.
 
-If you run Legion inside tmux, the window opens in your current tmux
-session. Outside tmux, Legion starts a separate tmux session named after the
-squad.
+A squad always gets its own tmux session, named after it, never a window in
+whatever session you happen to be attached to — including if that's a
+tmux session you use for everyday, unrelated work, running Legion from
+inside it doesn't put the squad there too.
 
-`legion grid` switches you to that window from anywhere, or attaches to it
-if you're outside tmux. `legion attach <name>` does the same and selects
-that session's tile.
+`legion grid` switches you to that window from anywhere — from inside tmux
+or outside it — or attaches to it if you're outside tmux entirely. `legion
+attach <name>` does the same and selects that session's tile.
 
 ## What's in `.legion/`
 

@@ -540,11 +540,18 @@ open_window() {
   window="$(squad_window)"
   if [ -n "$window" ]; then
     pane="$(tmux split-window -d -P -F '#{pane_id}' -t "$window" "$wrapped")"
-  elif [ -n "${TMUX:-}" ]; then
-    pane="$(tmux new-window -P -F '#{pane_id}' -n "$LEGION_SQUAD_NAME" "$wrapped")"
   else
+    # Always its own dedicated session, named after the squad — never a
+    # window in whatever session happens to be current. $TMUX being set
+    # only means *some* tmux session is attached somewhere; it says nothing
+    # about whether that session belongs to this squad. Guessing wrong
+    # means a squad's windows land in someone's everyday, unrelated tmux
+    # session (verified: it happened, landing "north"/"south" windows in a
+    # session full of other real projects). squad_window()/pane_of() find
+    # this by the @legion_grid/@legion_squad tags regardless of which
+    # session it's actually in, so nothing else needs to know or care.
     pane="$(tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
-    echo "started detached tmux session '$LEGION_SQUAD_NAME' — see it with: legion grid"
+    echo "started tmux session '$LEGION_SQUAD_NAME' — see it with: legion grid"
   fi
   tmux set-option -p -t "$pane" @legion_squad "$LEGION_SQUAD_NAME" \
     \; set-option -p -t "$pane" @legion_addr "$name"
