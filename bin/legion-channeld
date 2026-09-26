@@ -71,6 +71,8 @@ SUBS = os.path.join(CHANNEL, "subscriptions.json")
 PEERS = os.path.join(CHANNEL, "peers")
 OUTBOX = os.path.join(CHANNEL, "outbox")
 LOG = os.path.join(CHANNEL, "channel.log")
+ACTIVITY = os.path.join(ROOT, "activity.log")
+FEED = os.path.join(CHANNEL, "feed.jsonl")
 for d in (CHANNEL, PEERS, OUTBOX):
     os.makedirs(d, exist_ok=True)
 
@@ -167,6 +169,11 @@ async def send_line(writer, obj):
     await writer.drain()
 
 
+def feed_append(team, event):
+    with open(FEED, "a") as f:
+        f.write(json.dumps({"team": team, **event}) + "\n")
+
+
 async def handle_relay(msg, sender_team):
     to = msg.get("to", "")
     operator = msg.get("operator") or "commander"
@@ -212,6 +219,8 @@ async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None
                 log("connected: %s" % peer_team)
             elif mtype == "relay":
                 await handle_relay(m, peer_team or m.get("from", "?"))
+            elif mtype == "activity":
+                feed_append(m.get("team", peer_team or "?"), m.get("event", {}))
             elif mtype == "error":
                 log("peer error from %s: %s" % (peer_team, m.get("message")))
                 break
@@ -302,9 +311,40 @@ async def watch_outbox():
         await asyncio.sleep(POLL_SECONDS)
 
 
+async def watch_activity():
+    """Tails this squad's own .legion/activity.log (every tool call any
+    position makes) from wherever it is when the daemon starts, mirrors
+    each new line into the local merged feed, and broadcasts it to every
+    connected peer so their feed picks it up too — the whole point being
+    that either side of a channel ends up with one combined view of both
+    squads' activity, not just its own."""
+    pos = os.path.getsize(ACTIVITY) if os.path.isfile(ACTIVITY) else 0
+    while True:
+        if os.path.isfile(ACTIVITY):
+            with open(ACTIVITY) as f:
+                f.seek(pos)
+                lines = f.readlines()
+                pos = f.tell()
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                feed_append(SQUAD, event)
+                for writer in list(CONNECTIONS.values()):
+                    try:
+                        await send_line(writer, {"type": "activity", "team": SQUAD, "event": event})
+                    except OSError:
+                        pass
+        await asyncio.sleep(POLL_SECONDS)
+
+
 async def main():
     log("starting for squad '%s' (root=%s)" % (SQUAD, ROOT))
-    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox())
+    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox(), watch_activity())
 
 
 if __name__ == "__main__":
