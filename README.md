@@ -108,9 +108,9 @@ deactivate                               # turn legion commands off again
 Every command needs `source .legion/bin/activate` in that shell first,
 except `legion init`, `legion src`, `legion demo` (it runs in its own
 throwaway folder), `legion mcp` (takes its own `--project` instead), and
-`legion switch`/`legion session` (plain tmux navigation, not
-squad-specific). That keeps you from starting sessions in the wrong
-project. `deactivate` turns it off again.
+`legion session` (plain tmux navigation, not squad-specific). That keeps
+you from starting sessions in the wrong project. `deactivate` turns it off
+again.
 
 ## Roll call
 
@@ -135,7 +135,7 @@ a window in whatever session you happen to be attached to, including if
 that's a tmux session you use for everyday, unrelated work; running Legion
 from inside it doesn't put the squad there too. The tag makes a squad's
 session visually distinct from unrelated ones in `tmux ls` or `<prefix>
-s`, and lets `legion switch`/`legion session` group by it.
+s`, and lets `legion session` group by it.
 
 `legion grid` switches you to that window from anywhere — from inside tmux
 or outside it — or attaches to it if you're outside tmux entirely. `legion
@@ -151,21 +151,21 @@ jumps over to the squad's session entirely, since a tmux client only shows
 one session at a time. Your previous session isn't closed, just no longer
 what's on screen.
 
-`legion switch [name]` is the quickest way back and forth between whatever
-you were doing and a squad (or any tmux session at all — it isn't
-squad-specific): give it a name, or an unambiguous part of one (the
-`[LEGION] ` prefix doesn't need typing — `legion switch north` still
-resolves), and it jumps straight there. Give it nothing and it lists every
-session running, tagged ones grouped first, so you can pick. Same
-`switch-client`/`attach-session` underneath as `legion grid`, just not tied
-to one particular squad. It works before you've activated any squad and
-even before you've run `legion init` anywhere.
+`legion session [name]` is the quickest way back and forth between
+whatever you were doing and a squad: give it a name, or an unambiguous
+part of one (the `[LEGION] ` prefix doesn't need typing — `legion session
+north` still resolves), and it jumps straight there. Give it nothing and
+it lists every squad running so you can pick. It's scoped to squads by
+default — add `--all` to reach (or list) any tmux session, unrelated ones
+included, tagged sessions still grouped first. Same
+`switch-client`/`attach-session` underneath as `legion grid`, just not
+tied to one particular squad. It works before you've activated any squad
+and even before you've run `legion init` anywhere.
 
-`legion session` lists just the tagged sessions — every squad running on
-this machine, nothing else — and `legion session detach` gets you out of
-tmux entirely: it wraps `tmux detach-client`, dropping you back to a plain
-shell while the tmux server, and every session on it, keeps running
-untouched. Reattach later with `tmux attach` or `legion switch`.
+`legion session detach` gets you out of tmux entirely: it wraps `tmux
+detach-client`, dropping you back to a plain shell while the tmux server,
+and every session on it, keeps running untouched. Reattach later with
+`tmux attach` or `legion session`.
 
 Plain tmux does the same navigation job without any of this, if you'd
 rather: `<prefix> L` (capital L) jumps to whichever session you were on
