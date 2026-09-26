@@ -451,23 +451,10 @@ EOF
 # Every position (commander and every operator) is durable, not one-shot:
 # the first launch creates a real conversation under a fresh uuid and
 # remembers it in $LEGION_LOCAL/<position>; every launch after that
-# reattaches to it. claude errors if --session-id names one already in use,
-# and errors if --resume names one that's never existed (verified) — so
-# which flag is correct depends entirely on whether we've launched this
-# position before.
-session_flag() {
-  local id_file="$LEGION_LOCAL/$1"
-  if [ -f "$id_file" ]; then
-    echo "--resume $(cat "$id_file")"
-  else
-    local id
-    id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-    echo "$id" > "$id_file"
-    echo "--session-id $id"
-  fi
-}
-
-# The startup prompt goes to claude as a file, not inline: tmux rejects a
+# reattaches to it. Session id + resume-vs-fresh handling lives in the
+# launch script open_window generates, not here, so a stale id (one that
+# was saved but never actually registered, because the session never took
+# a first turn) can recover instead of silently dying — see open_window.# The startup prompt goes to claude as a file, not inline: tmux rejects a
 # pane command over about 16 KB ("command too long"), and the commander's
 # built-in prompt plus a squad's doctrine and definition passes that.
 prompt_flag() {
@@ -533,7 +520,7 @@ trust_folder() {
 }
 
 open_window() {
-  local name="$1" cmd="$2" operator="$3"
+  local name="$1" rest="$2" operator="$3"
   if [ -n "$(pane_of "$name")" ]; then
     echo "'$name' is already running — attach with: legion attach $operator" >&2
     return 0
@@ -545,11 +532,60 @@ open_window() {
   # squad under /tmp hung there every time despite trust_folder running).
   local project_dir="$(cd "$(dirname "$LEGION_ROOT")" && pwd -P)"
   trust_folder "$project_dir"
-  # Re-source activate inside the new pane before exec'ing claude, so the
-  # Legion env (and therefore `legion` itself) is available to whatever the
-  # session runs via its own Bash tool — a fresh tmux pane does not inherit
-  # LEGION_ROOT etc. from the shell that called `legion commander`.
-  local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && export LEGION_POSITION=$(printf '%q' "$operator") && exec $cmd"
+  # A generated launch script, not an inline exec, so resuming a stale
+  # session can recover instead of the pane just dying. --resume against a
+  # session that never actually took a turn fails with "No conversation
+  # found" — that happens whenever something (an auto-started commander
+  # with no kickoff, a killed-mid-startup session) never sent claude a
+  # first prompt, so nothing was ever registered server-side to resume
+  # (verified live: a commander started this way left its pane silently
+  # gone the instant claude exited, no trace of why). Recover by dropping
+  # the stale id and starting fresh, same as if there'd never been one.
+  #
+  # Detection is by elapsed time, not by scanning claude's own stderr for
+  # the error text: redirecting an interactive claude's stderr to a file so
+  # it can be grepped breaks its terminal detection even with stdin/stdout
+  # still a real PTY, and it exits instantly with nothing printed at all —
+  # verified live, and confusing to debug precisely because it fails
+  # silently the same way the bug being fixed does. A real "no conversation
+  # found" failure is near-instant (well under a second); any actual
+  # interactive use, even a session someone opens and immediately closes,
+  # takes many seconds. So: nonzero exit within a few seconds means a stale
+  # id, not a real ended session — retry fresh; a real session's stdin,
+  # stdout and stderr are never touched.
+  local id_file="$LEGION_LOCAL/$operator"
+  local gen="$LEGION_LOCAL/generated/$(operator_base "$operator")"
+  mkdir -p "$gen"
+  local launch="$gen/launch.sh"
+  cat > "$launch" <<SCRIPT
+#!/usr/bin/env bash
+set -u
+id_file=$(printf '%q' "$id_file")
+if [ -f "\$id_file" ]; then
+  id="\$(cat "\$id_file")"
+  start=\$(date +%s)
+  claude --name $(printf '%q' "$name") --resume "\$id" $rest
+  rc=\$?
+  elapsed=\$(( \$(date +%s) - start ))
+  if [ \$rc -ne 0 ] && [ \$elapsed -lt 5 ]; then
+    rm -f "\$id_file"
+    id="\$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    echo "\$id" > "\$id_file"
+    exec claude --name $(printf '%q' "$name") --session-id "\$id" $rest
+  fi
+  exit \$rc
+else
+  id="\$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  echo "\$id" > "\$id_file"
+  exec claude --name $(printf '%q' "$name") --session-id "\$id" $rest
+fi
+SCRIPT
+  chmod +x "$launch"
+  # Re-source activate inside the new pane before running that script, so
+  # the Legion env (and therefore `legion` itself) is available to whatever
+  # the session runs via its own Bash tool — a fresh tmux pane does not
+  # inherit LEGION_ROOT etc. from the shell that called `legion commander`.
+  local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && export LEGION_POSITION=$(printf '%q' "$operator") && exec $(printf '%q' "$launch")"
   local window pane
   window="$(squad_window)"
   if [ -n "$window" ]; then
@@ -874,7 +910,7 @@ $(cat "$LEGION_OPERATORS/commander/definition.md")"
 Squad check every $every: right after you start 'legion message wait', invoke the loop skill (/loop) with interval $every and this prompt: \"Squad check: run legion list, read the roster, missions and new messages. Give every idle operator (or a free copy of a scalable one) a useful task that doesn't wait on anyone else: write each as a small mission in todo/ and start or scale up the operator. Never give two copies the same slice. If nothing useful is left for an operator, stand it down. Don't hand out filler.\" Start it once per start of this session; if a squad-check loop is already running in this conversation, don't start a second one."
   check_operator commander || exit 1
   config_mode commander >/dev/null || exit 1
-  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag commander) $(prompt_flag commander "$prompt")"
+  local claude_cmd="$(prompt_flag commander "$prompt")"
   local kickoff="${LEGION_KICKOFF:-}"
   [ -n "$mission" ] && kickoff="Get started: $mission"
   [ -n "$kickoff" ] && claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
@@ -964,7 +1000,7 @@ Your operator definition:
 $(cat "$(operator_dir "$operator")/definition.md")"
   check_operator "$(operator_base "$operator")" || exit 1
   config_mode "$operator" >/dev/null || exit 1
-  local claude_cmd="claude --name $(printf '%q' "$addr") $(session_flag "$operator") $(prompt_flag "$operator" "$prompt")"
+  local claude_cmd="$(prompt_flag "$operator" "$prompt")"
   # Always send an opening message, even on a resume with no mission: without
   # one a resumed session just sits there, and it must check in every start.
   local kickoff="You have just been started (or restarted). Check in with commander now, as your instructions describe — every start, even if this conversation already shows an earlier check-in."
