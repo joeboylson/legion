@@ -48,6 +48,7 @@ Once activated (source .legion/bin/activate):
   legion message wait|read|log      wait for, read, or list your messages
   legion check [operator...]        check operator.json files against the schema
   legion grid                       open one tmux window tiling every position
+  legion mission create <slug> <description...> [--pipeline <name>]   write a new mission into todo/, checking the pipeline exists first
   legion mission start <n>          give mission <n> its own git worktree and branch
   legion mission finish <n>         fast-forward the base branch to it and remove the worktree
   legion attach <operator>           jump to an operator's tmux window
@@ -1074,6 +1075,73 @@ set_header() {
   rm -f "$tmp"
 }
 
+# The next unused mission number across all three folders, so create never
+# reuses one even if the highest-numbered mission has already moved to
+# done/ or been renamed.
+next_mission_number() {
+  local top=0 f base n
+  for f in "$LEGION_MISSIONS"/todo/*.md "$LEGION_MISSIONS"/active/*.md "$LEGION_MISSIONS"/done/*.md; do
+    [ -f "$f" ] || continue
+    base="$(basename "$f")"
+    case "$base" in
+      [0-9][0-9][0-9][0-9]-*)
+        n="$((10#${base%%-*}))"
+        [ "$n" -gt "$top" ] && top="$n"
+        ;;
+    esac
+  done
+  echo $((top + 1))
+}
+
+# A pipeline can be a Mermaid file (current) or, on an older squad, a plain
+# list with no extension (see the Pipelines section of the README) — a
+# mission's pipeline: header has to resolve to one or the other, or an
+# operator hits a dead end trying to read it partway through a mission,
+# far past where a typo would have been easy to catch.
+pipeline_exists() {
+  [ -f "$LEGION_PIPELINES/$1.md" ] || [ -f "$LEGION_PIPELINES/$1" ]
+}
+
+cmd_mission_create() {
+  local slug="${1:-}"; [ -n "$slug" ] && shift
+  local pipeline="" desc=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --pipeline) pipeline="${2:-}"; shift 2 ;;
+      *) desc+=("$1"); shift ;;
+    esac
+  done
+  [ -n "$slug" ] && [ "${#desc[@]}" -gt 0 ] \
+    || { echo "usage: legion mission create <slug> <description...> [--pipeline <name>]" >&2; exit 1; }
+  if [ -n "$pipeline" ]; then
+    pipeline_exists "$pipeline" || {
+      echo "legion: no pipeline called '$pipeline' — looked for $LEGION_PIPELINES/$pipeline.md" >&2
+      local available="" f base
+      for f in "$LEGION_PIPELINES"/*.md; do
+        [ -f "$f" ] || continue
+        base="$(basename "$f" .md)"
+        [ "$base" = "README" ] && continue
+        available="$available $base"
+      done
+      [ -n "$available" ] && echo "available pipelines:$available" >&2
+      exit 1
+    }
+  fi
+  local n slug_clean name path
+  n="$(next_mission_number)"
+  slug_clean="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')"
+  [ -n "$slug_clean" ] || slug_clean="mission"
+  name="$(printf '%04d-%s' "$n" "$slug_clean")"
+  mkdir -p "$LEGION_MISSIONS/todo"
+  path="$LEGION_MISSIONS/todo/$name.md"
+  {
+    printf 'created: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    [ -n "$pipeline" ] && printf 'pipeline: %s\n' "$pipeline"
+    printf '\n%s\n' "${desc[*]}"
+  } > "$path"
+  echo "created $path$([ -n "$pipeline" ] && echo " (pipeline: $pipeline)")"
+}
+
 # Each mission that changes code gets its own git worktree under
 # .legion/worktrees/, on branch mission/<name>, so a paused or parallel
 # mission can't leave edits in another's way. finish only fast-forwards: if
@@ -1081,10 +1149,16 @@ set_header() {
 # which keeps history linear and never merges on anyone's behalf.
 cmd_mission() {
   require_active
-  local sub="${1:-}" id="${2:-}"
+  local sub="${1:-}"
+  if [ "$sub" = "create" ]; then
+    shift
+    cmd_mission_create "$@"
+    return
+  fi
+  local id="${2:-}"
   case "$sub" in
     start|finish) [ -n "$id" ] || { echo "usage: legion mission $sub <number>" >&2; exit 1; } ;;
-    *) echo "usage: legion mission start|finish <number>" >&2; exit 1 ;;
+    *) echo "usage: legion mission create <slug> <description...> [--pipeline <name>] | legion mission start|finish <number>" >&2; exit 1 ;;
   esac
   local root file slug branch path base current
   root="$(dirname "$LEGION_ROOT")"
