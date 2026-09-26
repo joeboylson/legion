@@ -89,19 +89,30 @@ It runs in a temp folder (or one you pass) with its own squad, so it never touch
 
 ```bash
 cd some-project
-legion init                              # creates ./.legion/
-source .legion/bin/activate              # turns on legion commands in this shell
-legion deploy                            # roll call: start everyone, no work yet
-legion squad "ship the export feature"   # or: start commander, planner, builder, reviewer with a goal
-legion roster                            # who has checked in
-legion list                              # this squad's running sessions
-legion grid                              # switch to the squad's tmux window
-legion attach builder                    # switch to builder's tile
-legion capture builder                   # print builder's screen without switching
-legion stand-down builder                # stop builder and close its tile
-legion stand-down                        # stop the whole squad
-deactivate                               # turn legion commands off again
+legion init                                  # creates ./.legion/
+source .legion/bin/activate                  # turns on legion commands in this shell
+legion commander "ship the export feature"   # hand the squad a goal — it decides how to tackle it
+legion roster                                # who has checked in
+legion list                                  # this squad's running sessions
+legion grid                                  # switch to the squad's tmux window
+legion attach builder                        # switch to builder's tile, once commander deploys one
+legion capture builder                       # print builder's screen without switching
+legion stand-down builder                    # stop builder and close its tile
+legion stand-down                            # stop the whole squad
+deactivate                                   # turn legion commands off again
 ```
+
+`legion commander [mission...]` is the default way in: give it a goal and it
+decides for itself whether to do the work directly or deploy operators —
+with no defined operators at all, it just does the work itself. Two more
+specific entry points exist for when you already know exactly what you
+want: `legion deploy` with nothing after it (roll call — start commander
+plus every operator with a folder in `.legion/operators/`, no mission, to
+check they're set up how you expect) and `legion squad [mission...]`
+(commander plus a fixed planner/builder/reviewer, given the same mission).
+Deploying a specific operator directly (`legion deploy <operator>
+[mission...]`) also starts commander first if it isn't already running —
+an operator always has someone to report to.
 
 `legion src` prints the address of this repo on GitHub.
 
