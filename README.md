@@ -105,9 +105,12 @@ deactivate                               # turn legion commands off again
 
 `legion src` prints the address of this repo on GitHub.
 
-Every command except `legion init` and `legion src` refuses to run until you've run
-`source .legion/bin/activate` in that shell. That keeps you from
-starting sessions in the wrong project. `deactivate` turns it off again.
+Every command needs `source .legion/bin/activate` in that shell first,
+except `legion init`, `legion src`, `legion demo` (it runs in its own
+throwaway folder), `legion mcp` (takes its own `--project` instead) and
+`legion switch` (plain tmux navigation, not squad-specific). That keeps you
+from starting sessions in the wrong project. `deactivate` turns it off
+again.
 
 ## Roll call
 
@@ -136,6 +139,34 @@ inside it doesn't put the squad there too.
 or outside it — or attaches to it if you're outside tmux entirely. `legion
 attach <name>` does the same and selects that session's tile.
 
+Starting a squad doesn't change what's on your screen: the session is
+created detached, so if you were looking at something else, you're still
+looking at it — you'll just see a line like `started tmux session 'north'
+— see it with: legion grid` print in whatever pane you ran the command
+from. Nothing switches over until you ask it to. When you do run `legion
+grid`, that's a `tmux switch-client` under the hood: your terminal jumps
+over to the squad's session entirely, since a tmux client only shows one
+session at a time. Your previous session isn't closed, just no longer
+what's on screen.
+
+`legion switch [name]` is the quickest way back and forth between whatever
+you were doing and a squad (or any tmux session at all — it isn't
+squad-specific): give it a name, or an unambiguous part of one, and it
+jumps straight there; give it nothing and it lists every session running
+so you can pick. Same `switch-client`/`attach-session` underneath as
+`legion grid`, just not tied to one particular squad. It works before
+you've activated any squad and even before you've run `legion init`
+anywhere.
+
+Plain tmux does the same job without it, if you'd rather: `<prefix> L`
+(capital L) jumps to whichever session you were on immediately before the
+current one — the fastest way to toggle between exactly two. `<prefix> s`
+opens tmux's own session list. `<prefix> (` / `<prefix> )` cycles through
+them in order. (`<prefix>` is `Ctrl-b` unless you've remapped it.)
+Switching away, by any of these, doesn't stop or affect the squad — it
+keeps running in its own session regardless of which one your terminal
+happens to be showing.
+
 ## What's in `.legion/`
 
 Commit `.legion/` with your project. Most of it is meant to be shared:
@@ -162,7 +193,11 @@ keeps them out of git:
   folder also records everyone who has ever been on the squad.
 - `channel/` — this machine's channel to other squads, if you've opened or
   subscribed to one (see [Talking to another squad](#talking-to-another-squad-legion-channel)):
-  who it's connected to, what's queued to send, and its log.
+  who it's connected to, what's queued to send, its log, and `feed.jsonl`,
+  the merged activity feed from every squad the channel is connected to.
+- `activity.log` — every tool call any position on the squad makes, one
+  JSON line each: time, position, tool, and a short summary. See
+  [`legion activity`](#watching-activity-legion-activity).
 
 ### Folder trust
 
@@ -260,6 +295,23 @@ settings, so this doesn't rely on each session remembering the steps:
 
 A message only counts as read once one of these hooks has shown it to the
 session. The `messages` folder stays out of git.
+
+## Watching activity: `legion activity`
+
+Every session gets one more hook on top of the message ones: after each
+tool call, a line is appended to `.legion/activity.log` — time, position,
+tool name, and a short summary (the command, file path, search pattern or
+URL, whichever the tool used). It's the one place to see what every
+position on the squad is actually doing, not just what they report.
+
+```bash
+legion activity tail        # follow it live, most recent 20 lines to start
+legion activity tail 100    # follow it live, starting further back
+```
+
+It's plain JSON Lines, so anything else that wants to watch — a script, a
+dashboard — can just tail the file itself. `activity.log` stays out of git;
+it's a live record, not something worth a commit history.
 
 ## Squad settings
 
@@ -482,6 +534,10 @@ with the tools its role allows. Everything is still stored as plain files in
 Only the commander can start, scale or stand down sessions. Legion blocks
 those tools, and the matching `legion` commands, for every operator.
 
+`legion channel` and `legion activity` aren't in this table — they're not
+MCP tools yet, just `legion` commands any session can reach through its
+Bash tool, same as any other shell command.
+
 **Questions for you.** An operator's `ask_human` writes
 `.legion/questions/Q-###.md`, with numbered options and a recommendation, and
 tells the commander. Answer in the commander's window, or from another
@@ -532,6 +588,16 @@ with the operators each one announced.
 A subscriber to your channel is also a peer of anyone else subscribed to
 it: the listening side relays between the teams connected to it, not just
 to itself, so one open channel can join several squads together.
+
+**Activity crosses the channel too, automatically.** Each side of a
+connection also mirrors its own [`activity.log`](#watching-activity-legion-activity)
+to the other, with no `legion channel send` needed — it's the channel
+daemon tailing the file itself, not anything an operator has to remember
+to do. Every connected squad ends up with `.legion/channel/feed.jsonl`: one
+combined, live feed of every tool call on every squad the channel reaches,
+each line tagged with which team it came from. Point anything that reads
+JSON Lines at that file — a script, a small web page polling it — to watch
+several squads work at once.
 
 **Reachability is a network decision, not a Legion one.** The channel
 listens on every interface; whether that means only this machine, your
