@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""legion-channeld — relays messages between squads over a plain TCP socket.
+
+    legion-channeld --root <path to .legion>
+
+Started in the background by `legion channel open` and/or `legion channel
+subscribe`; stopped by `legion channel close`. Not meant to be run by hand.
+
+Two roles, run at once, both driven by files in .legion/channel/:
+  listener   if channel/config.json has a port, accept connections there.
+             An optional key in config.json must match a connecting peer's.
+  subscriber for every entry in channel/subscriptions.json, dial out and
+             keep the connection open, reconnecting on drop.
+
+Every connection speaks line-delimited JSON, once a "hello" (team name +
+this squad's operators) has gone each way:
+
+  {"type": "hello", "team": "myapp", "key": "...", "operators": [...]}
+  {"type": "relay", "to": "myapp", "from": "otherapp", "operator": "commander", "text": "..."}
+
+A relay addressed to this squad is dropped into .legion/messages/ the same
+way `legion message send` does, by running that same command — so the
+existing Stop/PostToolUse hooks pick it up exactly like an internal
+message, with no changes to those hooks. A relay addressed to another
+connected team is forwarded to that connection, so the listener side also
+acts as a hub between whoever has subscribed to it.
+
+Outbound sends come from channel/outbox/<name>.json ({"to", "text",
+"operator"}), written by `legion channel send` and picked up here, and live
+peer state (who's connected, their operators) is written to
+channel/peers/<team>.json for `legion channel peers` to read.
+
+No packages beyond Python 3.
+"""
+import asyncio
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+POLL_SECONDS = 1
+RECONNECT_SECONDS = 5
+
+
+def die(msg):
+    sys.stderr.write("legion-channeld: %s\n" % msg)
+    sys.exit(1)
+
+
+def parse_args(argv):
+    root = None
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--root" and i + 1 < len(argv):
+            root, i = argv[i + 1], i + 2
+        else:
+            die("unknown argument %r (want --root <path to .legion>)" % argv[i])
+    if not root:
+        die("--root <path to .legion> is required")
+    return root
+
+
+ROOT = os.path.abspath(os.path.expanduser(parse_args(sys.argv[1:])))
+PROJECT = os.path.dirname(ROOT)
+CHANNEL = os.path.join(ROOT, "channel")
+CONFIG = os.path.join(CHANNEL, "config.json")
+SUBS = os.path.join(CHANNEL, "subscriptions.json")
+PEERS = os.path.join(CHANNEL, "peers")
+OUTBOX = os.path.join(CHANNEL, "outbox")
+LOG = os.path.join(CHANNEL, "channel.log")
+for d in (CHANNEL, PEERS, OUTBOX):
+    os.makedirs(d, exist_ok=True)
+
+
+def log(msg):
+    with open(LOG, "a") as f:
+        f.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), msg))
+
+
+def read_json(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return default
+
+
+def squad_name():
+    return read_json(os.path.join(ROOT, "legion.json"), {}).get("squad", "")
+
+
+SQUAD = squad_name()
+if not SQUAD:
+    die(".legion/legion.json has no squad name")
+
+
+def operators():
+    out = []
+    d = os.path.join(ROOT, "operators")
+    if not os.path.isdir(d):
+        return out
+    for name in sorted(os.listdir(d)):
+        path = os.path.join(d, name)
+        if name == "commander" or not os.path.isdir(path):
+            continue
+        about = ""
+        defn = os.path.join(path, "definition.md")
+        if os.path.isfile(defn):
+            with open(defn) as f:
+                for line in f:
+                    line = line.strip().lstrip("#").strip()
+                    if line:
+                        about = line
+                        break
+        out.append({"name": name, "about": about})
+    return out
+
+
+def hello(key=None):
+    msg = {"type": "hello", "team": SQUAD, "operators": operators()}
+    if key:
+        msg["key"] = key
+    return msg
+
+
+def peer_path(team):
+    return os.path.join(PEERS, re.sub(r"[^a-zA-Z0-9_-]", "_", team) + ".json")
+
+
+def write_peer(team, **fields):
+    info = read_json(peer_path(team), {"team": team})
+    info.update(fields)
+    with open(peer_path(team), "w") as f:
+        json.dump(info, f, indent=2)
+
+
+# team -> asyncio.StreamWriter, for whichever side (listener or subscriber)
+# currently holds an open connection to that team.
+CONNECTIONS = {}
+
+
+def deliver_locally(operator, text, sender_team):
+    """Drops a message into .legion/messages/ the same way `legion message
+    send` does, by actually running it — so delivery stays the one place
+    that logic lives, and the hooks that already watch for new mail pick
+    this up unchanged."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LEGION_")}
+    env["LEGION_MESSAGE_AS"] = "external:%s" % sender_team
+    script = "cd %s && . .legion/bin/activate >/dev/null && legion message send %s -" % (
+        shlex.quote(PROJECT), shlex.quote(operator))
+    try:
+        p = subprocess.run(["bash", "-c", script], input=text, capture_output=True,
+                            text=True, env=env, timeout=30)
+        if p.returncode != 0:
+            log("delivery to %s failed: %s" % (operator, (p.stdout + p.stderr).strip()))
+        else:
+            log("delivered to %s from %s: %s" % (operator, sender_team, text[:60]))
+    except Exception as e:
+        log("delivery to %s raised: %s" % (operator, e))
+
+
+async def send_line(writer, obj):
+    writer.write((json.dumps(obj) + "\n").encode())
+    await writer.drain()
+
+
+async def handle_relay(msg, sender_team):
+    to = msg.get("to", "")
+    operator = msg.get("operator") or "commander"
+    text = msg.get("text", "")
+    if to == SQUAD:
+        deliver_locally(operator, text, sender_team)
+    elif to in CONNECTIONS:
+        await send_line(CONNECTIONS[to], msg)
+        log("forwarded relay from %s to %s" % (sender_team, to))
+    else:
+        log("relay to unknown/disconnected team %r dropped (from %s)" % (to, sender_team))
+
+
+async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None):
+    """Reads hello/relay lines from one connection until it closes. The
+    initiator has already sent its own hello before this is called; the
+    acceptor sends its hello back once the peer's has been checked."""
+    peer_team = team_hint
+    replied = False
+    try:
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            try:
+                m = json.loads(line.decode())
+            except ValueError:
+                continue
+            mtype = m.get("type")
+            if mtype == "hello":
+                if not initiated_by_us and key and m.get("key") != key:
+                    await send_line(writer, {"type": "error", "message": "invalid key"})
+                    log("rejected connection (bad key), claimed team %r" % m.get("team"))
+                    break
+                peer_team = m.get("team") or peer_team or "?"
+                CONNECTIONS[peer_team] = writer
+                write_peer(peer_team, operators=m.get("operators", []), connected=True,
+                           direction="outbound" if initiated_by_us else "inbound",
+                           last_seen=time.time())
+                if not initiated_by_us and not replied:
+                    await send_line(writer, hello())
+                    replied = True
+                log("connected: %s" % peer_team)
+            elif mtype == "relay":
+                await handle_relay(m, peer_team or m.get("from", "?"))
+            elif mtype == "error":
+                log("peer error from %s: %s" % (peer_team, m.get("message")))
+                break
+    except (ConnectionResetError, asyncio.IncompleteReadError, OSError):
+        pass
+    finally:
+        if peer_team and CONNECTIONS.get(peer_team) is writer:
+            del CONNECTIONS[peer_team]
+            write_peer(peer_team, connected=False, last_seen=time.time())
+            log("disconnected: %s" % peer_team)
+        writer.close()
+
+
+async def serve():
+    config = read_json(CONFIG, None)
+    if not config or not config.get("port"):
+        return
+    key = config.get("key")
+
+    async def on_client(reader, writer):
+        await handle_connection(reader, writer, key, initiated_by_us=False)
+
+    server = await asyncio.start_server(on_client, "0.0.0.0", int(config["port"]))
+    log("listening on 0.0.0.0:%s%s" % (config["port"], " (key required)" if key else ""))
+    async with server:
+        await server.serve_forever()
+
+
+async def maintain_subscription(sub):
+    host, port, team, key = sub["host"], int(sub["port"]), sub["team"], sub.get("key")
+    while True:
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            await send_line(writer, hello(key))
+            log("subscribed to %s at %s:%s" % (team, host, port))
+            await handle_connection(reader, writer, key, initiated_by_us=True, team_hint=team)
+        except (ConnectionRefusedError, OSError, ConnectionResetError) as e:
+            log("subscribe to %s (%s:%s): %s — retrying in %ss" % (team, host, port, e, RECONNECT_SECONDS))
+        await asyncio.sleep(RECONNECT_SECONDS)
+
+
+async def watch_subscriptions():
+    # Keyed by (host, port, team) -> (task, the sub dict it was started with),
+    # so editing a subscription's key (or removing it) takes effect on a
+    # daemon that's already running, not just on the next restart.
+    active = {}
+    while True:
+        subs = read_json(SUBS, [])
+        seen = set()
+        for sub in subs:
+            key_id = (sub["host"], sub["port"], sub["team"])
+            seen.add(key_id)
+            prev = active.get(key_id)
+            if prev is None or prev[1] != sub:
+                if prev is not None:
+                    prev[0].cancel()
+                active[key_id] = (asyncio.ensure_future(maintain_subscription(sub)), sub)
+        for key_id in list(active):
+            if key_id not in seen:
+                active.pop(key_id)[0].cancel()
+        await asyncio.sleep(POLL_SECONDS)
+
+
+async def watch_outbox():
+    while True:
+        try:
+            names = sorted(os.listdir(OUTBOX))
+        except FileNotFoundError:
+            names = []
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(OUTBOX, name)
+            msg = read_json(path, None)
+            if msg is not None:
+                to = msg.get("to", "")
+                relay = {"type": "relay", "to": to, "from": SQUAD,
+                         "operator": msg.get("operator") or "commander", "text": msg.get("text", "")}
+                if to in CONNECTIONS:
+                    await send_line(CONNECTIONS[to], relay)
+                    log("sent to %s: %s" % (to, msg.get("text", "")[:60]))
+                else:
+                    log("cannot send to %s: not connected" % to)
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+        await asyncio.sleep(POLL_SECONDS)
+
+
+async def main():
+    log("starting for squad '%s' (root=%s)" % (SQUAD, ROOT))
+    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox())
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

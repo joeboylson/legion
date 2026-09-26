@@ -48,6 +48,11 @@ Once activated (source .legion/bin/activate):
   legion scale up <operator> [mission...]   start its next free copy (<operator>-2, …)
   legion stand-down                 stop every position in this squad
   legion stand-down <operator>       stop one position and close its tile
+  legion channel open [--port <n>] [--key <k>]      accept relays from other squads on a port
+  legion channel subscribe <host:port> --team <name> [--key <k>]   relay to another squad's channel
+  legion channel send <team> <text...>              relay a message to a subscribed/connected team
+  legion channel peers                              show teams this channel knows about
+  legion channel close                              stop this squad's channel daemon
   deactivate                        leave the shell (from the sourced script)
 EOF
 }
@@ -614,6 +619,7 @@ local
 roster
 worktrees
 messages
+channel
 legion.local.json
 EOF
 
@@ -1211,6 +1217,120 @@ $text" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $
   esac
 }
 
+channel_dir() {
+  echo "$LEGION_ROOT/channel"
+}
+
+# One background legion-channeld per squad, independent of any Claude
+# session — it has to keep relaying (and answering `legion channel peers`)
+# even while the whole squad is stood down. See legion-channeld's own
+# docstring for what it actually does; everything here just starts, feeds
+# and stops it via plain files in .legion/channel/.
+channel_daemon_running() {
+  local dir; dir="$(channel_dir)"
+  [ -f "$dir/channel.pid" ] && kill -0 "$(cat "$dir/channel.pid")" 2>/dev/null
+}
+
+channel_start_daemon() {
+  local dir script; dir="$(channel_dir)"; mkdir -p "$dir"
+  script="$(cd "$(dirname "$0")" && pwd)/legion-channeld"
+  nohup python3 "$script" --root "$LEGION_ROOT" >> "$dir/channel.log" 2>&1 &
+  disown
+  echo $! > "$dir/channel.pid"
+  sleep 0.3
+  channel_daemon_running || { echo "legion: channel daemon failed to start — see $dir/channel.log" >&2; exit 1; }
+}
+
+channel_ensure_daemon() {
+  channel_daemon_running || channel_start_daemon
+}
+
+channel_stop_daemon() {
+  local dir; dir="$(channel_dir)"
+  if [ -f "$dir/channel.pid" ]; then
+    kill "$(cat "$dir/channel.pid")" 2>/dev/null || true
+    rm -f "$dir/channel.pid"
+  fi
+}
+
+cmd_channel() {
+  require_active
+  local dir; dir="$(channel_dir)"
+  mkdir -p "$dir" "$dir/peers" "$dir/outbox"
+  awk '$0 == "channel" { f = 1 } END { exit !f }' "$LEGION_ROOT/.gitignore" 2>/dev/null \
+    || echo "channel" >> "$LEGION_ROOT/.gitignore"
+  local sub="${1:-}"; [ $# -gt 0 ] && shift
+  case "$sub" in
+    open)
+      local port="" key=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --port) port="${2:-}"; shift 2 ;;
+          --key) key="${2:-}"; shift 2 ;;
+          *) echo "usage: legion channel open [--port <n>] [--key <key>]" >&2; exit 1 ;;
+        esac
+      done
+      [ -n "$port" ] || { echo "usage: legion channel open --port <n> [--key <key>]" >&2; exit 1; }
+      jq -n --arg port "$port" --arg key "$key" \
+        '{port: ($port | tonumber), key: (if $key == "" then null else $key end)}' > "$dir/config.json"
+      channel_stop_daemon
+      channel_start_daemon
+      echo "channel open on port $port$([ -n "$key" ] && echo " (key required)")"
+      ;;
+    subscribe)
+      local hostport="${1:-}" team="" key=""
+      [ -n "$hostport" ] && shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --team) team="${2:-}"; shift 2 ;;
+          --key) key="${2:-}"; shift 2 ;;
+          *) echo "usage: legion channel subscribe <host:port> --team <name> [--key <key>]" >&2; exit 1 ;;
+        esac
+      done
+      [ -n "$hostport" ] && [ -n "$team" ] \
+        || { echo "usage: legion channel subscribe <host:port> --team <name> [--key <key>]" >&2; exit 1; }
+      local host="${hostport%:*}" port="${hostport##*:}"
+      [ -n "$host" ] && [ "$port" != "$hostport" ] \
+        || { echo "usage: legion channel subscribe <host:port> --team <name> [--key <key>]" >&2; exit 1; }
+      [ -f "$dir/subscriptions.json" ] || echo "[]" > "$dir/subscriptions.json"
+      local tmp; tmp="$(mktemp)"
+      jq --arg h "$host" --arg p "$port" --arg t "$team" --arg k "$key" \
+        '[.[] | select(.team != $t)] + [{host: $h, port: ($p | tonumber), team: $t, key: (if $k == "" then null else $k end)}]' \
+        "$dir/subscriptions.json" > "$tmp"
+      mv "$tmp" "$dir/subscriptions.json"
+      channel_ensure_daemon
+      echo "subscribing to $team at $hostport"
+      ;;
+    send)
+      local team="${1:-}"; [ -n "$team" ] && shift
+      [ -n "$team" ] && [ $# -gt 0 ] \
+        || { echo "usage: legion channel send <team> <text...>" >&2; exit 1; }
+      local text="$*"
+      jq -n --arg to "$team" --arg text "$text" '{to: $to, text: $text}' \
+        > "$dir/outbox/$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM.json"
+      echo "queued for $team"
+      ;;
+    peers)
+      local f found=0
+      for f in "$dir/peers"/*.json; do
+        [ -e "$f" ] || continue
+        found=1
+        jq -r '"\(.team)  connected=\(.connected // false)  operators=\([.operators[]?.name] | join(","))"' "$f"
+      done
+      [ "$found" -eq 1 ] || echo "(no peers known yet)"
+      ;;
+    close)
+      channel_stop_daemon
+      rm -f "$dir/config.json"
+      echo "channel closed"
+      ;;
+    *)
+      echo "usage: legion channel open|subscribe|send|peers|close ..." >&2
+      exit 1
+      ;;
+  esac
+}
+
 cmd_list() {
   require_active
   tmux list-sessions >/dev/null 2>&1 || { echo "no tmux server running"; return 0; }
@@ -1256,6 +1376,7 @@ main() {
     stand-down) shift; cmd_standdown "$@" ;;
     list) cmd_list ;;
     message) shift; cmd_message "$@" ;;
+    channel) shift; cmd_channel "$@" ;;
     check) shift; cmd_check "$@" ;;
     scale) shift; cmd_scale "$@" ;;
     mission) shift; cmd_mission "$@" ;;
