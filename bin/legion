@@ -38,9 +38,9 @@ legion — Claude Code squad over tmux, run on mission command, scoped per proje
   legion session detach              leave tmux entirely, back to a plain shell — every session keeps running
 
 Once activated (source .legion/bin/activate):
-  legion commander [mission...]     start/reattach the fixed commander session
+  legion commander [mission...]     hand the squad a goal — the default way to start work; it decides whether to do it itself or deploy operators
   legion deploy                     roll call: start commander + every operator in .legion/operators/, no mission
-  legion deploy <operator> [mission...]   deploy an operator reporting only to commander
+  legion deploy <operator> [mission...]   you already know who should do this piece — starts that operator (and commander, if it isn't up yet)
   legion squad [mission...]         deploy commander + planner + builder + reviewer
   legion roster                     show roster/*.md (who has checked in)
   legion list                       show this squad's tmux windows
@@ -928,6 +928,14 @@ cmd_deploy() {
       || { echo "legion: $base can run at most $max copies ($base, $base-2 … $base-$max)" >&2; exit 1; }
   fi
   local commander_addr="$LEGION_SQUAD_NAME-commander"
+  # An operator checks in with commander and reports to it, so one always
+  # has to exist before the other starts — bare `legion deploy` (roll call)
+  # already guaranteed this, `legion deploy <operator>` didn't, and an
+  # operator started without a commander just leaves its check-in and
+  # report_done messages sitting unread forever (verified: exactly this
+  # happened). cmd_scale's "up" case deploys through here too, so it's
+  # covered the same way.
+  [ -n "$(pane_of "$commander_addr")" ] || cmd_commander
   local prompt
   prompt="You are '$addr' on a small squad commanded by '$commander_addr', run on mission command: commander sets direction and goals, you own the how. Message commander to check in, to report your mission done, to ask for mission-level perspective, or to raise anything that needs a tiebreaker — a decision or disagreement only commander should settle. For your own domain, decide your approach yourself; commander gave you the what, not the method. When you need another operator's specific expertise, message them directly — this is normal, not an exception, and commander does not need to broker it. Run 'legion list' to see who is running, and read \$LEGION_OPERATORS/<their-operator-name>/definition.md if you want to know what they're good at before reaching out. Before doing anything else, check in: run legion message send commander \"CHECK-IN: operator=$operator role=<one or two sentences, in your own words, on who you are and what you do on this squad — from your operator definition if you have one> mission=$mission_display\", then start 'legion message wait' in the background. Check in every time you are started, including when this conversation is resumed: commander may be a brand-new session that has never heard from you, so an earlier check-in in this conversation does not count — send a fresh one. Messages are kept until they're read, so check in even if commander isn't running yet. Check in once per start, not repeatedly. Talking to the squad: send every message to another position on this squad with 'legion message send <position> \"<text>\"' (a position is commander, planner, builder-2 and so on), not SendMessage. Claude Code drops a SendMessage whose chain of replies loops back through a session, and a busy squad hits that quickly. Messages to you arrive the same way, so keep 'legion message wait' running in the background the whole time you're on the squad. Start it with the Bash tool's run_in_background option, never with a trailing & (Claude Code stops a command with & for approval, and you'd sit there deaf). When it finishes, your new messages are shown to you automatically (if they aren't, run 'legion message read'): act on them, then start the wait again straight away. Only use SendMessage to reply to a session outside the squad, such as the human's own Claude session. Your mission: $mission_display
 
