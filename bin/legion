@@ -853,7 +853,14 @@ INTRO
   done
   bash assemble.sh --live
   ( for _ in $(seq 1 900); do [ -f .final ] && break; bash assemble.sh --live 2>/dev/null; sleep 2; done ) >/dev/null 2>&1 &
-  if command -v open >/dev/null 2>&1; then open mural.html; elif command -v xdg-open >/dev/null 2>&1; then xdg-open mural.html >/dev/null 2>&1; fi
+  # Best-effort only: opening a browser can fail for reasons that have
+  # nothing to do with the demo itself (no GUI session — SSH, a sandboxed
+  # shell — verified: `open` fails with a Launch Services "procNotFound"
+  # error in exactly that situation) and set -e would otherwise take that
+  # as a reason to kill the whole demo before any painter starts.
+  if command -v open >/dev/null 2>&1; then open mural.html 2>/dev/null || echo "couldn't open a browser automatically — open $dir/mural.html yourself to watch it fill in"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open mural.html >/dev/null 2>&1 || echo "couldn't open a browser automatically — open $dir/mural.html yourself to watch it fill in"
+  fi
   cmd_commander "Run the mural demo. The four tile missions (0001-0004) are active and the painters are starting now. Follow your definition from step 3."
   cmd_deploy painter "Mission .legion/missions/active/0001-tile-nw.md: paint tile nw."
   cmd_scale up painter "Mission .legion/missions/active/0002-tile-ne.md: paint tile ne."
