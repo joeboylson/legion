@@ -9,6 +9,8 @@ Everything Legion knows lives in plain files in your project's `.legion/`
 folder. There's no background service and no database. You can read any of
 it with `cat` and track it with git.
 
+![legion init, then legion commander hands the squad a goal and does the work itself, live in the tmux grid](docs/demo.gif)
+
 ## Why it works well
 
 - **You only start the commander.** Operators come up when the work reaches
@@ -84,6 +86,8 @@ One command, in any terminal, and a squad paints a mural while you watch. "Signa
 - When all four pass, the commander stitches them into `mural.html`, opens it, and stands everyone down.
 
 It runs in a temp folder (or one you pass) with its own squad, so it never touches a project. Its operators run isolated from your own Claude Code settings, in auto mode, with the tools the demo needs already allowed, so you shouldn't get permission prompts. It takes a few minutes, and every operator runs on Sonnet, which is the model auto mode needs. It needs `claude`, `tmux`, `jq`, `git` and `python3`.
+
+(The GIF at the top is the quicker version — a bare `legion commander` handed one small goal, with no other operators defined, so it just does the work itself. `legion demo` is the fuller one: a whole squad working in parallel. `docs/demo.tape` regenerates the GIF with [VHS](https://github.com/charmbracelet/vhs).)
 
 ## Quickstart
 
