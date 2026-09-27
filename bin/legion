@@ -1047,14 +1047,16 @@ cmd_roster() {
 cmd_attach() {
   require_active
   valid_operator "${1:-}" || { echo "usage: legion attach <operator>" >&2; exit 1; }
-  local name="$LEGION_SQUAD_NAME-$1" pane
+  local name="$LEGION_SQUAD_NAME-$1" pane session
   pane="$(pane_of "$name")"
   [ -n "$pane" ] || { echo "'$name' is not running" >&2; exit 1; }
+  # Session name, not the pane id, for switch/attach — see cmd_grid.
+  session="$(tmux display-message -t "$pane" -p '#{session_name}')"
   tmux select-window -t "$pane" \; select-pane -t "$pane"
   if [ -n "${TMUX:-}" ]; then
-    tmux switch-client -t "$pane"
+    tmux switch-client -t "$session"
   else
-    tmux attach-session -t "$pane"
+    tmux attach-session -t "$session"
   fi
 }
 
@@ -1623,14 +1625,21 @@ cmd_list() {
 
 cmd_grid() {
   require_active
-  local window
+  local window session
   window="$(squad_window)"
   [ -n "$window" ] || { echo "no panes running for squad '$LEGION_SQUAD_NAME'" >&2; exit 1; }
+  # A session name, not the window id itself, for the actual
+  # switch/attach — attaching by window id silently renders nothing in at
+  # least one real terminal (verified: ttyd's, used by the tool that
+  # records this project's own demo GIF), while a session name works.
+  # select-window still lands on the right window either way, since a
+  # squad's session only ever has the one.
+  session="$(tmux display-message -t "$window" -p '#{session_name}')"
   tmux select-layout -t "$window" tiled \; select-window -t "$window"
   if [ -n "${TMUX:-}" ]; then
-    tmux switch-client -t "$window" 2>/dev/null || true
+    tmux switch-client -t "$session" 2>/dev/null || true
   else
-    tmux attach-session -t "$window"
+    tmux attach-session -t "$session"
   fi
 }
 
