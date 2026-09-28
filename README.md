@@ -588,9 +588,12 @@ Bash tool, same as any other shell command.
 
 **Questions for you.** An operator's `ask_human` writes
 `.legion/questions/Q-###.md`, with numbered options and a recommendation, and
-tells the commander. Answer in the commander's window, or from another
-session with `answer`. Either way the answer goes back to whoever asked and
-into the mission file.
+tells the commander. The commander asks its own questions the same way.
+Answer from another session with `answer`, or in the commander's window.
+Either way the answer goes back to whoever asked and into the mission file.
+Legion blocks Claude Code's own `AskUserQuestion` tool in every session, so
+no question ever pops up in a pane where only someone watching it could
+answer.
 
 **From your own Claude session.** Add the server once, pointed at the
 project:
