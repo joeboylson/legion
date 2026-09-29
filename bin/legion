@@ -485,8 +485,11 @@ valid_operator() {
 
 # This squad's panes, commander first, one per line:
 #   <address> TAB <pane id> TAB <command>
+# No tmux server just means no panes or windows yet. Without the `|| true`,
+# tmux's exit 1 fails the pipeline under pipefail and set -e stops the
+# script silently, before it gets to start the first session.
 squad_panes() {
-  tmux list-panes -a -F '#{pane_id}	#{@legion_squad}	#{@legion_addr}	#{pane_current_command}' 2>/dev/null \
+  { tmux list-panes -a -F '#{pane_id}	#{@legion_squad}	#{@legion_addr}	#{pane_current_command}' 2>/dev/null || true; } \
     | awk -F '\t' -v s="$LEGION_SQUAD_NAME" -v c="$LEGION_SQUAD_NAME-commander" '
         $2 != s || seen[$1]++ { next }
         { printf "%s\t%s\t%s\t%s\n", ($3 == c ? 0 : 1), $3, $1, $4 }
@@ -498,7 +501,7 @@ pane_of() {
 }
 
 squad_window() {
-  tmux list-windows -a -F '#{window_id} #{@legion_grid}' 2>/dev/null \
+  { tmux list-windows -a -F '#{window_id} #{@legion_grid}' 2>/dev/null || true; } \
     | awk -v s="$LEGION_SQUAD_NAME" '$2 == s { print $1; exit }'
 }
 
@@ -605,11 +608,25 @@ SCRIPT
     # session full of other real projects). squad_window()/pane_of() find
     # this by the @legion_grid/@legion_squad tags regardless of which
     # session it's actually in, so nothing else needs to know or care.
-    pane="$(tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_TAG $LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
+    # With no tmux server yet, this starts one, and the server keeps this
+    # shell's environment for every pane it opens. The Legion variables
+    # would make each pane's activate refuse ("already inside a Legion
+    # shell") so the pane dies at once, and would leak into the human's
+    # own tmux windows too. Start it without them.
+    local unset_legion=() var
+    for var in $(compgen -e | grep '^LEGION_' || true); do unset_legion+=(-u "$var"); done
+    pane="$(env ${unset_legion[@]+"${unset_legion[@]}"} tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_TAG $LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
     echo "started tmux session '$LEGION_TAG $LEGION_SQUAD_NAME' — see it with: legion grid"
   fi
-  tmux set-option -p -t "$pane" @legion_squad "$LEGION_SQUAD_NAME" \
-    \; set-option -p -t "$pane" @legion_addr "$name"
+  # A claude that exits at once (e.g. updating itself on first launch)
+  # takes its pane and its error with it, and tmux only says "no such pane".
+  # Say what happened and how to see the real error instead.
+  if ! tmux set-option -p -t "$pane" @legion_squad "$LEGION_SQUAD_NAME" \
+    \; set-option -p -t "$pane" @legion_addr "$name" 2>/dev/null; then
+    echo "legion: $name's session closed as soon as it started. Run it by hand to see why:" >&2
+    echo "  $wrapped" >&2
+    exit 1
+  fi
   if [ -z "$window" ]; then
     window="$(tmux display-message -p -t "$pane" '#{window_id}')"
     tmux set-option -w -t "$window" @legion_grid "$LEGION_SQUAD_NAME" \
@@ -649,7 +666,7 @@ cmd_session() {
     scope="tmux"
     # Legion-tagged sessions first, then everything else, alphabetical
     # within each — so squads group together above unrelated sessions.
-    sessions="$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+    sessions="$({ tmux list-sessions -F '#{session_name}' 2>/dev/null || true; } \
       | awk -v tag="$LEGION_TAG" '{ print (index($0, tag) == 1 ? 0 : 1) "\t" $0 }' | sort | cut -f2-)"
   else
     sessions="$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -F "$LEGION_TAG" || true)"
