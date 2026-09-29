@@ -487,6 +487,7 @@ EOF
         + [{matcher: "*", hooks: [{type: "command", command: "legion activity hook"}]}])
     | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: "legion message hook bash"}]}])
     | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{matcher: "clear", hooks: [{type: "command", command: "legion context hook clear"}]}])
+    | .hooks.StopFailure = ((.hooks.StopFailure // []) + [{hooks: [{type: "command", command: "legion context hook limit"}]}])
     | .statusLine = {type: "command", command: "legion context statusline"}
   ' > "$gen/settings.json"
   # The status line is the only place Claude Code reports how full the
@@ -1526,6 +1527,9 @@ cmd_message() {
         fi
         return 0
       fi
+      # The session is working again, so it's no longer stuck on a usage
+      # limit (see watch_run).
+      rm -f "$(context_dir)/$me.limited"
       if [ -n "$(message_unread "$me")" ]; then
         text="$(message_take "$me")"
         if [ "$event" = "stop" ]; then
@@ -1751,9 +1755,70 @@ context_stop() {
 # hook has to return before the session can go idle and take the /clear,
 # and a child of the hook could be stopped along with it.
 context_schedule_clear() {
-  local me="$1" self
+  run_detached "$1" context clear
+}
+
+# Runs `legion <args...>` as position $1 from the tmux server, in this
+# squad, detached from whatever called it.
+run_detached() {
+  local me="$1" self args="" a
+  shift
   self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-  tmux run-shell -b "unset LEGION_ROOT; cd $(printf '%q' "$(dirname "$LEGION_ROOT")") && . .legion/bin/activate >/dev/null 2>&1 && LEGION_POSITION=$(printf '%q' "$me") $(printf '%q' "$self") context clear >/dev/null 2>&1"
+  for a in "$@"; do args="$args $(printf '%q' "$a")"; done
+  tmux run-shell -b "unset LEGION_ROOT; cd $(printf '%q' "$(dirname "$LEGION_ROOT")") && . .legion/bin/activate >/dev/null 2>&1 && LEGION_POSITION=$(printf '%q' "$me") $(printf '%q' "$self")$args >/dev/null 2>&1"
+}
+
+# Starting sessions again after a usage limit. When a turn fails on the
+# limit, the StopFailure hook marks the session (<position>.limited in
+# context_dir, holding when) and makes sure this watcher runs. A minute
+# after the 5-hour limit resets, or 30 minutes after the mark if the reset
+# time isn't known, it types a line into the session telling it to carry
+# on. Any hook the session runs after that clears the mark, so a session
+# that carried on by itself (Claude Code can do that too) is left alone,
+# and one that hits the limit again is marked again. The watcher stops
+# once nothing has been marked for 10 minutes.
+watch_ensure() {
+  local pidf="$LEGION_LOCAL/watch.pid"
+  [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null && return 0
+  run_detached human watch
+}
+
+cmd_watch() {
+  require_active
+  local pidf="$LEGION_LOCAL/watch.pid" dir f pos now since resets resume pane found idle_since=""
+  if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then return 0; fi
+  echo $$ > "$pidf"
+  dir="$(context_dir)"
+  while :; do
+    now="$(date +%s)" found=0
+    for f in "$dir"/*.limited; do
+      [ -f "$f" ] || continue
+      found=1
+      pos="$(basename "$f" .limited)"
+      since="$(cat "$f" 2>/dev/null)"
+      since="${since:-$now}"
+      resume=$((since + 1800))
+      resets="$(jq -r '.five_hour.resets_at // 0 | floor' "$dir/rate-limits.json" 2>/dev/null)" || resets=0
+      if [ "${resets:-0}" -gt "$since" ] && [ $((resets + 60)) -lt "$resume" ]; then resume=$((resets + 60)); fi
+      [ "$now" -ge "$resume" ] || continue
+      pane="$(pane_of "$LEGION_SQUAD_NAME-$pos")"
+      [ -n "$pane" ] || { rm -f "$f"; continue; }
+      echo "$now" > "$f"
+      # Ctrl-C clears anything half-typed first.
+      tmux send-keys -t "$pane" C-c
+      sleep 1
+      tmux send-keys -t "$pane" -l "Your usage limit should have reset now. Carry on from where you stopped."
+      tmux send-keys -t "$pane" Enter
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) told $pos to carry on after its usage limit" >> "$LEGION_LOCAL/watch.log"
+    done
+    if [ "$found" -eq 1 ]; then idle_since=""
+    else
+      idle_since="${idle_since:-$now}"
+      [ $((now - idle_since)) -ge 600 ] && break
+    fi
+    sleep "${LEGION_WATCH_TICK:-60}"
+  done
+  rm -f "$pidf"
 }
 
 cmd_refresh() {
@@ -1800,6 +1865,10 @@ cmd_context() {
       input="$(cat)"
       pct="$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty | floor' 2>/dev/null)" || pct=""
       [ -n "$pct" ] && printf '%s\n' "$pct" > "$dir/$me" 2>/dev/null
+      # The account's usage limits and when they reset, for the watcher
+      # that starts sessions again after a limit (see watch_run).
+      printf '%s' "$input" | jq -c '.rate_limits // empty' > "$dir/rate-limits.tmp" 2>/dev/null \
+        && [ -s "$dir/rate-limits.tmp" ] && mv "$dir/rate-limits.tmp" "$dir/rate-limits.json"
       cmd="$(cat "$LEGION_LOCAL/generated/$(operator_base "$me")/statusline-command" 2>/dev/null)" || cmd=""
       if [ -n "$cmd" ]; then
         printf '%s' "$input" | bash -c "$cmd" 2>/dev/null || true
@@ -1809,10 +1878,18 @@ cmd_context() {
       exit 0
       ;;
     hook)
+      input="$(cat)"
+      if [ "${1:-}" = "limit" ]; then
+        # StopFailure: a turn ended on an API error. Only a usage limit
+        # means waiting and trying again; watch_run does that.
+        [ "$(printf '%s' "$input" | jq -r '.error_type // empty' 2>/dev/null)" = "rate_limit" ] || exit 0
+        date +%s > "$dir/$me.limited"
+        watch_ensure
+        exit 0
+      fi
       # SessionStart after a /clear, whoever typed it. The conversation has
       # a new id now; keep it, or relaunching this position would bring
       # back the one that was cleared.
-      input="$(cat)"
       id="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)" || id=""
       [ -n "$id" ] && printf '%s\n' "$id" > "$LEGION_LOCAL/$me"
       rm -f "$dir/$me"
@@ -1965,6 +2042,7 @@ main() {
     channel) shift; cmd_channel "$@" ;;
     activity) shift; cmd_activity "$@" ;;
     refresh) shift; cmd_refresh "$@" ;;
+    watch) shift; cmd_watch "$@" ;;
     wrap-up) shift; cmd_wrap_up "$@" ;;
     context) shift; cmd_context "$@" ;;
     check) shift; cmd_check "$@" ;;

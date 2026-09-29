@@ -276,6 +276,19 @@ To know how full a conversation is, Legion gives each session its own
 status line, which records the number and then shows the status line you'd
 normally see.
 
+### Usage limits
+
+When your Claude plan's usage limit is reached, every session stops in the
+middle of what it was doing. Claude Code can carry on by itself once the
+limit resets; Legion also makes sure of it. When a session stops on the
+limit, Legion marks it and starts a small watcher. A minute after the
+5-hour limit resets, the watcher types "Your usage limit should have reset
+now. Carry on from where you stopped." into that session. If it doesn't
+know when the limit resets, it tries every 30 minutes. A session that has
+already carried on is left alone. Each restart is logged in
+`.legion/local/watch.log`, and the watcher stops by itself once no session
+is waiting.
+
 ### Wrapping up for the day: `legion wrap-up`
 
 Before you shut the laptop, run `legion wrap-up` (or the `wrap_up` tool
