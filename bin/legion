@@ -63,6 +63,7 @@ Once activated (source .legion/bin/activate):
   legion channel peers                              show teams this channel knows about
   legion channel close                              stop this squad's channel daemon
   legion activity tail [n]          watch every tool call any position makes, live
+  legion refresh                    (from a squad session) clear this conversation when the turn ends, then restart from its handoff note
   deactivate                        leave the shell (from the sourced script)
 EOF
 }
@@ -228,8 +229,11 @@ operator_json_problems() {
   jq empty "$f" 2>/dev/null || { echo "not valid JSON"; return; }
   jq -r '
     if type != "object" then "the top level must be an object" else
-      ( (keys - ["$schema", "$comment", "model", "configMode", "scale", "allowedTools", "disallowedTools", "settings", "mcpServers"])[]
+      ( (keys - ["$schema", "$comment", "model", "configMode", "scale", "clearAt", "allowedTools", "disallowedTools", "settings", "mcpServers"])[]
           | "unknown key \"\(.)\"" ),
+      ( select(has("clearAt") and (.clearAt != false)
+               and ((.clearAt | type) != "number" or .clearAt < 1 or .clearAt > 100 or (.clearAt | floor) != .clearAt))
+          | "clearAt must be a whole-number percentage from 1 to 100, or false to never clear" ),
       ( select(has("model") and ((.model | type) != "string" or .model == ""))
           | "model must be a non-empty string, like \"sonnet\"" ),
       ( select(has("configMode") and ((.configMode | IN("layered", "isolated")) | not))
@@ -369,6 +373,39 @@ operator_model() {
   echo "$model"
 }
 
+# How full (in percent) a position's conversation may get before it hands
+# off and clears: clearAt from its settings, 30 by default. Prints nothing
+# when clearAt is false.
+clear_at() {
+  local json value=""
+  if json="$(operator_config "$(operator_base "$1")")"; then
+    value="$(jq -r 'if has("clearAt") then (.clearAt | tostring) else "" end' "$json" 2>/dev/null)"
+  fi
+  case "$value" in
+    false) ;;
+    "") echo 30 ;;
+    *) echo "$value" ;;
+  esac
+}
+
+# The active mission a position holds, as a file path, or nothing. Commander
+# holds the whole backlog, so it counts as holding work while anything is in
+# active/. For an operator it's the mission whose Handoffs list last went to
+# it (or, with no handoffs yet, whose operator: header names it).
+position_mission() {
+  local position="$1" base f holder
+  base="$(operator_base "$position")"
+  [ -d "$LEGION_MISSIONS/active" ] || return 0
+  for f in "$LEGION_MISSIONS/active"/*.md; do
+    [ -f "$f" ] || continue
+    if [ "$position" = "commander" ]; then echo "$f"; return 0; fi
+    holder="$(awk '/^## Handoffs$/ { h = 1; next } h && /^- / { last = $0; next } h && /^## / { exit } END { print last }' "$f" \
+      | sed -n 's/.*→ \([^: ]*\):.*/\1/p')"
+    [ -n "$holder" ] || holder="$(sed -n 's/^operator: *//p' "$f" | head -1)"
+    if [ "$holder" = "$position" ] || [ "$holder" = "$base" ]; then echo "$f"; return 0; fi
+  done
+}
+
 claude_flags() {
   local operator="$1" operator_dir="$(operator_dir "$1")" flags="" json rule dir
   if [ -n "$(squad_json)" ]; then
@@ -435,6 +472,9 @@ EOF
   # Code's own question box would block inside the pane instead, so every
   # session, commander included, has it blocked.
   flags="$flags --disallowedTools AskUserQuestion"
+  # The handoff-and-clear (see context_stop) mustn't stop to ask permission.
+  # It only ever clears the session's own conversation.
+  flags="$flags --allowedTools $(printf '%q' "Bash(legion refresh)")"
   # Every session gets legion's message hooks on top of its own settings:
   # a Stop hook that hands over unread messages (and won't let the session go
   # idle without a message wait running), and a PostToolUse hook that hands
@@ -445,7 +485,22 @@ EOF
         + [{matcher: "*", hooks: [{type: "command", command: "legion message hook tool"}]}]
         + [{matcher: "*", hooks: [{type: "command", command: "legion activity hook"}]}])
     | .hooks.PreToolUse = ((.hooks.PreToolUse // []) + [{matcher: "Bash", hooks: [{type: "command", command: "legion message hook bash"}]}])
+    | .hooks.SessionStart = ((.hooks.SessionStart // []) + [{matcher: "clear", hooks: [{type: "command", command: "legion context hook clear"}]}])
+    | .statusLine = {type: "command", command: "legion context statusline"}
   ' > "$gen/settings.json"
+  # The status line is the only place Claude Code reports how full the
+  # conversation is, so legion's own status line records that for
+  # clearAt, then runs the one this session would otherwise have shown.
+  # --settings would hide that one, so note which it is first.
+  local own_status="" f
+  own_status="$(printf '%s\n' "$base" | jq -r '.statusLine.command // empty' 2>/dev/null)"
+  if [ -z "$own_status" ]; then
+    for f in "$(dirname "$LEGION_ROOT")/.claude/settings.local.json" "$(dirname "$LEGION_ROOT")/.claude/settings.json" \
+             $([ "$(config_mode "$operator")" = "layered" ] && echo "$HOME/.claude/settings.json"); do
+      own_status="$(jq -r '.statusLine.command // empty' "$f" 2>/dev/null)" && [ -n "$own_status" ] && break
+    done
+  fi
+  printf '%s\n' "$own_status" > "$gen/statusline-command"
   flags="$flags --settings $(printf '%q' "$gen/settings.json")"
   local model
   model="$(operator_model "$operator")"
@@ -593,7 +648,14 @@ SCRIPT
   # the Legion env (and therefore `legion` itself) is available to whatever
   # the session runs via its own Bash tool — a fresh tmux pane does not
   # inherit LEGION_ROOT etc. from the shell that called `legion commander`.
-  local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && export LEGION_POSITION=$(printf '%q' "$operator") && exec $(printf '%q' "$launch")"
+  # Backstop for a session that doesn't hand off and clear at its clearAt
+  # (see context_stop): Claude Code summarizes the conversation 10 points
+  # later. Set here, not in --settings, since Claude Code only documents it
+  # as an environment variable.
+  local compact_env="" limit
+  limit="$(clear_at "$operator")"
+  [ -n "$limit" ] && compact_env="export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$(( limit + 10 > 95 ? 95 : limit + 10 )) && "
+  local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && export LEGION_POSITION=$(printf '%q' "$operator") && $compact_env""exec $(printf '%q' "$launch")"
   local window pane
   window="$(squad_window)"
   if [ -n "$window" ]; then
@@ -1442,10 +1504,13 @@ $text" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $
         return 0
       fi
       [ "$event" = "stop" ] || return 0
-      # Don't let the session go idle deaf: it must be waiting for messages.
       # stop_hook_active means this stop already came from a hook block, so
       # let it through rather than loop.
       active="$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)"
+      # A full conversation hands off and clears (see context_stop). It's
+      # about to be cleared, so it doesn't need a message wait first.
+      context_stop "$me" "$active" && return 0
+      # Don't let the session go idle deaf: it must be waiting for messages.
       if [ "$active" != "true" ] && ! { [ -f "$dir/waiting.pid" ] && kill -0 "$(cat "$dir/waiting.pid")" 2>/dev/null; }; then
         jq -n '{decision: "block", reason: "Before you stop: start `legion message wait` with the run_in_background option of the Bash tool (not a trailing &) so you hear new messages from the squad."}'
       fi
@@ -1595,6 +1660,161 @@ activity_log() {
   echo "$LEGION_ROOT/activity.log"
 }
 
+# Handing off and clearing a full conversation. Once a session holding a
+# mission is clearAt percent full, its Stop hook asks it to write a handoff
+# note and run `legion refresh`. The next time it stops, Legion types /clear
+# into its pane and restarts it from the note. A handoff the session writes
+# itself keeps what matters; Claude Code's own summary is a guess at that.
+# Files, all under $LEGION_LOCAL/context/:
+#   <position>           how full the conversation is, in percent, written
+#                        by the status line
+#   <position>.refresh   `legion refresh` ran: clear at the next stop
+#   <position>.clearing  a clear is under way (holds when it started)
+context_dir() {
+  echo "$LEGION_LOCAL/context"
+}
+
+# Called from the Stop hook. Prints a block decision, or starts a clear, and
+# returns 0 if it handled this stop; returns 1 to let the other checks run.
+context_stop() {
+  local me="$1" active="$2" dir pct limit mission name started reason
+  dir="$(context_dir)"
+  if [ -f "$dir/$me.refresh" ]; then
+    mv "$dir/$me.refresh" "$dir/$me.clearing" 2>/dev/null || return 0
+    date +%s > "$dir/$me.clearing"
+    context_schedule_clear "$me"
+    return 0
+  fi
+  if [ -f "$dir/$me.clearing" ]; then
+    # A clear that never finished (its pane went away, say) mustn't leave
+    # the session unchecked for good.
+    started="$(cat "$dir/$me.clearing" 2>/dev/null)"
+    [ $(( $(date +%s) - ${started:-0} )) -lt 300 ] && return 0
+    rm -f "$dir/$me.clearing"
+  fi
+  [ "$active" = "true" ] && return 1
+  limit="$(clear_at "$me")"
+  [ -n "$limit" ] || return 1
+  pct="$(cat "$dir/$me" 2>/dev/null)"
+  [ -n "$pct" ] && [ "$pct" -ge "$limit" ] 2>/dev/null || return 1
+  # Without a mission there's nothing to hand off. It clears once it has
+  # one again and goes over.
+  mission="$(position_mission "$me")"
+  [ -n "$mission" ] || return 1
+  if [ "$me" = "commander" ]; then
+    reason="Your conversation is ${pct}% full; this squad clears it at ${limit}%. Before you stop, add a '## Handoff' section to the end of $LEGION_LOG: the missions in flight and who has them, what you're waiting on, open questions for the human, and anything else you'd hate to lose. Then run 'legion refresh' and end your turn. Legion will clear this conversation and start you again from that note."
+  else
+    name="$(basename "$mission" .md)"
+    reason="Your conversation is ${pct}% full; this squad clears it at ${limit}%. Before you stop, add a handoff note to mission $name with the mission_note tool, heading 'Handoff': what's done, what's next, the files and decisions that matter, and anything else you'd hate to lose. Then run 'legion refresh' and end your turn. Legion will clear this conversation and start you again from that note."
+  fi
+  jq -n --arg r "$reason" '{decision: "block", reason: $r}'
+  return 0
+}
+
+# Runs `legion context clear` from the tmux server, not from the hook: the
+# hook has to return before the session can go idle and take the /clear,
+# and a child of the hook could be stopped along with it.
+context_schedule_clear() {
+  local me="$1" self
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  tmux run-shell -b "unset LEGION_ROOT; cd $(printf '%q' "$(dirname "$LEGION_ROOT")") && . .legion/bin/activate >/dev/null 2>&1 && LEGION_POSITION=$(printf '%q' "$me") $(printf '%q' "$self") context clear >/dev/null 2>&1"
+}
+
+cmd_refresh() {
+  require_active
+  local me dir
+  me="$(message_me)"
+  [ "$me" != "human" ] || { echo "legion refresh is for a squad session: it clears that session's conversation" >&2; exit 1; }
+  dir="$(context_dir)"
+  mkdir -p "$dir"
+  date +%s > "$dir/$me.refresh"
+  echo "Legion will clear this conversation as soon as you end your turn, then start you again from your handoff note. End your turn now."
+}
+
+cmd_context() {
+  require_active
+  local sub="${1:-}" me dir input pct cmd pane prev screen n same old_wait mission kick id
+  [ $# -gt 0 ] && shift
+  me="$(message_me)"
+  dir="$(context_dir)"
+  mkdir -p "$dir"
+  case "$sub" in
+    statusline)
+      # Claude Code's status line command (see claude_flags). Must always
+      # print something and never fail.
+      input="$(cat)"
+      pct="$(printf '%s' "$input" | jq -r '.context_window.used_percentage // empty | floor' 2>/dev/null)" || pct=""
+      [ -n "$pct" ] && printf '%s\n' "$pct" > "$dir/$me" 2>/dev/null
+      cmd="$(cat "$LEGION_LOCAL/generated/$(operator_base "$me")/statusline-command" 2>/dev/null)" || cmd=""
+      if [ -n "$cmd" ]; then
+        printf '%s' "$input" | bash -c "$cmd" 2>/dev/null || true
+      else
+        echo "context ${pct:-0}% full"
+      fi
+      exit 0
+      ;;
+    hook)
+      # SessionStart after a /clear, whoever typed it. The conversation has
+      # a new id now; keep it, or relaunching this position would bring
+      # back the one that was cleared.
+      input="$(cat)"
+      id="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)" || id=""
+      [ -n "$id" ] && printf '%s\n' "$id" > "$LEGION_LOCAL/$me"
+      rm -f "$dir/$me"
+      if [ -f "$dir/$me.clearing" ]; then
+        rm -f "$dir/$me.clearing"
+      else
+        jq -n --arg t "This conversation was just cleared. You are still '$LEGION_SQUAD_NAME-$me' on the squad: your role and rules are in $LEGION_LOCAL/prompts/$me.md if you no longer have them. Start 'legion message wait' in the background before anything else." \
+          '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $t}}'
+      fi
+      exit 0
+      ;;
+    clear)
+      # Run from the tmux server by context_schedule_clear.
+      pane="$(pane_of "$LEGION_SQUAD_NAME-$me")"
+      [ -n "$pane" ] || { rm -f "$dir/$me.clearing"; exit 0; }
+      # Wait for the turn to end: the pane unchanged for 3 seconds.
+      prev="" n=0 same=0
+      while [ "$n" -lt 60 ]; do
+        screen="$(tmux capture-pane -p -t "$pane" 2>/dev/null)" || { rm -f "$dir/$me.clearing"; exit 0; }
+        if [ "$screen" = "$prev" ]; then same=$((same + 1)); [ "$same" -ge 3 ] && break; else same=0; fi
+        prev="$screen"
+        sleep 1
+        n=$((n + 1))
+      done
+      old_wait="$(cat "$(message_dir "$me")/waiting.pid" 2>/dev/null)" || old_wait=""
+      mission="$(position_mission "$me")"
+      # Ctrl-C clears anything half-typed first.
+      tmux send-keys -t "$pane" C-c
+      sleep 1
+      tmux send-keys -t "$pane" -l "/clear"
+      tmux send-keys -t "$pane" Enter
+      # The SessionStart hook removes the .clearing file once it's done.
+      n=0
+      while [ -f "$dir/$me.clearing" ] && [ "$n" -lt 30 ]; do sleep 1; n=$((n + 1)); done
+      # The old message wait outlives /clear, but the new conversation
+      # didn't start it and won't hear from it. Stop it; the kickoff below
+      # starts a fresh one.
+      if [ -n "$old_wait" ] && kill "$old_wait" 2>/dev/null; then
+        [ "$(cat "$(message_dir "$me")/waiting.pid" 2>/dev/null)" = "$old_wait" ] && rm -f "$(message_dir "$me")/waiting.pid"
+      fi
+      sleep 1
+      kick="You were just cleared to free up room. You are still '$LEGION_SQUAD_NAME-$me' on the squad: your role and rules are in $LEGION_LOCAL/prompts/$me.md if you no longer have them. Start 'legion message wait' in the background first."
+      if [ "$me" = "commander" ]; then
+        kick="$kick Then read the latest '## Handoff' section at the end of $LEGION_LOG, the missions in $LEGION_MISSIONS/active/ and the roster, and carry on from there."
+      elif [ -n "$mission" ]; then
+        kick="$kick Then read the latest 'Handoff' section of $mission and carry on from there."
+      fi
+      tmux send-keys -t "$pane" -l "$kick"
+      tmux send-keys -t "$pane" Enter
+      ;;
+    *)
+      echo "usage: legion context statusline|hook|clear   (run by Legion itself; use legion refresh)" >&2
+      exit 1
+      ;;
+  esac
+}
+
 cmd_activity() {
   require_active
   local sub="${1:-}"; [ $# -gt 0 ] && shift
@@ -1687,6 +1907,8 @@ main() {
     message) shift; cmd_message "$@" ;;
     channel) shift; cmd_channel "$@" ;;
     activity) shift; cmd_activity "$@" ;;
+    refresh) shift; cmd_refresh "$@" ;;
+    context) shift; cmd_context "$@" ;;
     check) shift; cmd_check "$@" ;;
     scale) shift; cmd_scale "$@" ;;
     mission) shift; cmd_mission "$@" ;;

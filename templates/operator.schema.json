@@ -24,6 +24,13 @@
         { "type": "integer", "minimum": 1 }
       ]
     },
+    "clearAt": {
+      "description": "How full the session's conversation may get, as a percentage of its limit, before Legion has it write a handoff note and clears it. Only while it holds a mission. Default 30; false never clears.",
+      "oneOf": [
+        { "const": false },
+        { "type": "integer", "minimum": 1, "maximum": 100 }
+      ]
+    },
     "allowedTools": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },

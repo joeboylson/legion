@@ -250,6 +250,32 @@ to end; a missing one fails far faster than that) and starts a fresh
 conversation instead, rather than the position's pane just disappearing
 with no explanation.
 
+### Full conversations hand off and clear
+
+Once a session's conversation is 30% of the way to its limit, and the
+session is holding a mission, Legion stops it at the end of its next reply.
+It asks the session to write a handoff note, then run `legion refresh`:
+
+- An operator adds a `Handoff` section to its mission file: what's done,
+  what's next, and anything it would hate to lose.
+- The commander adds a `## Handoff` section to the squad log.
+
+When that reply ends, Legion types `/clear` into the session's window, then
+starts it again from its note. The new conversation gets a new ID, and
+Legion saves it, so reopening the operator later brings back the cleared
+conversation, not the full one. A session without a mission is left
+alone. It hands off and clears the next time it holds one and is over the
+line.
+
+Set the line with `clearAt` (a percentage, or `false` to never clear) in
+`legion.json`'s `defaults` or `commander`, or in one operator's
+`operator.json`. As a backstop, Legion also has Claude Code summarize the
+conversation itself 10 points later.
+
+To know how full a conversation is, Legion gives each session its own
+status line, which records the number and then shows the status line you'd
+normally see.
+
 ### How work moves
 
 The commander owns the work queue. Each mission is one markdown file with a
@@ -448,6 +474,9 @@ All the keys are optional:
   use the squad's `configMode`.
 - `scale` — lets the operator run as several copies at once: `true` for up
   to 5, or a number. See below.
+- `clearAt` — how full the conversation may get, as a percentage, before
+  the operator hands off and clears (30 by default; `false` never clears).
+  See [Full conversations hand off and clear](#full-conversations-hand-off-and-clear).
 - `allowedTools` and `disallowedTools` — Claude Code tool rules, passed as
   `--allowedTools` and `--disallowedTools`. `claude --help` explains the
   format. Allowed tools run without asking you for permission first.
