@@ -467,6 +467,10 @@ def t_send(to, text):
     return send(to, text)
 
 
+def t_wrap_up():
+    return legion("wrap-up")
+
+
 S = {"type": "string"}
 MISSION = {"type": "string", "description": "Mission number (5), or file name like 0005-export"}
 
@@ -529,6 +533,8 @@ HUMAN_TOOLS = {
     "start_squad": (t_start_squad, "Start the commander, optionally with a mission for it.",
                     {"mission": S}, []),
     "stand_down": COMMANDER_TOOLS["stand_down"],
+    "wrap_up": (t_wrap_up, "End of day: commander has every position stop at a good point, write a handoff note and "
+                "clear, then says when it's safe to shut down. The next start picks up from the notes.", {}, []),
 }
 
 if ROLE == "operator":

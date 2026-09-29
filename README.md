@@ -276,6 +276,25 @@ To know how full a conversation is, Legion gives each session its own
 status line, which records the number and then shows the status line you'd
 normally see.
 
+### Wrapping up for the day: `legion wrap-up`
+
+Before you shut the laptop, run `legion wrap-up` (or the `wrap_up` tool
+from your own Claude session). The commander then wraps up the squad:
+
+1. It tells every operator to stop at the next good point, not in the
+   middle of a change.
+2. Each operator writes a handoff note to its mission, tells the commander
+   it's done, and clears without starting again.
+3. The commander closes each operator once it has cleared.
+4. The commander writes its own handoff note in the squad log, tells you
+   it's safe to shut down, and clears too.
+
+The next day, run `legion commander`. It reads its note and the active
+missions, then starts each operator that had a mission again. Each one
+picks up from the handoff note in its mission file. If the laptop only
+slept and the commander is still running, `legion commander` tells that
+one to pick up instead of starting another.
+
 ### How work moves
 
 The commander owns the work queue. Each mission is one markdown file with a
@@ -606,7 +625,7 @@ with the tools its role allows. Everything is still stored as plain files in
 |---|---|
 | Operator | `handoff`, `report_done`, `ask_human`, `message`, `read_messages`, `mission_read`, `mission_note`, `mission_set`, `missions`, `list` |
 | Commander | The operator tools except `handoff` and `report_done`, plus `start`, `scale_up`, `stand_down`, `capture`, `mission_create`, `mission_move`, `questions`, `answer` |
-| Outside session | `status`, `send`, `questions`, `answer`, `capture`, `missions`, `mission_read`, `start_squad`, `stand_down` |
+| Outside session | `status`, `send`, `questions`, `answer`, `capture`, `missions`, `mission_read`, `start_squad`, `stand_down`, `wrap_up` |
 
 Only the commander can start, scale or stand down sessions. Legion blocks
 those tools, and the matching `legion` commands, for every operator.

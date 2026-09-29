@@ -63,7 +63,8 @@ Once activated (source .legion/bin/activate):
   legion channel peers                              show teams this channel knows about
   legion channel close                              stop this squad's channel daemon
   legion activity tail [n]          watch every tool call any position makes, live
-  legion refresh                    (from a squad session) clear this conversation when the turn ends, then restart from its handoff note
+  legion refresh [--stay]           (from a squad session) clear this conversation when the turn ends, then restart from its handoff note (--stay: stay idle)
+  legion wrap-up                    end of day: every position stops at a good point, writes a handoff note and clears; the next start picks up from the notes
   deactivate                        leave the shell (from the sourced script)
 EOF
 }
@@ -474,7 +475,7 @@ EOF
   flags="$flags --disallowedTools AskUserQuestion"
   # The handoff-and-clear (see context_stop) mustn't stop to ask permission.
   # It only ever clears the session's own conversation.
-  flags="$flags --allowedTools $(printf '%q' "Bash(legion refresh)")"
+  flags="$flags --allowedTools $(printf '%q' "Bash(legion refresh)") --allowedTools $(printf '%q' "Bash(legion refresh --stay)")"
   # Every session gets legion's message hooks on top of its own settings:
   # a Stop hook that hands over unread messages (and won't let the session go
   # idle without a message wait running), and a PostToolUse hook that hands
@@ -953,9 +954,24 @@ INTRO
   cmd_grid
 }
 
+# What commander is told on its first start after a wrap-up.
+wrap_up_resume() {
+  echo "The squad wrapped up for the day on $(cat "$LEGION_LOCAL/wrapped-up"). Before anything else, read the latest '## Handoff' section at the end of $LEGION_LOG and the missions in $LEGION_MISSIONS/active/. Start each operator that holds an active mission again with that mission; it picks up from the Handoff note in its mission file. Tell the human in one line what you're resuming."
+}
+
 cmd_commander() {
   require_active
-  local mission="$*"
+  local mission="$*" pane
+  # Wrapped up, but the machine only slept: commander is still running,
+  # cleared and idle. Tell it to pick up rather than starting another.
+  pane="$(pane_of "$LEGION_SQUAD_NAME-commander")"
+  if [ -n "$pane" ] && [ -f "$LEGION_LOCAL/wrapped-up" ]; then
+    tmux send-keys -t "$pane" -l "$(wrap_up_resume)${mission:+ Then: $mission}"
+    tmux send-keys -t "$pane" Enter
+    rm -f "$LEGION_LOCAL/wrapped-up"
+    echo "commander is still running; told it to pick up where the squad wrapped up"
+    return 0
+  fi
   local mission_display="${mission:-none yet — wait for instructions from the human or a message}"
   local addr="$LEGION_SQUAD_NAME-commander"
   local prompt
@@ -976,7 +992,7 @@ Some operators are scalable: their operator.json has a 'scale' setting (true for
 
 Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline. Pipelines are Markdown files, $LEGION_PIPELINES/<name>.md, holding a Mermaid flowchart. Each box is a step, named after the operator who does it (builder[builder: build it]); the first box is the first step. A diamond is a statement that is either true or false (approved{the change is approved}), decided by whoever just finished, and its arrows are labelled yes or no. A labelled arrow out of a step is only followed when its label is true; an unlabelled arrow is the normal next step. A rounded box named done ends the pipeline. $LEGION_PIPELINES/README.md has the full rules. An older squad may still have a plain list at $LEGION_PIPELINES/<name> instead: one operator per line, in order, with # lines as comments. Operators named in a pipeline don't need to exist yet; they get deployed as the pipeline reaches them. Give a mission file a 'pipeline: <name>' header field. When an operator finishes its step it sends you 'HANDOFF <mission>: <next operator> next — <note>' (its handoff tool). You're the only one who starts, scales or stands down positions, so on a HANDOFF: start the next operator with the mission if it isn't running, message it if it's running and free, or scale up a copy if every copy is busy. The mission file records every step: each handoff adds a line to its Handoffs list at the top (the last line says who has it now), so never rewrite header lines to track who's next. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
 
-You have the legion MCP tools for all of this: start, scale_up, stand_down, capture, list, missions, mission_create, mission_move, mission_read, mission_note, mission_set, message, read_messages, questions and answer. Prefer them to typing legion commands. Every question for the human lives in .legion/questions/, so the human can see and answer it from outside your window. When you need a decision from the human yourself, ask it with the ask_human tool (numbered options, each with a short example, and your recommendation), never with an on-screen question box. An operator's question arrives as 'QUESTION Q-###' and is already in that list: tell the human in one line that Q-### is waiting. The human answers with the answer tool from their own Claude session, or by replying in your window; if they reply in your window, record what they say with the answer tool, which sends it back to whoever asked and logs it in the mission file. You'll get an 'ANSWERED Q-###' message when they answer from elsewhere. Stand operators down when they're done, so idle sessions don't sit open. Each time a mission moves on or finishes, look at every running operator (including scaled copies). An operator with no mission in active/ that no active or todo mission can still reach (no pipeline step left for it, and no loop in the pipeline that leads back to it) should be stood down: 'legion stand-down <operator>'. For example, a planner can go once every mission has moved past planning, but a builder that a failed review could send work back to should stay. An operator that won't be needed for a long while can go too. Standing down is cheap: Legion keeps the operator's conversation, so starting it again later (by deploying it, or when a pipeline reaches it) picks up where it left off. Never stand down an operator that holds a mission in active/, and tell the human in one line whenever you stand someone down.
+You have the legion MCP tools for all of this: start, scale_up, stand_down, capture, list, missions, mission_create, mission_move, mission_read, mission_note, mission_set, message, read_messages, questions and answer. Prefer them to typing legion commands. Every question for the human lives in .legion/questions/, so the human can see and answer it from outside your window. When you need a decision from the human yourself, ask it with the ask_human tool (numbered options, each with a short example, and your recommendation), never with an on-screen question box. An operator's question arrives as 'QUESTION Q-###' and is already in that list: tell the human in one line that Q-### is waiting. The human answers with the answer tool from their own Claude session, or by replying in your window; if they reply in your window, record what they say with the answer tool, which sends it back to whoever asked and logs it in the mission file. You'll get an 'ANSWERED Q-###' message when they answer from elsewhere. A message starting 'WRAP-UP' means the human is done for the day and will shut this machine down, so the squad should stop in a state it can pick up tomorrow. Stop your squad-check loop if one is running. Send every running operator (including scaled copies) this: 'WRAP-UP: stop at the next good point, not mid-change. If you hold a mission, add a handoff note to it with the mission_note tool, heading Handoff: what's done, what's next, and anything you would hate to lose. Then message commander WRAPPED, run legion refresh --stay, and end your turn.' Wait for WRAPPED from each; after 15 minutes, stop waiting for any that haven't answered and note who. Stand each operator down once it has sent WRAPPED (stand-down waits for its clear to finish), so tomorrow you start it fresh with its mission. Then add a '## Handoff' section to the end of the log: the missions in flight and who has them, what's waiting on whom, open questions, and anyone who didn't wrap up. Tell the human in one line that the squad is wrapped up and it's safe to shut down. Then run 'legion refresh --stay' and end your turn. Stand operators down when they're done, so idle sessions don't sit open. Each time a mission moves on or finishes, look at every running operator (including scaled copies). An operator with no mission in active/ that no active or todo mission can still reach (no pipeline step left for it, and no loop in the pipeline that leads back to it) should be stood down: 'legion stand-down <operator>'. For example, a planner can go once every mission has moved past planning, but a builder that a failed review could send work back to should stay. An operator that won't be needed for a long while can go too. Standing down is cheap: Legion keeps the operator's conversation, so starting it again later (by deploying it, or when a pipeline reaches it) picks up where it left off. Never stand down an operator that holds a mission in active/, and tell the human in one line whenever you stand someone down.
 
 Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse operator/role and write/update that operator's file:
 name: $LEGION_SQUAD_NAME-<operator>
@@ -1007,6 +1023,11 @@ Squad check every $every: right after you start 'legion message wait', invoke th
   # sits deaf at an empty prompt while messages (a channel's, say) pile up.
   local kickoff="${LEGION_KICKOFF:-No mission yet. Start 'legion message wait' in the background and wait for messages from the human, the squad or another squad on the channel.}"
   [ -n "$mission" ] && kickoff="Get started: $mission"
+  # The squad wrapped up last time (cmd_wrap_up): pick up from the notes.
+  if [ -f "$LEGION_LOCAL/wrapped-up" ]; then
+    kickoff="$kickoff $(wrap_up_resume)"
+    rm -f "$LEGION_LOCAL/wrapped-up"
+  fi
   claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
   claude_cmd="$claude_cmd$(claude_flags commander)"
   open_window "$addr" "$claude_cmd" "commander"
@@ -1077,7 +1098,7 @@ cmd_deploy() {
   local prompt
   prompt="You are '$addr' on a small squad commanded by '$commander_addr', run on mission command: commander sets direction and goals, you own the how. Message commander to check in, to report your mission done, to ask for mission-level perspective, or to raise anything that needs a tiebreaker — a decision or disagreement only commander should settle. For your own domain, decide your approach yourself; commander gave you the what, not the method. When you need another operator's specific expertise, message them directly — this is normal, not an exception, and commander does not need to broker it. Run 'legion list' to see who is running, and read \$LEGION_OPERATORS/<their-operator-name>/definition.md if you want to know what they're good at before reaching out. Before doing anything else, check in: run legion message send commander \"CHECK-IN: operator=$operator role=<one or two sentences, in your own words, on who you are and what you do on this squad — from your operator definition if you have one> mission=$mission_display\", then start 'legion message wait' in the background. Check in every time you are started, including when this conversation is resumed: commander may be a brand-new session that has never heard from you, so an earlier check-in in this conversation does not count — send a fresh one. Messages are kept until they're read, so check in even if commander isn't running yet. Check in once per start, not repeatedly. Talking to the squad: send every message to another position on this squad with 'legion message send <position> \"<text>\"' (a position is commander, planner, builder-2 and so on), not SendMessage. Claude Code drops a SendMessage whose chain of replies loops back through a session, and a busy squad hits that quickly. Messages to you arrive the same way, so keep 'legion message wait' running in the background the whole time you're on the squad. Start it with the Bash tool's run_in_background option, never with a trailing & (Claude Code stops a command with & for approval, and you'd sit there deaf). When it finishes, your new messages are shown to you automatically (if they aren't, run 'legion message read'): act on them, then start the wait again straight away. Only use SendMessage to reply to a session outside the squad, such as the human's own Claude session. Your mission: $mission_display
 
-If your mission file has a 'worktree:' header, that folder is where this mission's code lives: read, edit, test and commit there (use its paths for file edits, and cd into it for shell commands). Don't touch the project root's copy of those files for this mission. Mission files, the roster and the log stay in the project root's .legion/ — update those there, never in the worktree.
+If your mission file has a 'Handoff' section, you (or an earlier copy of you) wrote it before a clear or at the end of a day: carry on from the latest one. If your mission file has a 'worktree:' header, that folder is where this mission's code lives: read, edit, test and commit there (use its paths for file edits, and cd into it for shell commands). Don't touch the project root's copy of those files for this mission. Mission files, the roster and the log stay in the project root's .legion/ — update those there, never in the worktree.
 
 If the mission file you were given has a 'pipeline: <name>' header, read that pipeline to find your step in it. Pipelines are Markdown files, $LEGION_PIPELINES/<name>.md, holding a Mermaid flowchart. Each box is a step, named after the operator who does it (builder[builder: build it]); the first box is the first step. A diamond is a statement that is either true or false (approved{the change is approved}), decided by whoever just finished, and its arrows are labelled yes or no. A labelled arrow out of a step is only followed when its label is true; an unlabelled arrow is the normal next step. A rounded box named done ends the pipeline. $LEGION_PIPELINES/README.md has the full rules. An older squad may still have a plain list at $LEGION_PIPELINES/<name> instead: one operator per line, in order, with # lines as comments. When you finish your step, decide any question that follows it and follow the arrows to the next step. If that step belongs to another operator, hand off through commander: add a short note of what you did to the mission file (the mission_note tool), then call the legion MCP tool handoff with the mission and the next operator. Commander starts or messages the next operator, picks a free copy if it's scalable, and moves the mission along. You never start, scale up or stand down another position yourself; only commander does. If the arrows lead to done, or the mission has no pipeline field, report back to '$commander_addr' with the report_done tool when your mission is done. If you need a decision only the human can make, use the ask_human tool (numbered options, a short example for each, and a recommendation), never an on-screen question box, then wait for the answer to arrive as a message — and along the way, reach out to any other operator directly whenever their expertise would help."
   [ -s "$LEGION_DOCTRINE" ] && prompt="$prompt
@@ -1156,6 +1177,19 @@ cmd_capture() {
   fi
 }
 
+# A position that's handing off and clearing (see context_stop) gets up to
+# a minute to finish first. Stopping it halfway would keep the old, full
+# conversation as the one to reopen.
+wait_for_clear() {
+  local dir n=0
+  dir="$(context_dir)"
+  while { [ -f "$dir/$1.refresh" ] || [ -f "$dir/$1.clearing" ]; } && [ "$n" -lt 60 ]; do
+    sleep 1
+    n=$((n + 1))
+  done
+  return 0
+}
+
 cmd_standdown() {
   require_active
   if [ $# -eq 0 ]; then cmd_standdown_all; return; fi
@@ -1164,6 +1198,7 @@ cmd_standdown() {
   pane="$(pane_of "$name")"
   [ -n "$pane" ] || { echo "'$name' not found" >&2; exit 1; }
   window="$(squad_window)"
+  wait_for_clear "$1"
   tmux kill-pane -t "$pane"
   [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
   return 0
@@ -1178,6 +1213,7 @@ cmd_standdown_all() {
   [ -n "$rows" ] || { echo "no panes running for squad '$LEGION_SQUAD_NAME'"; return 0; }
   while IFS="$(printf '\t')" read -r addr pane _; do
     [ "$addr" = "$LEGION_SQUAD_NAME-commander" ] && continue
+    wait_for_clear "${addr#"$LEGION_SQUAD_NAME"-}"
     tmux kill-pane -t "$pane" && stopped="$stopped ${addr#"$LEGION_SQUAD_NAME"-}"
   done <<EOF
 $rows
@@ -1728,7 +1764,26 @@ cmd_refresh() {
   dir="$(context_dir)"
   mkdir -p "$dir"
   date +%s > "$dir/$me.refresh"
-  echo "Legion will clear this conversation as soon as you end your turn, then start you again from your handoff note. End your turn now."
+  # --stay: clear and leave the session idle, for wrapping up (cmd_wrap_up).
+  if [ "${1:-}" = "--stay" ]; then
+    touch "$dir/$me.stay"
+    # Commander clears last in a wrap-up: the squad is wrapped up now.
+    [ "$me" = "commander" ] && date -u +%Y-%m-%dT%H:%M:%SZ > "$LEGION_LOCAL/wrapped-up"
+    echo "Legion will clear this conversation as soon as you end your turn and leave you idle. End your turn now."
+  else
+    rm -f "$dir/$me.stay"
+    echo "Legion will clear this conversation as soon as you end your turn, then start you again from your handoff note. End your turn now."
+  fi
+}
+
+# End of day: the commander has every operator stop at a good point, write
+# a handoff note and clear without starting again, then does the same.
+# The next start picks up from those notes (see cmd_commander).
+cmd_wrap_up() {
+  require_active
+  [ -n "$(pane_of "$LEGION_SQUAD_NAME-commander")" ] || { echo "legion: commander isn't running, so there's no squad to wrap up" >&2; exit 1; }
+  LEGION_MESSAGE_AS=human cmd_message send commander "WRAP-UP: the human is wrapping up for the day. Wrap up the squad as your instructions describe." >/dev/null
+  echo "asked commander to wrap up the squad; it tells you when everyone has handed off and it's safe to shut down"
 }
 
 cmd_context() {
@@ -1799,6 +1854,8 @@ cmd_context() {
         [ "$(cat "$(message_dir "$me")/waiting.pid" 2>/dev/null)" = "$old_wait" ] && rm -f "$(message_dir "$me")/waiting.pid"
       fi
       sleep 1
+      # Wrapping up: stay cleared and idle until the squad starts again.
+      if [ -f "$dir/$me.stay" ]; then rm -f "$dir/$me.stay"; exit 0; fi
       kick="You were just cleared to free up room. You are still '$LEGION_SQUAD_NAME-$me' on the squad: your role and rules are in $LEGION_LOCAL/prompts/$me.md if you no longer have them. Start 'legion message wait' in the background first."
       if [ "$me" = "commander" ]; then
         kick="$kick Then read the latest '## Handoff' section at the end of $LEGION_LOG, the missions in $LEGION_MISSIONS/active/ and the roster, and carry on from there."
@@ -1908,6 +1965,7 @@ main() {
     channel) shift; cmd_channel "$@" ;;
     activity) shift; cmd_activity "$@" ;;
     refresh) shift; cmd_refresh "$@" ;;
+    wrap-up) shift; cmd_wrap_up "$@" ;;
     context) shift; cmd_context "$@" ;;
     check) shift; cmd_check "$@" ;;
     scale) shift; cmd_scale "$@" ;;
