@@ -342,9 +342,95 @@ async def watch_activity():
         await asyncio.sleep(POLL_SECONDS)
 
 
+MESSAGES = os.path.join(ROOT, "messages")
+WAKE_CHECK_SECONDS = 30
+# How long a window must sit unchanged, with mail unread that long, before
+# it counts as idle. A session mid-turn keeps redrawing its spinner, and a
+# person typing changes it too.
+WAKE_IDLE_SECONDS = 120
+# Don't wake the same window again sooner than this, in case it's stuck on
+# something the wake line can't fix.
+WAKE_GAP_SECONDS = 600
+WAKE_TEXT = ("You have new messages: run legion message read and act on them, then start "
+             "legion message wait in the background again.")
+SHELLS = {"bash", "zsh", "sh", "fish", "dash"}
+
+
+def tmux(*args):
+    p = subprocess.run(["tmux"] + list(args), capture_output=True, text=True)
+    return p.stdout if p.returncode == 0 else None
+
+
+def waiting(position):
+    try:
+        with open(os.path.join(MESSAGES, position, "waiting.pid")) as f:
+            os.kill(int(f.read().strip()), 0)
+        return True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        return False
+
+
+def oldest_unread(position):
+    d = os.path.join(MESSAGES, position, "new")
+    try:
+        times = [os.path.getmtime(os.path.join(d, n)) for n in os.listdir(d)]
+    except FileNotFoundError:
+        return None
+    return min(times) if times else None
+
+
+async def watch_deaf():
+    """Wakes a position that has stopped listening. Its message wait can
+    stop while it sits idle (someone presses Esc in its window, say), and
+    then nothing tells it about new mail: the hooks only run during a turn.
+    For a squad left running to answer other squads over the channel, that
+    means silence nobody notices. Once the window has sat unchanged with
+    mail unread for a while, clear any half-typed text and type a line
+    telling it to read its messages, which starts a turn."""
+    screens = {}  # pane id -> (screen text, time it last changed)
+    woken = {}    # pane id -> time last woken
+    while True:
+        await asyncio.sleep(WAKE_CHECK_SECONDS)
+        out = tmux("list-panes", "-a", "-F", "#{pane_id}\t#{@legion_squad}\t#{@legion_addr}\t#{pane_current_command}")
+        panes = {}
+        for line in (out or "").splitlines():
+            pane, squad, addr, command = (line.split("\t") + ["", "", ""])[:4]
+            if squad == SQUAD and addr.startswith(SQUAD + "-"):
+                panes[addr[len(SQUAD) + 1:]] = (pane, command)
+        now = time.time()
+        for position, (pane, command) in panes.items():
+            screen = tmux("capture-pane", "-p", "-t", pane)
+            if screen is None:
+                continue
+            if screens.get(pane, (None,))[0] != screen:
+                screens[pane] = (screen, now)
+            idle_since = screens[pane][1]
+            oldest = oldest_unread(position)
+            if (oldest is None or waiting(position) or command in SHELLS
+                    or now - oldest < WAKE_IDLE_SECONDS or now - idle_since < WAKE_IDLE_SECONDS
+                    or now - woken.get(pane, 0) < WAKE_GAP_SECONDS):
+                continue
+            # A permission question is waiting for a person, and keys typed
+            # into it could answer it.
+            if re.search(r"Do you want to|\b1\. Yes\b", screen):
+                continue
+            # Ctrl-C clears half-typed text. On an empty prompt it only
+            # arms "press again to exit", which the typing that follows
+            # cancels.
+            tmux("send-keys", "-t", pane, "C-c")
+            await asyncio.sleep(1)
+            tmux("send-keys", "-t", pane, "-l", WAKE_TEXT)
+            tmux("send-keys", "-t", pane, "Enter")
+            woken[pane] = now
+            log("woke %s: unread messages and no message wait running" % position)
+        for pane in list(screens):
+            if pane not in {p for p, _ in panes.values()}:
+                del screens[pane]
+
+
 async def main():
     log("starting for squad '%s' (root=%s)" % (SQUAD, ROOT))
-    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox(), watch_activity())
+    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox(), watch_activity(), watch_deaf())
 
 
 if __name__ == "__main__":

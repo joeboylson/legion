@@ -665,6 +665,16 @@ from any Claude session, so it keeps relaying and answering `legion channel
 peers` even while the whole squad is stood down. `legion channel close`
 stops it.
 
+**It also wakes a session that stopped listening.** A session hears new
+messages through `legion message wait`, and that can stop while the session
+sits idle, for example if someone presses Esc in its window. While the
+channel runs, it checks each position every 30 seconds. If a position has
+had unread messages for 2 minutes, has no wait running, and its window
+hasn't changed in 2 minutes, the channel clears any half-typed text there
+and types a line telling it to read its messages. It leaves a window alone
+if it's showing a permission question, and wakes the same window at most
+once every 10 minutes. Each wake is logged in `.legion/channel/channel.log`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
