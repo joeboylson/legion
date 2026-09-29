@@ -940,9 +940,12 @@ Squad check every $every: right after you start 'legion message wait', invoke th
   check_operator commander || exit 1
   config_mode commander >/dev/null || exit 1
   local claude_cmd="$(prompt_flag commander "$prompt")"
-  local kickoff="${LEGION_KICKOFF:-}"
+  # Always send a first message. Without one, claude never takes a turn, so
+  # the commander never starts its message wait and no hook ever fires: it
+  # sits deaf at an empty prompt while messages (a channel's, say) pile up.
+  local kickoff="${LEGION_KICKOFF:-No mission yet. Start 'legion message wait' in the background and wait for messages from the human, the squad or another squad on the channel.}"
   [ -n "$mission" ] && kickoff="Get started: $mission"
-  [ -n "$kickoff" ] && claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
+  claude_cmd="$claude_cmd $(printf '%q' "$kickoff")"
   claude_cmd="$claude_cmd$(claude_flags commander)"
   open_window "$addr" "$claude_cmd" "commander"
 }
@@ -1002,13 +1005,9 @@ cmd_deploy() {
   # happened). cmd_scale's "up" case deploys through here too, so it's
   # covered the same way.
   #
-  # cmd_commander with no mission and no LEGION_KICKOFF sends claude no
-  # prompt at all — fine for a human reattaching to an idle commander, but
-  # silently starting one this way leaves it sitting at Claude Code's empty
-  # welcome screen forever, never told to look for anything (verified: this
-  # is exactly what happened the first time this fix shipped — the operator
-  # checked in and reported done, and the freshly auto-started commander
-  # never saw either message). Give it a real kickoff instead.
+  # A commander started for a deploy gets a kickoff naming the operator it's
+  # waiting on, rather than cmd_commander's generic "no mission yet" one, so
+  # it knows a check-in is coming.
   if [ -z "$(pane_of "$commander_addr")" ]; then
     LEGION_KICKOFF="You were just started because '$operator' is being deployed. Wait for its check-in (start 'legion message wait' in the background) and go from there." \
       cmd_commander

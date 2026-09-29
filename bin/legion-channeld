@@ -159,7 +159,7 @@ def deliver_locally(operator, text, sender_team):
         if p.returncode != 0:
             log("delivery to %s failed: %s" % (operator, (p.stdout + p.stderr).strip()))
         else:
-            log("delivered to %s from %s: %s" % (operator, sender_team, text[:60]))
+            log("delivered to %s from %s: %s" % (operator, sender_team, text))
     except Exception as e:
         log("delivery to %s raised: %s" % (operator, e))
 
@@ -301,7 +301,7 @@ async def watch_outbox():
                          "operator": msg.get("operator") or "commander", "text": msg.get("text", "")}
                 if to in CONNECTIONS:
                     await send_line(CONNECTIONS[to], relay)
-                    log("sent to %s: %s" % (to, msg.get("text", "")[:60]))
+                    log("sent to %s: %s" % (to, msg.get("text", "")))
                 else:
                     log("cannot send to %s: not connected" % to)
             try:
