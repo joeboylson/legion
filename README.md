@@ -439,7 +439,7 @@ j/k) to scroll, and q to quit. `legion dash --once` prints the same thing
 once as plain text.
 
 `legion dash --web` serves the same view as a web page at
-`http://<this machine>:7580/` that updates itself every 2 seconds. It's laid
+`http://<this machine>:7580/` that updates itself every second. It's laid
 out like an editor: squads and their sessions in a sidebar you can filter
 and click to focus on one, and channel traffic and peers in a panel at the
 bottom. Change the port with `--port`. It listens on every network this machine is on, so anyone who can
