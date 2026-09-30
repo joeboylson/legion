@@ -29,13 +29,15 @@
   .wb-titlebar .label { white-space: nowrap; }
   .usage { justify-self: end; display: flex; align-items: center; gap: var(--space-4);
            font-family: var(--font-mono); font-size: var(--text-label); white-space: nowrap; }
-  .meter { display: flex; align-items: center; gap: var(--space-2); }
-  .meter .bar { width: var(--space-7); height: var(--space-2); border-radius: var(--radius-sm);
+  .meter { display: flex; align-items: center; gap: var(--space-2); padding-block: var(--space-2); cursor: default; }
+  .meter .bar { display: block; width: var(--space-7); height: var(--space-3); border-radius: var(--radius-sm);
                 background: var(--layer-3); overflow: hidden; }
-  .meter .fill { height: 100%; background: var(--fg-muted); }
+  .meter .fill { display: block; height: 100%; background: var(--fg-muted); }
   .meter.warn .fill { background: var(--warning); }
   .meter.bad .fill { background: var(--danger); }
-  .meter { cursor: default; padding-block: var(--space-2); }
+  .meter.warn .pct { color: var(--warning); }
+  .meter.bad .pct { color: var(--danger); }
+  .usage .sep { color: var(--fg-muted); }
   .wb-search { cursor: text; padding-inline: var(--space-3); }
   .wb-search input {
     flex: 1; min-width: 0; border: 0; background: none; color: var(--fg);
@@ -337,31 +339,52 @@
     usage(s.usage);
   }
 
+  // The meters are built once and only updated after that: rebuilding them
+  // every second would reset their hover tooltips before they ever showed.
+  const meters = {};
+  function meter(key) {
+    if (!meters[key]) {
+      const m = el("span", "meter");
+      const bar = el("span", "bar");
+      const fill = el("span", "fill");
+      bar.append(fill);
+      const pct = el("span", "pct");
+      m.append(bar, pct);
+      meters[key] = { m, fill, pct };
+    }
+    return meters[key];
+  }
+
   function usage(u) {
     const box = document.getElementById("usage");
-    if (!u) return box.replaceChildren(el("span", "muted", "usage not reported yet"));
-    const parts = [];
+    if (!u) {
+      if (!box.querySelector(".none")) box.replaceChildren(el("span", "muted none", "usage not reported yet"));
+      return;
+    }
     const age = Date.now() / 1000 - u.as_of;
+    const shown = [];
     for (const [key, name, opts] of [["five_hour", "5-hour", { hour: "numeric", minute: "2-digit" }],
                                      ["seven_day", "Weekly", { weekday: "short", hour: "numeric", minute: "2-digit" }]]) {
       const w = u[key];
       if (!w || w.used_percentage === undefined) continue;
       const pct = Math.round(w.used_percentage);
-      const m = el("span", "meter" + (pct >= 90 ? " bad" : pct >= 70 ? " warn" : ""));
-      const bar = el("span", "bar");
-      const fill = el("span", "fill");
-      fill.style.display = "block";
+      const { m, fill, pct: label } = meter(key);
+      m.className = "meter" + (pct >= 90 ? " bad" : pct >= 70 ? " warn" : "");
       fill.style.width = Math.min(100, pct) + "%";
-      bar.append(fill);
-      // Just the bar; the numbers are in its tooltip.
-      m.append(bar);
-      m.title = `${name} usage: ${pct}%`
+      label.textContent = pct + "%";
+      const title = `${name} usage: ${pct}%`
         + (w.resets_at ? `, resets ${new Date(w.resets_at * 1000).toLocaleString([], opts)}` : "")
         + (age > 600 ? ` (as of ${ago(age)} ago)` : "");
-      m.setAttribute("aria-label", m.title);
-      parts.push(m);
+      if (m.title !== title) { m.title = title; m.setAttribute("aria-label", title); }
+      shown.push(m);
     }
-    box.replaceChildren(...parts);
+    // Only re-place the meters when which ones are shown changes.
+    const now = [...box.querySelectorAll(".meter")];
+    if (now.length !== shown.length || now.some((n, i) => n !== shown[i])) {
+      const parts = [];
+      shown.forEach((m, i) => { if (i) parts.push(el("span", "sep", "|")); parts.push(m); });
+      box.replaceChildren(...parts);
+    }
   }
 
   function link(ok, text) {
