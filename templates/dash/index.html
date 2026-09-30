@@ -22,6 +22,21 @@
   .tab .close { padding: 0 var(--space-1); border-radius: var(--radius-sm); color: var(--fg-muted); }
   .tab .close:hover { background: var(--layer-2); color: var(--fg); }
   .channel-view { padding: var(--space-4); display: grid; gap: var(--space-5); }
+  .question { padding: var(--space-4); border-bottom: var(--hairline); display: grid; gap: var(--space-3); }
+  .question-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+  .question-head .qid { font-family: var(--font-mono); font-weight: var(--weight-medium); }
+  .question .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-sans); }
+  .question .options { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .question .reply { display: flex; gap: var(--space-2); }
+  .question .reply .input { flex: 1; min-width: 0; }
+  .question .result { font-family: var(--font-mono); font-size: var(--text-label); }
+  .question .result.bad { color: var(--danger); }
+  .log td { vertical-align: top; overflow-wrap: anywhere; font-family: var(--font-mono); }
+  .log td.when { width: var(--space-8); white-space: nowrap; color: var(--fg-muted); }
+  .log td.squad { width: var(--space-9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
+  .log .detail { margin: var(--space-2) 0 0; color: var(--fg-muted); white-space: pre-wrap; }
+  .log tr.ended td.msg > span { color: var(--warning); }
+  #questions-btn.waiting { color: var(--warning); }
   .channel-view .label { display: block; margin-bottom: var(--space-2); }
   @media (max-width: 48rem) {
     .wb { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "main" "status"; }
@@ -127,6 +142,8 @@
     <div class="spacer"></div>
     <span class="hide-sm" id="working"></span>
     <span class="hide-sm" id="updated"></span>
+    <button type="button" id="questions-btn" title="Open questions waiting for you">Questions <span class="count" id="question-count">0</span></button>
+    <button type="button" id="log-btn" title="Open the session log">Log</button>
     <button type="button" id="channel-btn" title="Open the channel in a tab"><span class="dot" style="color: var(--fg-muted)"></span>Channel <span class="count" id="peer-count">0</span></button>
     <button type="button" id="theme">Theme</button>
   </footer>
@@ -135,7 +152,12 @@
 <script>
   // tab: "sessions" or "channel". The channel tab exists once opened from
   // the status bar, until it's closed.
-  const view = { focus: null, tab: "sessions", channelOpen: false, filter: "" };
+  const view = { focus: null, tab: "sessions", open: [], filter: "" };
+  const TAB_NAMES = { channel: "Channel", questions: "Questions", log: "Log" };
+  const openTab = (name) => { if (!view.open.includes(name)) view.open.push(name); view.tab = name; render(true); };
+  // What's typed into a question's answer box, kept across redraws.
+  const drafts = {};
+  let questionsKey = "";
   let last = null;
 
   const el = (tag, cls, text) => {
@@ -255,6 +277,84 @@
     return box;
   }
 
+  async function answer(q, text, result) {
+    result.className = "result muted";
+    result.textContent = "sending…";
+    try {
+      const r = await fetch("api/answer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Legion-Dash": "1" },
+        body: JSON.stringify({ squad: q.squad, id: q.id, answer: text }),
+      });
+      const out = await r.json();
+      result.className = "result" + (out.ok ? "" : " bad");
+      result.textContent = out.ok ? out.text : (out.text || out.error || "couldn't send the answer");
+      if (out.ok) delete drafts[q.squad + "/" + q.id];
+    } catch (e) {
+      result.className = "result bad";
+      result.textContent = "couldn't reach legion dash";
+    }
+  }
+
+  function questionsView(s) {
+    const box = el("div");
+    if (!s.questions.length) return el("div", "empty", "No questions waiting for you.");
+    if (!s.can_answer) box.append(el("div", "empty", "You can read these here, but answering only works on the machine running legion dash, unless it was started with --allow-answers."));
+    for (const q of s.questions) {
+      const key = q.squad + "/" + q.id;
+      const item = el("article", "question");
+      const head = el("div", "question-head");
+      head.append(el("span", "qid", q.id), el("span", "tag", q.squad));
+      if (q.asked_by) head.append(el("span", "muted", "from " + q.asked_by));
+      if (q.mission) head.append(el("span", "tag", q.mission));
+      if (q.asked_at) head.append(el("span", "muted", clock(q.asked_at)));
+      item.append(head, el("pre", "text", q.text.split("**").join("")));
+      const result = el("div", "result muted");
+      if (s.can_answer) {
+        if (q.options.length) {
+          const opts = el("div", "options");
+          q.options.forEach((o, i) => {
+            const b = el("button", "btn btn--secondary", `${i + 1}. ${o}`);
+            b.type = "button";
+            b.onclick = () => answer(q, `${i + 1}. ${o}`, result);
+            opts.append(b);
+          });
+          item.append(opts);
+        }
+        const reply = el("form", "reply");
+        const input = el("input", "input");
+        input.placeholder = q.options.length ? "Or write your own answer" : "Your answer";
+        input.value = drafts[key] || "";
+        input.oninput = () => { drafts[key] = input.value; };
+        input.dataset.key = key;
+        const send = el("button", "btn", "Answer");
+        send.type = "submit";
+        reply.onsubmit = (e) => { e.preventDefault(); if (input.value.trim()) answer(q, input.value.trim(), result); };
+        reply.append(input, send);
+        item.append(reply);
+      }
+      item.append(result);
+      box.append(item);
+    }
+    return box;
+  }
+
+  function logView(s) {
+    if (!s.log.length) return el("div", "empty", "Nothing in the session log yet. It fills in as squads start with this version of Legion.");
+    const t = el("table", "log");
+    const tb = el("tbody");
+    for (const [ts, squad, text, detail] of s.log) {
+      const tr = el("tr", /session ended/.test(text) ? "ended" : "");
+      const cell = el("td", "msg");
+      cell.append(el("span", "", text));
+      if (detail.length) cell.append(el("pre", "detail", detail.join("\n")));
+      tr.append(el("td", "when", clock(ts)), el("td", "squad", squad), cell);
+      tb.append(tr);
+    }
+    t.append(tb);
+    return t;
+  }
+
   function channelView(s) {
     const box = el("div", "channel-view");
     const peers = el("section");
@@ -289,7 +389,7 @@
     return box;
   }
 
-  function render() {
+  function render(force) {
     const s = last;
     if (!s) return;
     const cards = visible(s);
@@ -316,18 +416,35 @@
     const label = view.focus && view.focus.startsWith("squad:") ? view.focus.slice(6) + " (squad)" : view.focus;
     const list = [tab("All sessions", onSessions && view.focus === null, () => { view.focus = null; view.tab = "sessions"; render(); })];
     if (view.focus) list.push(tab(label, onSessions, () => { view.tab = "sessions"; render(); }));
-    if (view.channelOpen) {
-      const ch = tab("Channel", !onSessions, () => { view.tab = "channel"; render(); });
+    for (const name of view.open) {
+      const t = tab(TAB_NAMES[name], view.tab === name, () => { view.tab = name; render(true); });
       const x = el("span", "close", "×");
       x.title = "Close";
-      x.onclick = (e) => { e.stopPropagation(); view.channelOpen = false; view.tab = "sessions"; render(); };
-      ch.append(x);
-      list.push(ch);
+      x.onclick = (e) => {
+        e.stopPropagation();
+        view.open = view.open.filter((n) => n !== name);
+        if (view.tab === name) view.tab = view.open[view.open.length - 1] || "sessions";
+        render(true);
+      };
+      t.append(x);
+      list.push(t);
     }
     tabs.replaceChildren(...list);
 
     const editor = document.getElementById("editor");
-    if (!onSessions) {
+    if (view.tab === "questions") {
+      // Redraw only when the questions change, so an answer being typed
+      // isn't wiped every second.
+      const key = JSON.stringify([s.questions, s.can_answer]);
+      if (force || key !== questionsKey || !editor.querySelector(".question, .empty")) {
+        const active = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.key;
+        editor.replaceChildren(questionsView(s));
+        if (active) { const i = editor.querySelector(`[data-key="${CSS.escape(active)}"]`); if (i) i.focus(); }
+      }
+      questionsKey = key;
+    } else if (view.tab === "log") {
+      editor.replaceChildren(logView(s));
+    } else if (!onSessions) {
       editor.replaceChildren(channelView(s));
     } else if (!s.squads.length) {
       editor.replaceChildren(el("div", "empty", "No squads running on this machine."));
@@ -342,6 +459,8 @@
     const connected = s.peers.reduce((n, [, c]) => n + c.length, 0);
     document.getElementById("peer-count").textContent = connected;
     document.querySelector("#channel-btn .dot").style.color = connected ? "var(--success)" : "var(--fg-muted)";
+    document.getElementById("question-count").textContent = s.questions.length;
+    document.getElementById("questions-btn").classList.toggle("waiting", s.questions.length > 0);
 
     const q = new Set([...s.squads, ...s.cards.map(squadOf)]).size, n = s.cards.length;
     document.getElementById("totals").textContent = `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`;
@@ -420,9 +539,13 @@
   }
 
   document.getElementById("filter").addEventListener("input", (e) => { view.filter = e.target.value; render(); });
-  document.getElementById("channel-btn").onclick = () => { view.channelOpen = true; view.tab = "channel"; render(); };
+  document.getElementById("channel-btn").onclick = () => openTab("channel");
+  document.getElementById("questions-btn").onclick = () => openTab("questions");
+  document.getElementById("log-btn").onclick = () => openTab("log");
   // http://<host>:7580/#channel opens straight on the channel tab.
-  if (location.hash === "#channel") { view.channelOpen = true; view.tab = "channel"; }
+  // #channel, #questions or #log opens straight on that tab.
+  const start = location.hash.slice(1);
+  if (TAB_NAMES[start]) { view.open.push(start); view.tab = start; }
 
   const root = document.documentElement;
   const savedTheme = (() => { try { return localStorage.getItem("legion-dash-theme"); } catch (e) { return null; } })();

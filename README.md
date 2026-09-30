@@ -444,8 +444,17 @@ once as plain text.
 `http://<this machine>:7580/` that updates itself every second. It's laid
 out like an editor: squads and their sessions in a sidebar you can filter
 and click to focus on one squad or session, and a Channel button in the
-status bar that opens the channel's peers and traffic in a tab (or go
-straight there with `#channel` on the end of the address). Change the port with `--port`. It listens on every network this machine is on, so anyone who can
+status bar that opens the channel's peers and traffic in a tab. The
+status bar also has **Questions**, which opens every question waiting for
+you in a tab where you can answer it (pick an option or write your own;
+it goes back to whoever asked, like the `answer` tool), and **Log**, which
+opens `local/sessions.log`: stand-downs, clears, wake-ups, and how any
+session that ended on its own ended. `#channel`, `#questions` or `#log` on
+the end of the address opens straight on that tab.
+
+Answering changes a squad's work, so it only works from the machine running
+`legion dash`. Other machines can read the questions but not answer them,
+unless you start it with `--allow-answers`. Change the port with `--port`. It listens on every network this machine is on, so anyone who can
 reach the machine can open the page, over Tailscale for example. There's no
 password, and the page shows each session's screen, so pass
 `--host 127.0.0.1` to keep it to this machine only.

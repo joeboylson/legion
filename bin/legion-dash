@@ -3,9 +3,11 @@
 
     legion dash            full-screen view, refreshed every second (q quits)
     legion dash --once     print one snapshot as plain text and exit
-    legion dash --web [--port 7580] [--host 0.0.0.0]
+    legion dash --web [--port 7580] [--host 0.0.0.0] [--allow-answers]
                            serve the same view as a web page that refreshes
-                           itself, for any browser that can reach this machine
+                           itself, for any browser that can reach this machine;
+                           questions can be answered from the page on this
+                           machine, or from anywhere with --allow-answers
 
 One card per running position, across every squad: whether it's working,
 how full its conversation is, the mission it holds, anything waiting on it
@@ -496,13 +498,85 @@ def run(stdscr):
         stdscr.refresh()
 
 
+def questions(squads):
+    """Open questions for the human in every squad here, oldest first (the
+    files `ask_human` writes in .legion/questions/)."""
+    out = []
+    for squad, root in squads:
+        d = os.path.join(root, "questions")
+        try:
+            names = sorted(n for n in os.listdir(d) if re.match(r"Q-\d+\.md$", n))
+        except OSError:
+            continue
+        for n in names:
+            text = read(os.path.join(d, n))
+            m = re.match(r"---\n(.*?)\n---\n(.*)", text, re.S)
+            meta, body = {}, text
+            if m:
+                body = m.group(2)
+                for line in m.group(1).split("\n"):
+                    k, sep, v = line.partition(": ")
+                    if sep:
+                        meta[k] = v
+            if meta.get("status") != "open":
+                continue
+            lines = body.strip().split("\n")
+            if lines and re.match(r"# Q-\d+", lines[0]):
+                lines = lines[1:]
+            # ask_human writes options as "1. **label** — example", or
+            # "1. label" when they're plain strings.
+            options = [(m.group(1) or m.group(2)).strip() for m in
+                       (re.match(r"\d+\. (?:\*\*(.+?)\*\*|(.+))", l) for l in lines) if m]
+            rec = next((l.split(":**", 1)[1].strip() for l in lines if l.startswith("**Recommendation:**")), "")
+            out.append({"squad": squad, "id": meta.get("id", n[:-3]), "asked_by": meta.get("asked_by", ""),
+                        "asked_at": meta.get("asked_at", ""), "mission": meta.get("mission", ""),
+                        "text": "\n".join(lines).strip(), "options": options, "recommendation": rec})
+    return sorted(out, key=lambda q: q["asked_at"])
+
+
+def session_log(squads, limit=40):
+    """The newest entries from every squad's local/sessions.log, newest first:
+    [time, squad, text, [detail lines]]."""
+    entries = []
+    for squad, root in squads:
+        current = None
+        for line in read(os.path.join(root, "local", "sessions.log")).splitlines():
+            if re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ ", line):
+                ts, _, text = line.partition(" ")
+                current = [ts, squad, text, []]
+                entries.append(current)
+            elif current is not None and line.strip():
+                current[3].append(line.strip())
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return entries[:limit]
+
+
 def state(dash):
     """Everything the web page shows, as JSON-ready data."""
     rows, cards = dash.cards()
     events, peers = dash.channel(rows)
     return {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "squads": [squad for squad, _ in rows], "cards": cards, "events": events, "peers": peers,
-            "usage": usage(rows)}
+            "usage": usage(rows), "questions": questions(rows), "log": session_log(rows),
+            "roots": dict(rows)}
+
+
+def legion_tool(project, name, arguments):
+    """Calls one of Legion's human-role MCP tools for a project, the same
+    way your own Claude session would, and returns (ok, text)."""
+    mcp = os.path.join(os.path.dirname(os.path.realpath(__file__)), "legion-mcp")
+    req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+    try:
+        p = subprocess.run([sys.executable, mcp, "--role", "human", "--project", project],
+                           input=json.dumps(req) + "\n", capture_output=True, text=True, timeout=60)
+        reply = json.loads(p.stdout.strip().split("\n")[0])
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as e:
+        return False, "couldn't reach Legion: %s" % e
+    if "error" in reply:
+        return False, reply["error"].get("message", "error")
+    result = reply.get("result", {})
+    text = "".join(c.get("text", "") for c in result.get("content", []))
+    return not result.get("isError"), text
 
 
 def templates_dir():
@@ -515,7 +589,7 @@ def templates_dir():
     sys.exit("legion dash: can't find templates/dash/index.html; reinstall legion")
 
 
-def serve(host, port):
+def serve(host, port, allow_answers=False):
     import http.server
     import socket
     import threading
@@ -526,7 +600,7 @@ def serve(host, port):
              "/tokens.css": ("tokens.css", "text/css; charset=utf-8"),
              "/workbench.css": ("workbench.css", "text/css; charset=utf-8")}
     lock = threading.Lock()
-    current = {"body": b"{}"}
+    current = {"state": {}}
 
     # One thread gathers the state every second, however many browsers
     # are watching.
@@ -534,12 +608,12 @@ def serve(host, port):
         dash = Dash()
         while True:
             try:
-                body = json.dumps(state(dash)).encode()
+                fresh = state(dash)
             except Exception as e:  # keep serving the last good state
                 sys.stderr.write("legion dash: %s\n" % e)
             else:
                 with lock:
-                    current["body"] = body
+                    current["state"] = fresh
             time.sleep(1)
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -551,17 +625,49 @@ def serve(host, port):
             self.end_headers()
             self.wfile.write(body)
 
+        def may_answer(self):
+            # Answering changes a squad's work, and the page has no password:
+            # only from this machine unless --allow-answers.
+            return allow_answers or self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path == "/api/state":
                 with lock:
-                    body = current["body"]
-                return self.send(200, body, "application/json")
+                    data = dict(current["state"])
+                data.pop("roots", None)
+                data["can_answer"] = self.may_answer()
+                return self.send(200, json.dumps(data).encode(), "application/json")
             if path in files:
                 name, kind = files[path]
                 with open(os.path.join(pages, name), "rb") as f:
                     return self.send(200, f.read(), kind)
             self.send(404, b"not found", "text/plain")
+
+        def do_POST(self):
+            if self.path.split("?", 1)[0] != "/api/answer":
+                return self.send(404, b"not found", "text/plain")
+            # A header only this page sends: a cross-site form or fetch can't
+            # add one without the browser asking first, and this server
+            # never says yes to that.
+            if self.headers.get("X-Legion-Dash") != "1":
+                return self.send(403, b'{"error": "missing X-Legion-Dash header"}', "application/json")
+            if not self.may_answer():
+                return self.send(403, json.dumps({"error": "answering is only allowed from the machine running "
+                                                  "legion dash (start it with --allow-answers to change that)"}).encode(),
+                                 "application/json")
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                req = json.loads(self.rfile.read(min(length, 65536)) or b"{}")
+                squad, qid, answer = req["squad"], req["id"], str(req["answer"]).strip()
+            except (ValueError, KeyError, TypeError):
+                return self.send(400, b'{"error": "want {squad, id, answer}"}', "application/json")
+            with lock:
+                root = current["state"].get("roots", {}).get(squad)
+            if not root or not answer or not re.match(r"Q-\d+$", qid):
+                return self.send(400, b'{"error": "unknown squad or question, or an empty answer"}', "application/json")
+            ok, text = legion_tool(os.path.dirname(root), "answer", {"id": qid, "answer": answer})
+            self.send(200 if ok else 400, json.dumps({"ok": ok, "text": text}).encode(), "application/json")
 
         def log_message(self, *args):
             pass
@@ -590,7 +696,7 @@ def main():
             port = int(opt("--port", "7580"))
         except ValueError:
             sys.exit("legion dash: --port takes a number")
-        serve(opt("--host", "0.0.0.0"), port)
+        serve(opt("--host", "0.0.0.0"), port, allow_answers="--allow-answers" in args)
         return
     if "--once" in sys.argv[1:] or not sys.stdout.isatty():
         print(snapshot(Dash()))
