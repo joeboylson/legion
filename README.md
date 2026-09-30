@@ -422,9 +422,13 @@ one card per session:
 - its last 3 tool calls
 - the last 3 lines of its window
 
-Under the cards, a channel panel shows each squad's recent channel traffic
-and which squads it's connected to. Use ↑/↓ (or j/k) to scroll, and q to
-quit. `legion dash --once` prints the same thing once as plain text.
+Squads on other machines get cards too, built from the activity their
+channel passes on: their last 3 tool calls and whether they're working, but
+no screen, since their windows are elsewhere. Under the cards, a channel
+panel shows each squad's recent channel traffic and which squads it's
+connected to, including a squad here that runs only a channel. Use ↑/↓ (or
+j/k) to scroll, and q to quit. `legion dash --once` prints the same thing
+once as plain text.
 
 It's plain JSON Lines, so anything else that wants to watch — a script, a
 dashboard — can just tail the file itself. `activity.log` stays out of git;
@@ -739,7 +743,9 @@ to the other, with no `legion channel send` needed — it's the channel
 daemon tailing the file itself, not anything an operator has to remember
 to do. Every connected squad ends up with `.legion/channel/feed.jsonl`: one
 combined, live feed of every tool call on every squad the channel reaches,
-each line tagged with which team it came from. Point anything that reads
+each line tagged with which team it came from. The listening side passes
+each subscriber's activity on to the other subscribers, so they all see
+each other. Point anything that reads
 JSON Lines at that file — a script, a small web page polling it — to watch
 several squads work at once.
 

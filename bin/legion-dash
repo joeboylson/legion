@@ -83,6 +83,28 @@ def pane_text(pane):
     return lines[-LINES_PER_CARD:], screen
 
 
+def channel_squads():
+    """{squad: root} for squads with a channel daemon running, sessions or not
+    (a squad that only runs a channel has no panes)."""
+    try:
+        out = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    found = {}
+    for line in out.splitlines():
+        m = re.search(r"legion-channeld --root (.+)$", line)
+        if not m:
+            continue
+        root = m.group(1).strip()
+        try:
+            squad = json.loads(read(os.path.join(root, "legion.json")) or "{}").get("squad", "")
+        except ValueError:
+            squad = ""
+        if squad:
+            found[squad] = root
+    return found
+
+
 class Activity:
     """Follows each squad's activity.log, keeping the last few calls per position."""
 
@@ -90,9 +112,11 @@ class Activity:
         self.offsets = {}
         self.recent = collections.defaultdict(lambda: collections.deque(maxlen=LINES_PER_CARD))
         self.last_time = {}
+        self.remote = set()   # (team, position) seen only through a channel
+        self.local = set()    # squads running on this machine
 
-    def poll(self, root, squad):
-        path = os.path.join(root, "activity.log")
+    def poll(self, root, squad, path=None):
+        path = path or os.path.join(root, "activity.log")
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -112,9 +136,21 @@ class Activity:
                 e = json.loads(raw)
             except ValueError:
                 continue
-            key = (squad, e.get("position", "?"))
+            if squad is None:
+                # A channel's feed: other squads' activity, labelled by team.
+                if e.get("team") in self.local:
+                    continue
+                event = e.get("event", e)
+                key = (e.get("team", "?"), event.get("position", "?"))
+                self.remote.add(key)
+                e = event
+            else:
+                key = (squad, e.get("position", "?"))
+            # Several local squads' feeds can hold the same line.
+            if e in self.recent[key]:
+                continue
             self.recent[key].append(e)
-            self.last_time[key] = e.get("time", "")
+            self.last_time[key] = max(self.last_time.get(key, ""), e.get("time", ""))
 
 
 def since(ts):
@@ -192,6 +228,9 @@ class Dash:
     def cards(self):
         now = time.time()
         rows = panes()
+        squads = dict(channel_squads())
+        squads.update({s: r for s, r, _, _ in rows})
+        self.activity.local = set(squads)
         cards = []
         live = set()
         for squad, root, addr, pane in rows:
@@ -234,16 +273,32 @@ class Dash:
         for pane in list(self.screens):
             if pane not in live:
                 del self.screens[pane]
-        return rows, cards
+        # Other squads' sessions, from the activity their channels pass on.
+        for squad, root in squads.items():
+            self.activity.poll(root, None, os.path.join(root, "channel", "feed.jsonl"))
+        for key in sorted(self.activity.remote):
+            if key[0] in squads:
+                continue
+            last = since(self.activity.last_time.get(key))
+            cards.append({
+                "addr": "%s-%s" % key, "working": last is not None and last < WORKING_SECONDS, "idle": last,
+                "ctx": "", "mission": "", "flags": [("other squad, over the channel", "dim")],
+                "activity": list(self.activity.recent.get(key, [])), "screen": [],
+            })
+        return sorted(squads.items()), cards
 
-    def channel(self, rows):
+    def channel(self, squads):
         """Recent channel log lines from every squad, and who each is connected to."""
         events, peers = [], []
-        for squad, root in sorted({(s, r) for s, r, _, _ in rows}):
+        for squad, root in squads:
             chan = os.path.join(root, "channel")
             if not os.path.isdir(chan):
                 continue
-            for line in read(os.path.join(chan, "channel.log")).splitlines()[-CHANNEL_LINES:]:
+            # A message's text can run over several lines; only an entry's
+            # first line starts with its time.
+            entries = [l for l in read(os.path.join(chan, "channel.log")).splitlines()
+                       if re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ ", l)]
+            for line in entries[-CHANNEL_LINES:]:
                 ts, _, msg = line.partition(" ")
                 events.append((ts, squad, msg))
             try:
@@ -257,7 +312,8 @@ class Dash:
                 except ValueError:
                     continue
                 if info.get("connected"):
-                    connected.append(info.get("team", n[:-5]))
+                    team = info.get("team", n[:-5])
+                    connected.append("%s (via %s)" % (team, info["via"]) if info.get("via") else team)
             peers.append((squad, connected))
         events.sort()
         return events[-CHANNEL_LINES:], peers
@@ -289,9 +345,9 @@ def card_lines(c, width):
 
 def snapshot(dash):
     rows, cards = dash.cards()
-    if not cards:
+    if not rows:
         return "no squads running on this machine"
-    out = []
+    out = [] if cards else ["no sessions running", ""]
     for c in cards:
         for line in card_lines(c, 200):
             out.append("".join(t for t, _ in line))
@@ -350,7 +406,7 @@ def run(stdscr):
                     pass
             return x + len(text)
 
-        squads = len({r[0] for r in rows})
+        squads = len(rows)
         put(0, 0, " legion dash ", "title")
         put(0, 13, "%d squad%s · %d session%s · %s   ↑↓ scroll · q quit" % (
             squads, "" if squads == 1 else "s", len(cards), "" if len(cards) == 1 else "s",

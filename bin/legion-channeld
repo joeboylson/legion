@@ -289,6 +289,17 @@ async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None
                 await handle_relay(m, m.get("from") or peer_team or "?", writer)
             elif mtype == "activity":
                 feed_append(m.get("team", peer_team or "?"), m.get("event", {}))
+                # Pass it on to the other teams connected here, so every
+                # subscriber of a channel sees every other one's activity.
+                # Only once: a passed-on line isn't passed on again.
+                if not m.get("relayed"):
+                    for team, other in list(CONNECTIONS.items()):
+                        if other is writer or team == m.get("team"):
+                            continue
+                        try:
+                            await send_line(other, dict(m, relayed=True))
+                        except OSError:
+                            pass
             elif mtype == "error":
                 log("peer error from %s: %s" % (peer_team, m.get("message")))
                 break
