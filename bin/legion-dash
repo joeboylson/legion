@@ -273,7 +273,7 @@ class Dash:
             if not working and not pid_alive(os.path.join(msgs, "waiting.pid")):
                 flags.append(("not listening", "warn"))
             cards.append({
-                "addr": addr, "working": working,
+                "squad": squad, "addr": addr, "working": working,
                 "idle": min([x for x in (changed, last) if x is not None], default=None),
                 "ctx": ctx, "mission": mission_of(root, position), "flags": flags,
                 "activity": list(self.activity.recent.get((squad, position), [])), "screen": text,
@@ -289,7 +289,7 @@ class Dash:
                 continue
             last = since(self.activity.last_time.get(key))
             cards.append({
-                "addr": "%s-%s" % key, "working": last is not None and last < WORKING_SECONDS, "idle": last,
+                "squad": key[0], "addr": "%s-%s" % key, "working": last is not None and last < WORKING_SECONDS, "idle": last,
                 "ctx": "", "mission": "", "flags": [("other squad, over the channel", "dim")],
                 "activity": list(self.activity.recent.get(key, [])), "screen": [],
             })
@@ -478,7 +478,8 @@ def serve(host, port):
     pages = templates_dir()
     files = {"/": ("index.html", "text/html; charset=utf-8"),
              "/index.html": ("index.html", "text/html; charset=utf-8"),
-             "/tokens.css": ("tokens.css", "text/css; charset=utf-8")}
+             "/tokens.css": ("tokens.css", "text/css; charset=utf-8"),
+             "/workbench.css": ("workbench.css", "text/css; charset=utf-8")}
     lock = threading.Lock()
     current = {"body": b"{}"}
 

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-mode="workbench">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,92 +8,120 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="workbench.css">
 <style>
-  .page-head { padding-block: var(--section-y) var(--space-6); }
-  .page-head .lead { margin: var(--space-3) 0 0; }
-
-  .sessions { display: flex; flex-direction: column; gap: var(--space-5); }
-
-  .session { padding: var(--space-5); min-width: 0; }
-  .session-head {
-    display: flex; flex-wrap: wrap; align-items: baseline;
-    gap: var(--space-3) var(--space-4);
+  /* No activity bar: the sidebar is the only navigation. */
+  .wb {
+    grid-template-columns: var(--sidebar) minmax(0, 1fr);
+    grid-template-areas:
+      "title   title"
+      "sidebar main"
+      "status  status";
   }
-  .session-head h3 { margin-right: var(--space-3); overflow-wrap: anywhere; }
-  .state { font-family: var(--font-mono); font-size: var(--text-label); color: var(--fg-muted); }
-  .state.working { color: var(--success); }
+  .wb-main { grid-template-rows: var(--bar) minmax(0, 1fr) var(--panel); }
+  @media (max-width: 48rem) {
+    .wb { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "main" "status"; }
+  }
+  .wb-titlebar .label { white-space: nowrap; }
+  .wb-titlebar .muted { justify-self: end; font-family: var(--font-mono); font-size: var(--text-label); }
+  .wb-search { cursor: text; padding-inline: var(--space-3); }
+  .wb-search input {
+    flex: 1; min-width: 0; border: 0; background: none; color: var(--fg);
+    font: inherit; outline: none;
+  }
+
+  .wb-sidebar .tree { flex: 1; }
+  .tree .dot { flex: none; }
+  .tree .squad { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-label);
+                 letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+  .tree .name { overflow: hidden; text-overflow: ellipsis; }
+
+  .sessions { display: grid; }
+  .session { padding: var(--space-4); border-bottom: var(--hairline); min-width: 0; }
+  .session-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+  .session-head .addr { font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+  .session-head .state { font-family: var(--font-mono); font-size: var(--text-label); color: var(--fg-muted); }
+  .session-head .state.working { color: var(--success); }
   .tag.warn { color: var(--warning); border-color: var(--warning); }
   .tag.bad { color: var(--danger); border-color: var(--danger); }
+  .tag.dim { border-style: dashed; }
 
-  .session-body {
-    display: grid; gap: var(--space-5); margin-top: var(--space-5);
-    grid-template-columns: minmax(0, 1fr);
-  }
-  @media (min-width: 48rem) {
+  .session-body { display: grid; gap: var(--space-4); margin-top: var(--space-3); grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 61.6875rem) {
     .session-body.has-screen { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   }
   .session-body > * { min-width: 0; }
-  .session-body .label { margin-bottom: var(--space-3); }
+  .session-body .label { display: block; margin-bottom: var(--space-2); }
 
-  .calls { list-style: none; margin: 0; padding: 0; max-width: none; }
-  .calls li {
-    margin: 0; padding: var(--space-2) 0; border-top: var(--hairline);
-    font-family: var(--font-mono); font-size: var(--text-label);
-    line-height: var(--leading-normal); overflow-wrap: anywhere;
-  }
-  .calls li:first-child { border-top: 0; }
-  .calls .when { color: var(--fg-muted); margin-right: var(--space-3); }
-  .calls .tool { color: var(--fg-muted); margin-right: var(--space-3); }
+  .calls { width: 100%; table-layout: fixed; }
+  .calls td { vertical-align: top; overflow-wrap: anywhere; }
+  .calls td:first-child { width: var(--space-8); white-space: nowrap; }
+  .calls td:nth-child(2) { width: var(--space-9); }
+  .calls td.when, .calls td.tool { color: var(--fg-muted); font-family: var(--font-mono); }
+  .calls td.tool { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .calls td.what { font-family: var(--font-mono); }
+  @media (max-width: 48rem) { .calls td:nth-child(2) { width: var(--space-8); } }
 
-  .screen {
-    margin: 0; padding: var(--space-4); border-radius: var(--radius-md);
-    background: var(--layer-1); font-size: var(--text-label);
-    line-height: var(--leading-normal); white-space: pre-wrap; overflow-wrap: anywhere;
-  }
+  .screen { margin: 0; padding: var(--space-3); border: var(--hairline); border-radius: var(--radius-md);
+            overflow-wrap: anywhere; }
 
-  .channel { margin-top: var(--space-7); padding-top: var(--space-6); border-top: var(--hairline); }
-  .channel h2 { margin-bottom: var(--space-5); }
-  .peers { margin: 0 0 var(--space-5); }
-  .peers p { margin: 0 0 var(--space-2); max-width: none; }
-  .events td { vertical-align: top; overflow-wrap: anywhere; }
-  .events td.when { white-space: nowrap; color: var(--fg-muted); font-family: var(--font-mono); }
-  .events td.squad { white-space: nowrap; }
+  .events td { vertical-align: top; overflow-wrap: anywhere; font-family: var(--font-mono); }
+  .events td.when { width: var(--space-8); white-space: nowrap; color: var(--fg-muted); }
+  .events td.squad { width: var(--space-9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
+  .events td.msg div { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   .events tr.bad td.msg { color: var(--danger); }
+  .events { table-layout: fixed; }
 
-  .empty { color: var(--fg-muted); }
-  .foot { padding-block: var(--space-7); }
+  .empty { display: grid; gap: var(--space-3); padding: var(--space-5) var(--space-4); color: var(--fg-muted); }
 </style>
 </head>
 <body>
-<main class="container">
-  <header class="page-head">
-    <div class="label">Legion</div>
-    <h1 class="display">Dash</h1>
-    <p class="lead" id="summary">Loading…</p>
+<div class="wb">
+  <header class="wb-titlebar">
+    <span class="label">Legion dash</span>
+    <label class="wb-search">
+      <svg class="icon--sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+      <input id="filter" type="search" placeholder="Filter sessions" autocomplete="off" aria-label="Filter sessions">
+    </label>
+    <span class="muted" id="updated"></span>
   </header>
 
-  <section aria-label="Sessions">
-    <div class="sessions" id="sessions"></div>
-  </section>
+  <aside class="wb-sidebar" aria-label="Squads">
+    <div class="pane-head"><span class="label">Squads</span><span class="count" id="session-count">0</span></div>
+    <ul class="tree" role="tree" id="tree"></ul>
+  </aside>
 
-  <section class="channel" id="channel" hidden>
-    <div class="label">Channel</div>
-    <h2>Traffic between squads</h2>
-    <div class="peers" id="peers"></div>
-    <table class="events"><tbody id="events"></tbody></table>
-  </section>
+  <main class="wb-main">
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="wb-editor" id="editor"></div>
+    <section class="wb-panel" aria-label="Channel">
+      <div class="panel-tabs" role="tablist">
+        <button type="button" role="tab" data-panel="traffic" aria-selected="true">Channel <span class="count" id="traffic-count">0</span></button>
+        <button type="button" role="tab" data-panel="peers" aria-selected="false">Peers <span class="count" id="peer-count">0</span></button>
+      </div>
+      <div class="panel-body" id="panel"></div>
+    </section>
+  </main>
 
-  <footer class="foot label" id="updated"></footer>
-</main>
+  <footer class="wb-status">
+    <span id="link"><span class="dot" style="color: var(--fg-muted)"></span>connecting</span>
+    <span id="totals"></span>
+    <div class="spacer"></div>
+    <span class="hide-sm" id="working"></span>
+    <button type="button" id="theme">Theme</button>
+  </footer>
+</div>
 
 <script>
+  const view = { focus: null, panel: "traffic", filter: "" };
+  let last = null;
+
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text !== undefined) n.textContent = text;
     return n;
   };
-
   const ago = (s) => {
     if (s === null || s === undefined) return "";
     s = Math.floor(s);
@@ -101,18 +129,71 @@
     if (s < 3600) return Math.floor(s / 60) + "m";
     return Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m";
   };
-
   const clock = (iso) => {
     const d = new Date(iso);
     return isNaN(d) ? (iso || "").slice(11, 19) : d.toLocaleTimeString([], { hour12: false });
   };
+  const oneLine = (t) => (t || "").split(/\s+/).join(" ");
+  const squadOf = (c) => c.squad || c.addr.replace(/-[^-]+$/, "");
+  const status = (c) => c.flags.some(([, s]) => s === "bad") ? "var(--danger)"
+    : c.flags.some(([, s]) => s === "warn") ? "var(--warning)"
+    : c.working ? "var(--success)" : "var(--fg-muted)";
+  const stateText = (c) => c.working ? "working" : (c.idle !== null ? "idle " + ago(c.idle) : "idle");
+
+  function visible(s) {
+    const f = view.filter.toLowerCase();
+    return s.cards.filter((c) => !f || c.addr.toLowerCase().includes(f) || (c.mission || "").toLowerCase().includes(f));
+  }
+
+  function tree(s, cards) {
+    const out = [];
+    const all = el("li");
+    const allBtn = el("button");
+    allBtn.type = "button";
+    allBtn.setAttribute("aria-selected", String(view.focus === null));
+    allBtn.append(el("span", "name", "All sessions"), el("span", "muted", String(cards.length)));
+    allBtn.onclick = () => { view.focus = null; render(); };
+    all.append(allBtn);
+    out.push(all);
+
+    const groups = new Map();
+    for (const c of cards) {
+      const q = squadOf(c);
+      if (!groups.has(q)) groups.set(q, []);
+      groups.get(q).push(c);
+    }
+    for (const [squad, list] of groups) {
+      const head = el("li");
+      const hb = el("button");
+      hb.type = "button";
+      hb.tabIndex = -1;
+      hb.append(el("span", "squad", squad), el("span", "muted", String(list.length)));
+      head.append(hb);
+      out.push(head);
+      for (const c of list) {
+        const li = el("li");
+        const b = el("button");
+        b.type = "button";
+        b.style.setProperty("--depth", "1");
+        b.setAttribute("aria-selected", String(view.focus === c.addr));
+        const dot = el("span", "dot");
+        dot.style.color = status(c);
+        b.append(dot, el("span", "name", c.addr.slice(squad.length + 1) || c.addr), el("span", "muted", c.working ? "" : ago(c.idle)));
+        b.title = c.addr + " · " + stateText(c);
+        b.onclick = () => { view.focus = c.addr; render(); };
+        li.append(b);
+        out.push(li);
+      }
+    }
+    return out;
+  }
 
   function card(c) {
-    const box = el("article", "card session");
+    const box = el("article", "session");
     const head = el("div", "session-head");
-    head.append(el("h3", "", c.addr));
-    head.append(el("span", "state" + (c.working ? " working" : ""),
-      c.working ? "working" : (c.idle !== null ? "idle " + ago(c.idle) : "idle")));
+    const dot = el("span", "dot");
+    dot.style.color = status(c);
+    head.append(dot, el("span", "addr", c.addr), el("span", "state" + (c.working ? " working" : ""), stateText(c)));
     if (c.ctx) head.append(el("span", "tag", "ctx " + c.ctx + "%"));
     if (c.mission) head.append(el("span", "tag", c.mission));
     for (const [text, style] of c.flags) head.append(el("span", "tag " + style, text));
@@ -120,59 +201,141 @@
 
     const body = el("div", "session-body" + (c.screen.length ? " has-screen" : ""));
     const acts = el("div");
-    acts.append(el("div", "label", "Last tool calls"));
-    const list = el("ul", "calls");
-    if (!c.activity.length) list.append(el("li", "empty", "none yet"));
-    for (const e of c.activity) {
-      const li = el("li");
-      li.append(el("span", "when", e.time ? clock(e.time) : ""));
-      li.append(el("span", "tool", e.tool || ""));
-      li.append(document.createTextNode((e.summary || "").split(/\s+/).join(" ")));
-      list.append(li);
+    acts.append(el("span", "label", "Last tool calls"));
+    const t = el("table", "calls");
+    const tb = el("tbody");
+    if (!c.activity.length) {
+      const tr = el("tr");
+      const td = el("td", "", "none yet");
+      td.colSpan = 3;
+      td.className = "muted";
+      tr.append(td);
+      tb.append(tr);
     }
-    acts.append(list);
+    for (const e of c.activity) {
+      const tr = el("tr");
+      const tool = el("td", "tool", e.tool || "");
+      tool.title = e.tool || "";
+      tr.append(el("td", "when", e.time ? clock(e.time) : ""), tool, el("td", "what", oneLine(e.summary)));
+      tb.append(tr);
+    }
+    t.append(tb);
+    acts.append(t);
     body.append(acts);
     if (c.screen.length) {
       const scr = el("div");
-      scr.append(el("div", "label", "Screen"));
-      scr.append(el("pre", "screen", c.screen.map((l) => l.trim()).join("\n")));
+      scr.append(el("span", "label", "Screen"));
+      scr.append(el("pre", "term screen", c.screen.map((l) => l.trim()).join("\n")));
       body.append(scr);
     }
     box.append(body);
     return box;
   }
 
-  function render(s) {
-    const n = s.cards.length, q = s.squads.length;
-    document.getElementById("summary").textContent = q
-      ? `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`
-      : "No squads running on this machine.";
-
-    const sessions = document.getElementById("sessions");
-    sessions.replaceChildren(...s.cards.map(card));
-    if (q && !n) sessions.append(el("p", "empty", "No sessions running."));
-
-    const channel = document.getElementById("channel");
-    channel.hidden = !s.peers.length;
-    document.getElementById("peers").replaceChildren(...s.peers.map(([squad, connected]) =>
-      el("p", "muted", `${squad} connected to: ${connected.join(", ") || "nobody"}`)));
-    document.getElementById("events").replaceChildren(...s.events.map(([ts, squad, msg]) => {
+  function panel(s) {
+    const body = document.getElementById("panel");
+    if (view.panel === "peers") {
+      if (!s.peers.length) return body.replaceChildren(el("div", "empty", "No squad here has a channel open."));
+      const ul = el("ul", "problems");
+      for (const [squad, connected] of s.peers) {
+        const li = el("li");
+        const dot = el("span", "dot");
+        dot.style.color = connected.length ? "var(--success)" : "var(--fg-muted)";
+        li.append(dot, el("span", "", squad), el("span", "muted", connected.length ? "connected to " + connected.join(", ") : "not connected to anyone"));
+        ul.append(li);
+      }
+      return body.replaceChildren(ul);
+    }
+    if (!s.events.length) return body.replaceChildren(el("div", "empty", "No channel traffic yet."));
+    const t = el("table", "events");
+    const tb = el("tbody");
+    for (const [ts, squad, msg] of s.events.slice().reverse()) {
       const tr = el("tr", /failed|cannot|rejected|dropped|couldn't/.test(msg) ? "bad" : "");
-      tr.append(el("td", "when", clock(ts)), el("td", "squad", squad), el("td", "msg", msg.split(/\s+/).join(" ")));
-      return tr;
-    }));
-    document.getElementById("updated").textContent = "Updated " + clock(s.time);
+      const cell = el("td", "msg");
+      const text = el("div", "", oneLine(msg));
+      text.title = oneLine(msg);
+      cell.append(text);
+      tr.append(el("td", "when", clock(ts)), el("td", "squad", squad), cell);
+      tb.append(tr);
+    }
+    t.append(tb);
+    body.replaceChildren(t);
+  }
+
+  function render() {
+    const s = last;
+    if (!s) return;
+    const cards = visible(s);
+    if (view.focus && !s.cards.some((c) => c.addr === view.focus)) view.focus = null;
+    const shown = view.focus ? cards.filter((c) => c.addr === view.focus) : cards;
+
+    document.getElementById("tree").replaceChildren(...tree(s, cards));
+    document.getElementById("session-count").textContent = s.cards.length;
+
+    const tabs = document.getElementById("tabs");
+    const tab = (label, key) => {
+      const b = el("button", "tab", label);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", String(view.focus === key));
+      b.onclick = () => { view.focus = key; render(); };
+      return b;
+    };
+    tabs.replaceChildren(tab("All sessions", null), ...(view.focus ? [tab(view.focus, view.focus)] : []));
+
+    const editor = document.getElementById("editor");
+    if (!s.squads.length) {
+      editor.replaceChildren(el("div", "empty", "No squads running on this machine."));
+    } else if (!shown.length) {
+      editor.replaceChildren(el("div", "empty", view.filter ? "No sessions match the filter." : "No sessions running."));
+    } else {
+      const list = el("div", "sessions");
+      list.append(...shown.map(card));
+      editor.replaceChildren(list);
+    }
+
+    for (const b of document.querySelectorAll(".panel-tabs button")) b.setAttribute("aria-selected", String(b.dataset.panel === view.panel));
+    document.getElementById("traffic-count").textContent = s.events.length;
+    document.getElementById("peer-count").textContent = s.peers.reduce((n, [, c]) => n + c.length, 0);
+    panel(s);
+
+    const q = new Set([...s.squads, ...s.cards.map(squadOf)]).size, n = s.cards.length;
+    document.getElementById("totals").textContent = `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`;
+    document.getElementById("working").textContent = s.cards.filter((c) => c.working).length + " working";
+    document.getElementById("updated").textContent = "updated " + clock(s.time);
+  }
+
+  function link(ok, text) {
+    const l = document.getElementById("link");
+    const dot = el("span", "dot");
+    dot.style.color = ok ? "var(--success)" : "var(--danger)";
+    l.replaceChildren(dot, document.createTextNode(text));
   }
 
   async function tick() {
     try {
       const r = await fetch("api/state", { cache: "no-store" });
-      if (r.ok) render(await r.json());
-      else document.getElementById("updated").textContent = "Couldn't reach legion dash (" + r.status + ")";
+      if (!r.ok) throw new Error(r.status);
+      last = await r.json();
+      link(true, "live");
+      render();
     } catch (e) {
-      document.getElementById("updated").textContent = "Couldn't reach legion dash. Is it still running?";
+      link(false, "can't reach legion dash");
     }
   }
+
+  document.getElementById("filter").addEventListener("input", (e) => { view.filter = e.target.value; render(); });
+  for (const b of document.querySelectorAll(".panel-tabs button")) b.onclick = () => { view.panel = b.dataset.panel; render(); };
+
+  const root = document.documentElement;
+  const savedTheme = (() => { try { return localStorage.getItem("legion-dash-theme"); } catch (e) { return null; } })();
+  if (savedTheme) root.dataset.theme = savedTheme;
+  document.getElementById("theme").onclick = () => {
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("legion-dash-theme", root.dataset.theme); } catch (e) {}
+  };
+
   tick();
   setInterval(tick, 2000);
 </script>
