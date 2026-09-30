@@ -18,7 +18,11 @@
       "sidebar main"
       "status  status";
   }
-  .wb-main { grid-template-rows: var(--bar) minmax(0, 1fr) var(--panel); }
+  .wb-main { grid-template-rows: var(--bar) minmax(0, 1fr); }
+  .tab .close { padding: 0 var(--space-1); border-radius: var(--radius-sm); color: var(--fg-muted); }
+  .tab .close:hover { background: var(--layer-2); color: var(--fg); }
+  .channel-view { padding: var(--space-4); display: grid; gap: var(--space-5); }
+  .channel-view .label { display: block; margin-bottom: var(--space-2); }
   @media (max-width: 48rem) {
     .wb { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "main" "status"; }
   }
@@ -68,7 +72,7 @@
   .events td { vertical-align: top; overflow-wrap: anywhere; font-family: var(--font-mono); }
   .events td.when { width: var(--space-8); white-space: nowrap; color: var(--fg-muted); }
   .events td.squad { width: var(--space-9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
-  .events td.msg div { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
   .events tr.bad td.msg { color: var(--danger); }
   .events { table-layout: fixed; }
 
@@ -94,13 +98,6 @@
   <main class="wb-main">
     <div class="tabs" role="tablist" id="tabs"></div>
     <div class="wb-editor" id="editor"></div>
-    <section class="wb-panel" aria-label="Channel">
-      <div class="panel-tabs" role="tablist">
-        <button type="button" role="tab" data-panel="traffic" aria-selected="true">Channel <span class="count" id="traffic-count">0</span></button>
-        <button type="button" role="tab" data-panel="peers" aria-selected="false">Peers <span class="count" id="peer-count">0</span></button>
-      </div>
-      <div class="panel-body" id="panel"></div>
-    </section>
   </main>
 
   <footer class="wb-status">
@@ -108,12 +105,15 @@
     <span id="totals"></span>
     <div class="spacer"></div>
     <span class="hide-sm" id="working"></span>
+    <button type="button" id="channel-btn" title="Open the channel in a tab"><span class="dot" style="color: var(--fg-muted)"></span>Channel <span class="count" id="peer-count">0</span></button>
     <button type="button" id="theme">Theme</button>
   </footer>
 </div>
 
 <script>
-  const view = { focus: null, panel: "traffic", filter: "" };
+  // tab: "sessions" or "channel". The channel tab exists once opened from
+  // the status bar, until it's closed.
+  const view = { focus: null, tab: "sessions", channelOpen: false, filter: "" };
   let last = null;
 
   const el = (tag, cls, text) => {
@@ -150,9 +150,9 @@
     const all = el("li");
     const allBtn = el("button");
     allBtn.type = "button";
-    allBtn.setAttribute("aria-selected", String(view.focus === null));
+    allBtn.setAttribute("aria-selected", String(view.tab === "sessions" && view.focus === null));
     allBtn.append(el("span", "name", "All sessions"), el("span", "muted", String(cards.length)));
-    allBtn.onclick = () => { view.focus = null; render(); };
+    allBtn.onclick = () => { view.focus = null; view.tab = "sessions"; render(); };
     all.append(allBtn);
     out.push(all);
 
@@ -166,9 +166,9 @@
       const head = el("li");
       const hb = el("button");
       hb.type = "button";
-      hb.setAttribute("aria-selected", String(view.focus === "squad:" + squad));
+      hb.setAttribute("aria-selected", String(view.tab === "sessions" && view.focus === "squad:" + squad));
       hb.append(el("span", "squad", squad), el("span", "muted", String(list.length)));
-      hb.onclick = () => { view.focus = "squad:" + squad; render(); };
+      hb.onclick = () => { view.focus = "squad:" + squad; view.tab = "sessions"; render(); };
       head.append(hb);
       out.push(head);
       for (const c of list) {
@@ -176,12 +176,12 @@
         const b = el("button");
         b.type = "button";
         b.style.setProperty("--depth", "1");
-        b.setAttribute("aria-selected", String(view.focus === c.addr));
+        b.setAttribute("aria-selected", String(view.tab === "sessions" && view.focus === c.addr));
         const dot = el("span", "dot");
         dot.style.color = status(c);
         b.append(dot, el("span", "name", c.addr.slice(squad.length + 1) || c.addr), el("span", "muted", c.working ? "" : ago(c.idle)));
         b.title = c.addr + " · " + stateText(c);
-        b.onclick = () => { view.focus = c.addr; render(); };
+        b.onclick = () => { view.focus = c.addr; view.tab = "sessions"; render(); };
         li.append(b);
         out.push(li);
       }
@@ -233,10 +233,12 @@
     return box;
   }
 
-  function panel(s) {
-    const body = document.getElementById("panel");
-    if (view.panel === "peers") {
-      if (!s.peers.length) return body.replaceChildren(el("div", "empty", "No squad here has a channel open."));
+  function channelView(s) {
+    const box = el("div", "channel-view");
+    const peers = el("section");
+    peers.append(el("span", "label", "Peers"));
+    if (!s.peers.length) peers.append(el("div", "muted", "No squad here has a channel open."));
+    else {
       const ul = el("ul", "problems");
       for (const [squad, connected] of s.peers) {
         const li = el("li");
@@ -245,22 +247,24 @@
         li.append(dot, el("span", "", squad), el("span", "muted", connected.length ? "connected to " + connected.join(", ") : "not connected to anyone"));
         ul.append(li);
       }
-      return body.replaceChildren(ul);
+      peers.append(ul);
     }
-    if (!s.events.length) return body.replaceChildren(el("div", "empty", "No channel traffic yet."));
-    const t = el("table", "events");
-    const tb = el("tbody");
-    for (const [ts, squad, msg] of s.events.slice().reverse()) {
-      const tr = el("tr", /failed|cannot|rejected|dropped|couldn't/.test(msg) ? "bad" : "");
-      const cell = el("td", "msg");
-      const text = el("div", "", oneLine(msg));
-      text.title = oneLine(msg);
-      cell.append(text);
-      tr.append(el("td", "when", clock(ts)), el("td", "squad", squad), cell);
-      tb.append(tr);
+    const traffic = el("section");
+    traffic.append(el("span", "label", "Traffic"));
+    if (!s.events.length) traffic.append(el("div", "muted", "No channel traffic yet."));
+    else {
+      const t = el("table", "events");
+      const tb = el("tbody");
+      for (const [ts, squad, msg] of s.events.slice().reverse()) {
+        const tr = el("tr", /failed|cannot|rejected|dropped|couldn't/.test(msg) ? "bad" : "");
+        tr.append(el("td", "when", clock(ts)), el("td", "squad", squad), el("td", "msg", oneLine(msg)));
+        tb.append(tr);
+      }
+      t.append(tb);
+      traffic.append(t);
     }
-    t.append(tb);
-    body.replaceChildren(t);
+    box.append(peers, traffic);
+    return box;
   }
 
   function render() {
@@ -278,19 +282,32 @@
     document.getElementById("session-count").textContent = s.cards.length;
 
     const tabs = document.getElementById("tabs");
-    const tab = (label, key) => {
+    const tab = (label, selected, onclick) => {
       const b = el("button", "tab", label);
       b.type = "button";
       b.setAttribute("role", "tab");
-      b.setAttribute("aria-selected", String(view.focus === key));
-      b.onclick = () => { view.focus = key; render(); };
+      b.setAttribute("aria-selected", String(selected));
+      b.onclick = onclick;
       return b;
     };
+    const onSessions = view.tab === "sessions";
     const label = view.focus && view.focus.startsWith("squad:") ? view.focus.slice(6) + " (squad)" : view.focus;
-    tabs.replaceChildren(tab("All sessions", null), ...(view.focus ? [tab(label, view.focus)] : []));
+    const list = [tab("All sessions", onSessions && view.focus === null, () => { view.focus = null; view.tab = "sessions"; render(); })];
+    if (view.focus) list.push(tab(label, onSessions, () => { view.tab = "sessions"; render(); }));
+    if (view.channelOpen) {
+      const ch = tab("Channel", !onSessions, () => { view.tab = "channel"; render(); });
+      const x = el("span", "close", "×");
+      x.title = "Close";
+      x.onclick = (e) => { e.stopPropagation(); view.channelOpen = false; view.tab = "sessions"; render(); };
+      ch.append(x);
+      list.push(ch);
+    }
+    tabs.replaceChildren(...list);
 
     const editor = document.getElementById("editor");
-    if (!s.squads.length) {
+    if (!onSessions) {
+      editor.replaceChildren(channelView(s));
+    } else if (!s.squads.length) {
       editor.replaceChildren(el("div", "empty", "No squads running on this machine."));
     } else if (!shown.length) {
       editor.replaceChildren(el("div", "empty", view.filter ? "No sessions match the filter." : "No sessions running."));
@@ -300,10 +317,9 @@
       editor.replaceChildren(list);
     }
 
-    for (const b of document.querySelectorAll(".panel-tabs button")) b.setAttribute("aria-selected", String(b.dataset.panel === view.panel));
-    document.getElementById("traffic-count").textContent = s.events.length;
-    document.getElementById("peer-count").textContent = s.peers.reduce((n, [, c]) => n + c.length, 0);
-    panel(s);
+    const connected = s.peers.reduce((n, [, c]) => n + c.length, 0);
+    document.getElementById("peer-count").textContent = connected;
+    document.querySelector("#channel-btn .dot").style.color = connected ? "var(--success)" : "var(--fg-muted)";
 
     const q = new Set([...s.squads, ...s.cards.map(squadOf)]).size, n = s.cards.length;
     document.getElementById("totals").textContent = `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`;
@@ -331,7 +347,9 @@
   }
 
   document.getElementById("filter").addEventListener("input", (e) => { view.filter = e.target.value; render(); });
-  for (const b of document.querySelectorAll(".panel-tabs button")) b.onclick = () => { view.panel = b.dataset.panel; render(); };
+  document.getElementById("channel-btn").onclick = () => { view.channelOpen = true; view.tab = "channel"; render(); };
+  // http://<host>:7580/#channel opens straight on the channel tab.
+  if (location.hash === "#channel") { view.channelOpen = true; view.tab = "channel"; }
 
   const root = document.documentElement;
   const savedTheme = (() => { try { return localStorage.getItem("legion-dash-theme"); } catch (e) { return null; } })();

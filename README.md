@@ -441,8 +441,9 @@ once as plain text.
 `legion dash --web` serves the same view as a web page at
 `http://<this machine>:7580/` that updates itself every second. It's laid
 out like an editor: squads and their sessions in a sidebar you can filter
-and click to focus on one, and channel traffic and peers in a panel at the
-bottom. Change the port with `--port`. It listens on every network this machine is on, so anyone who can
+and click to focus on one squad or session, and a Channel button in the
+status bar that opens the channel's peers and traffic in a tab (or go
+straight there with `#channel` on the end of the address). Change the port with `--port`. It listens on every network this machine is on, so anyone who can
 reach the machine can open the page, over Tailscale for example. There's no
 password, and the page shows each session's screen, so pass
 `--host 127.0.0.1` to keep it to this machine only.
