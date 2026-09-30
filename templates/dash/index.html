@@ -35,8 +35,7 @@
   .meter .fill { height: 100%; background: var(--fg-muted); }
   .meter.warn .fill { background: var(--warning); }
   .meter.bad .fill { background: var(--danger); }
-  .meter.warn .pct { color: var(--warning); }
-  .meter.bad .pct { color: var(--danger); }
+  .meter { cursor: default; padding-block: var(--space-2); }
   .wb-search { cursor: text; padding-inline: var(--space-3); }
   .wb-search input {
     flex: 1; min-width: 0; border: 0; background: none; color: var(--fg);
@@ -96,7 +95,7 @@
       <svg class="icon--sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
       <input id="filter" type="search" placeholder="Filter sessions" autocomplete="off" aria-label="Filter sessions">
     </label>
-    <div class="usage" id="usage" title="Your Claude plan's usage, as the squads' status lines last reported it"></div>
+    <div class="usage" id="usage"></div>
   </header>
 
   <aside class="wb-sidebar" aria-label="Squads">
@@ -342,8 +341,9 @@
     const box = document.getElementById("usage");
     if (!u) return box.replaceChildren(el("span", "muted", "usage not reported yet"));
     const parts = [];
-    for (const [key, name, opts] of [["five_hour", "5h", { hour: "numeric", minute: "2-digit" }],
-                                     ["seven_day", "week", { weekday: "short", hour: "numeric", minute: "2-digit" }]]) {
+    const age = Date.now() / 1000 - u.as_of;
+    for (const [key, name, opts] of [["five_hour", "5-hour", { hour: "numeric", minute: "2-digit" }],
+                                     ["seven_day", "Weekly", { weekday: "short", hour: "numeric", minute: "2-digit" }]]) {
       const w = u[key];
       if (!w || w.used_percentage === undefined) continue;
       const pct = Math.round(w.used_percentage);
@@ -353,12 +353,14 @@
       fill.style.display = "block";
       fill.style.width = Math.min(100, pct) + "%";
       bar.append(fill);
-      m.append(el("span", "muted", name), bar, el("span", "pct", pct + "%"));
-      if (w.resets_at) m.append(el("span", "muted", "resets " + new Date(w.resets_at * 1000).toLocaleString([], opts)));
+      // Just the bar; the numbers are in its tooltip.
+      m.append(bar);
+      m.title = `${name} usage: ${pct}%`
+        + (w.resets_at ? `, resets ${new Date(w.resets_at * 1000).toLocaleString([], opts)}` : "")
+        + (age > 600 ? ` (as of ${ago(age)} ago)` : "");
+      m.setAttribute("aria-label", m.title);
       parts.push(m);
     }
-    const age = Date.now() / 1000 - u.as_of;
-    if (age > 600) parts.push(el("span", "muted", "as of " + ago(age) + " ago"));
     box.replaceChildren(...parts);
   }
 
