@@ -242,13 +242,11 @@ Claude Code conversation and saves its ID in `local/`. If you close that
 operator and start it again, Legion reopens the same conversation instead
 of starting fresh. You don't need to manage this.
 
-A saved id can occasionally be one that was never actually registered — a
-session that was stopped before it took its first real turn never gets
-created server-side, so there's nothing to reopen. Legion notices a resume
-failing almost instantly (a real conversation takes many seconds minimum
-to end; a missing one fails far faster than that) and starts a fresh
-conversation instead, rather than the position's pane just disappearing
-with no explanation.
+A saved ID can occasionally point at a conversation that was never saved.
+That happens with a session stopped before its first reply, or one cleared
+and never used again. Claude Code keeps each saved conversation as a file
+named after its ID, so Legion only reopens an ID that has one, and starts
+a fresh conversation otherwise.
 
 ### Full conversations hand off and clear
 
@@ -306,7 +304,13 @@ The next day, run `legion commander`. It reads its note and the active
 missions, then starts each operator that had a mission again. Each one
 picks up from the handoff note in its mission file. If the laptop only
 slept and the commander is still running, `legion commander` tells that
-one to pick up instead of starting another.
+one to pick up instead of starting another. The commander resumes the same
+way whenever it starts with missions still in `active/`, even if the squad
+was just stood down instead of wrapped up.
+
+The commander doesn't have to remember to clear itself either. During a
+wrap-up, once its handoff is the last section of the squad log, the end of
+its next reply clears it.
 
 ### How work moves
 
@@ -720,7 +724,14 @@ with the operators each one announced.
 
 A subscriber to your channel is also a peer of anyone else subscribed to
 it: the listening side relays between the teams connected to it, not just
-to itself, so one open channel can join several squads together.
+to itself, so one open channel can join several squads together. The
+listening side tells each subscriber who else is connected, so
+`legion channel peers` lists them with `via=<host>`, and a send to one of
+them goes through the host.
+
+A message for a team that isn't reachable stays queued. The channel keeps
+trying for 10 minutes, then moves it to `.legion/channel/outbox/failed/`
+and logs it. `legion channel send` warns you when the team isn't connected.
 
 **Activity crosses the channel too, automatically.** Each side of a
 connection also mirrors its own [`activity.log`](#watching-activity-legion-activity)

@@ -599,27 +599,17 @@ open_window() {
   # squad under /tmp hung there every time despite trust_folder running).
   local project_dir="$(cd "$(dirname "$LEGION_ROOT")" && pwd -P)"
   trust_folder "$project_dir"
-  # A generated launch script, not an inline exec, so resuming a stale
-  # session can recover instead of the pane just dying. --resume against a
-  # session that never actually took a turn fails with "No conversation
-  # found" — that happens whenever something (an auto-started commander
-  # with no kickoff, a killed-mid-startup session) never sent claude a
-  # first prompt, so nothing was ever registered server-side to resume
-  # (verified live: a commander started this way left its pane silently
-  # gone the instant claude exited, no trace of why). Recover by dropping
-  # the stale id and starting fresh, same as if there'd never been one.
+  # A generated launch script, so a stale saved id can recover instead of
+  # the pane just dying. --resume against a session that never took a turn
+  # fails with "No conversation found": nothing was ever saved to resume
+  # (an auto-started commander with no kickoff, a session killed during
+  # startup, a /clear nobody typed into since). Claude Code saves every
+  # conversation that did take a turn as <id>.jsonl under its projects
+  # folder, so resume only an id that has one, and start fresh otherwise.
   #
-  # Detection is by elapsed time, not by scanning claude's own stderr for
-  # the error text: redirecting an interactive claude's stderr to a file so
-  # it can be grepped breaks its terminal detection even with stdin/stdout
-  # still a real PTY, and it exits instantly with nothing printed at all —
-  # verified live, and confusing to debug precisely because it fails
-  # silently the same way the bug being fixed does. A real "no conversation
-  # found" failure is near-instant (well under a second); any actual
-  # interactive use, even a session someone opens and immediately closes,
-  # takes many seconds. So: nonzero exit within a few seconds means a stale
-  # id, not a real ended session — retry fresh; a real session's stdin,
-  # stdout and stderr are never touched.
+  # Either way the script execs claude rather than running it as a child,
+  # so tmux reports the pane as claude, not bash: the channel's wake-up
+  # skips panes that look like a plain shell.
   local id_file="$LEGION_LOCAL/$operator"
   local gen="$LEGION_LOCAL/generated/$(operator_base "$operator")"
   mkdir -p "$gen"
@@ -630,22 +620,13 @@ set -u
 id_file=$(printf '%q' "$id_file")
 if [ -f "\$id_file" ]; then
   id="\$(cat "\$id_file")"
-  start=\$(date +%s)
-  claude --name $(printf '%q' "$name") --resume "\$id" $rest
-  rc=\$?
-  elapsed=\$(( \$(date +%s) - start ))
-  if [ \$rc -ne 0 ] && [ \$elapsed -lt 5 ]; then
-    rm -f "\$id_file"
-    id="\$(uuidgen | tr '[:upper:]' '[:lower:]')"
-    echo "\$id" > "\$id_file"
-    exec claude --name $(printf '%q' "$name") --session-id "\$id" $rest
+  if ls "\${CLAUDE_CONFIG_DIR:-\$HOME/.claude}"/projects/*/"\$id".jsonl >/dev/null 2>&1; then
+    exec claude --name $(printf '%q' "$name") --resume "\$id" $rest
   fi
-  exit \$rc
-else
-  id="\$(uuidgen | tr '[:upper:]' '[:lower:]')"
-  echo "\$id" > "\$id_file"
-  exec claude --name $(printf '%q' "$name") --session-id "\$id" $rest
 fi
+id="\$(uuidgen | tr '[:upper:]' '[:lower:]')"
+echo "\$id" > "\$id_file"
+exec claude --name $(printf '%q' "$name") --session-id "\$id" $rest
 SCRIPT
   chmod +x "$launch"
   # Re-source activate inside the new pane before running that script, so
@@ -958,9 +939,19 @@ INTRO
   cmd_grid
 }
 
-# What commander is told on its first start after a wrap-up.
+# What commander is told when it starts with work still in active/: after a
+# wrap-up, or after the squad was simply stood down mid-mission.
 wrap_up_resume() {
-  echo "The squad wrapped up for the day on $(cat "$LEGION_LOCAL/wrapped-up"). Before anything else, read the latest '## Handoff' section at the end of $LEGION_LOG and the missions in $LEGION_MISSIONS/active/. Start each operator that holds an active mission again with that mission; it picks up from the Handoff note in its mission file. Tell the human in one line what you're resuming."
+  local why="There are missions still in progress from before."
+  [ -f "$LEGION_LOCAL/wrapped-up" ] && why="The squad wrapped up for the day on $(cat "$LEGION_LOCAL/wrapped-up")."
+  echo "$why Before anything else, read the latest '## Handoff' section at the end of $LEGION_LOG and the missions in $LEGION_MISSIONS/active/. Start each operator that holds an active mission again with that mission; it picks up from the Handoff note in its mission file. Tell the human in one line what you're resuming."
+}
+
+# Whether any mission file is in active/.
+missions_active() {
+  local f
+  for f in "$LEGION_MISSIONS/active"/*.md; do [ -f "$f" ] && return 0; done
+  return 1
 }
 
 cmd_commander() {
@@ -1027,8 +1018,10 @@ Squad check every $every: right after you start 'legion message wait', invoke th
   # sits deaf at an empty prompt while messages (a channel's, say) pile up.
   local kickoff="${LEGION_KICKOFF:-No mission yet. Start 'legion message wait' in the background and wait for messages from the human, the squad or another squad on the channel.}"
   [ -n "$mission" ] && kickoff="Get started: $mission"
-  # The squad wrapped up last time (cmd_wrap_up): pick up from the notes.
-  if [ -f "$LEGION_LOCAL/wrapped-up" ]; then
+  # Work left from before, after a wrap-up or a plain stand-down: pick up
+  # from the notes. A deploy's own kickoff (LEGION_KICKOFF) says what to do
+  # instead, unless the squad wrapped up.
+  if [ -f "$LEGION_LOCAL/wrapped-up" ] || { [ -z "${LEGION_KICKOFF:-}" ] && missions_active; }; then
     kickoff="$kickoff $(wrap_up_resume)"
     rm -f "$LEGION_LOCAL/wrapped-up"
   fi
@@ -1550,6 +1543,7 @@ $text" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $
       # stop_hook_active means this stop already came from a hook block, so
       # let it through rather than loop.
       active="$(printf '%s' "$input" | jq -r '.stop_hook_active // false' 2>/dev/null)"
+      wrap_up_stop "$me"
       # A full conversation hands off and clears (see context_stop). It's
       # about to be cleared, so it doesn't need a message wait first.
       context_stop "$me" "$active" && return 0
@@ -1673,13 +1667,17 @@ cmd_channel() {
         '{to: $to, text: $text} + (if $op == "" then {} else {operator: $op} end)' \
         > "$dir/outbox/$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM.json"
       echo "queued for $team$([ -n "$operator" ] && echo " ($operator)")"
+      if [ ! -f "$dir/peers/$(printf '%s' "$team" | tr -c 'a-zA-Z0-9_-' '_').json" ] \
+         || [ "$(jq -r '.connected // false' "$dir/peers/$(printf '%s' "$team" | tr -c 'a-zA-Z0-9_-' '_').json" 2>/dev/null)" != "true" ]; then
+        echo "note: $team isn't connected right now. The channel keeps trying for 10 minutes, then keeps it in .legion/channel/outbox/failed/. 'legion channel peers' shows who's reachable." >&2
+      fi
       ;;
     peers)
       local f found=0
       for f in "$dir/peers"/*.json; do
         [ -e "$f" ] || continue
         found=1
-        jq -r '"\(.team)  connected=\(.connected // false)  operators=\([.operators[]?.name] | join(","))"' "$f"
+        jq -r '"\(.team)  connected=\(.connected // false)\(if .via then "  via=\(.via)" else "" end)  operators=\([.operators[]?.name] | join(","))"' "$f"
       done
       [ "$found" -eq 1 ] || echo "(no peers known yet)"
       ;;
@@ -1844,6 +1842,20 @@ cmd_refresh() {
   fi
 }
 
+# Called from the Stop hook. During a wrap-up, once commander's handoff is
+# the last section of the log, written since the wrap-up began, its stop
+# clears it as `legion refresh --stay` would. Commander doesn't have to
+# remember to run that, and its Stop hook no longer holds it back to start a
+# message wait (which left it running, never cleared).
+wrap_up_stop() {
+  local marker
+  marker="$(context_dir)/wrapping-up"
+  [ "$1" = "commander" ] && [ -f "$marker" ] && [ "$LEGION_LOG" -nt "$marker" ] || return 0
+  awk '/^## / { last = $0 } END { exit !(last ~ /^## Handoff/) }' "$LEGION_LOG" 2>/dev/null || return 0
+  rm -f "$marker"
+  cmd_refresh --stay >/dev/null
+}
+
 # End of day: the commander has every operator stop at a good point, write
 # a handoff note and clear without starting again, then does the same.
 # The next start picks up from those notes (see cmd_commander).
@@ -1851,6 +1863,8 @@ cmd_wrap_up() {
   require_active
   [ -n "$(pane_of "$LEGION_SQUAD_NAME-commander")" ] || { echo "legion: commander isn't running, so there's no squad to wrap up" >&2; exit 1; }
   LEGION_MESSAGE_AS=human cmd_message send commander "WRAP-UP: the human is wrapping up for the day. Wrap up the squad as your instructions describe." >/dev/null
+  mkdir -p "$(context_dir)"
+  touch "$(context_dir)/wrapping-up"
   echo "asked commander to wrap up the squad; it tells you when everyone has handed off and it's safe to shut down"
 }
 
@@ -1957,9 +1971,12 @@ cmd_context() {
 # each pane.
 running_squads() {
   local squad root start sep
-  # Not a tab: read merges runs of tabs, which an empty field makes.
+  # tmux gets tabs (3.4 escapes control characters in -F output), turned
+  # into \037 here because read merges runs of tabs, which an empty field
+  # makes.
   sep="$(printf '\037')"
-  { tmux list-panes -a -F "#{@legion_squad}$sep#{@legion_root}$sep#{pane_start_command}" 2>/dev/null || true; } \
+  { tmux list-panes -a -F '#{@legion_squad}	#{@legion_root}	#{pane_start_command}' 2>/dev/null || true; } \
+    | tr '\t' "$sep" \
     | while IFS="$sep" read -r squad root start; do
         [ -n "$squad" ] || continue
         # Panes started before @legion_root existed: take the folder from

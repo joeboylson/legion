@@ -142,6 +142,56 @@ def write_peer(team, **fields):
 # team -> asyncio.StreamWriter, for whichever side (listener or subscriber)
 # currently holds an open connection to that team.
 CONNECTIONS = {}
+# team -> the connected team that says it can reach it. Each side tells the
+# others which teams it's connected to (a "peers" line), so a subscriber can
+# send to another subscriber of the same channel through the host.
+VIA = {}
+# How long an outbox message waits for its team to become reachable before
+# it's moved to outbox/failed/.
+UNDELIVERABLE_SECONDS = 600
+# Teams this side subscribed to (dialled out to): the hosts of channels.
+OUTBOUND = set()
+# Teams that have told us who they're connected to (a "peers" line).
+SAYS_PEERS = set()
+
+
+async def broadcast_peers():
+    """Tells every connection which teams this side is connected to."""
+    teams = sorted(CONNECTIONS)
+    for writer in list(CONNECTIONS.values()):
+        try:
+            await send_line(writer, {"type": "peers", "teams": teams})
+        except OSError:
+            pass
+
+
+def learn_peers(hub, teams):
+    """Records the teams a connected team can reach, replacing what it said before."""
+    for team in [t for t, h in VIA.items() if h == hub and t not in teams]:
+        del VIA[team]
+        if team not in CONNECTIONS:
+            write_peer(team, connected=False, via=None, last_seen=time.time())
+    for team in teams:
+        if team in (SQUAD, hub) or team in CONNECTIONS:
+            continue
+        VIA[team] = hub
+        write_peer(team, connected=True, via=hub, last_seen=time.time())
+
+
+def route(team):
+    """The writer that reaches a team: directly, or through a team that can reach it."""
+    if team in CONNECTIONS:
+        return CONNECTIONS[team]
+    hub = VIA.get(team)
+    if hub in CONNECTIONS:
+        return CONNECTIONS[hub]
+    # A host running an older Legion never says who it's connected to, but
+    # it still passes relays on, so hand it to the host.
+    for hub in sorted(OUTBOUND):
+        if hub in CONNECTIONS and hub not in SAYS_PEERS:
+            VIA[team] = hub
+            return CONNECTIONS[hub]
+    return None
 
 
 def deliver_locally(operator, text, sender_team):
@@ -174,17 +224,25 @@ def feed_append(team, event):
         f.write(json.dumps({"team": team, **event}) + "\n")
 
 
-async def handle_relay(msg, sender_team):
+async def handle_relay(msg, sender_team, writer=None):
     to = msg.get("to", "")
     operator = msg.get("operator") or "commander"
     text = msg.get("text", "")
     if to == SQUAD:
         deliver_locally(operator, text, sender_team)
     elif to in CONNECTIONS:
+        # Only to a direct connection, never on through VIA: one hop at
+        # most, so relays can't loop.
         await send_line(CONNECTIONS[to], msg)
         log("forwarded relay from %s to %s" % (sender_team, to))
     else:
         log("relay to unknown/disconnected team %r dropped (from %s)" % (to, sender_team))
+        # Tell whoever handed it over, so it isn't lost without a word.
+        if writer is not None:
+            try:
+                await send_line(writer, {"type": "undeliverable", "to": to, "text": text})
+            except OSError:
+                pass
 
 
 async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None):
@@ -210,15 +268,25 @@ async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None
                     break
                 peer_team = m.get("team") or peer_team or "?"
                 CONNECTIONS[peer_team] = writer
+                VIA.pop(peer_team, None)
+                if initiated_by_us:
+                    OUTBOUND.add(peer_team)
                 write_peer(peer_team, operators=m.get("operators", []), connected=True,
                            direction="outbound" if initiated_by_us else "inbound",
-                           last_seen=time.time())
+                           via=None, last_seen=time.time())
                 if not initiated_by_us and not replied:
                     await send_line(writer, hello())
                     replied = True
                 log("connected: %s" % peer_team)
+                await broadcast_peers()
+            elif mtype == "peers":
+                SAYS_PEERS.add(peer_team)
+                learn_peers(peer_team, m.get("teams", []))
+            elif mtype == "undeliverable":
+                log("%s couldn't pass on the message to %s: %s" % (peer_team, m.get("to"), m.get("text", "")))
             elif mtype == "relay":
-                await handle_relay(m, peer_team or m.get("from", "?"))
+                # The team that wrote it, not the host that passed it on.
+                await handle_relay(m, m.get("from") or peer_team or "?", writer)
             elif mtype == "activity":
                 feed_append(m.get("team", peer_team or "?"), m.get("event", {}))
             elif mtype == "error":
@@ -229,8 +297,12 @@ async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None
     finally:
         if peer_team and CONNECTIONS.get(peer_team) is writer:
             del CONNECTIONS[peer_team]
+            OUTBOUND.discard(peer_team)
+            SAYS_PEERS.discard(peer_team)
             write_peer(peer_team, connected=False, last_seen=time.time())
+            learn_peers(peer_team, [])
             log("disconnected: %s" % peer_team)
+            await broadcast_peers()
         writer.close()
 
 
@@ -299,11 +371,24 @@ async def watch_outbox():
                 to = msg.get("to", "")
                 relay = {"type": "relay", "to": to, "from": SQUAD,
                          "operator": msg.get("operator") or "commander", "text": msg.get("text", "")}
-                if to in CONNECTIONS:
-                    await send_line(CONNECTIONS[to], relay)
-                    log("sent to %s: %s" % (to, msg.get("text", "")))
-                else:
-                    log("cannot send to %s: not connected" % to)
+                writer = route(to)
+                if writer is None:
+                    # Not reachable yet (still connecting, say): keep it and
+                    # try again, and only give up after a while, keeping it.
+                    try:
+                        age = time.time() - os.path.getmtime(path)
+                    except FileNotFoundError:
+                        continue
+                    if age < UNDELIVERABLE_SECONDS:
+                        continue
+                    os.makedirs(os.path.join(OUTBOX, "failed"), exist_ok=True)
+                    os.replace(path, os.path.join(OUTBOX, "failed", name))
+                    log("cannot send to %s: not reachable for %d minutes; kept in outbox/failed/%s"
+                        % (to, UNDELIVERABLE_SECONDS // 60, name))
+                    continue
+                await send_line(writer, relay)
+                log("sent to %s%s: %s" % (to, "" if to in CONNECTIONS else " via %s" % VIA.get(to),
+                                          msg.get("text", "")))
             try:
                 os.remove(path)
             except FileNotFoundError:

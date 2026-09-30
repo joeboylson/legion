@@ -29,7 +29,10 @@ import time
 LINES_PER_CARD = 3        # activity lines and screen lines shown per card
 WORKING_SECONDS = 20      # a tool call this recent counts as working
 CHANNEL_LINES = 8
-SEP = "\x1f"
+# A tab: tmux 3.4 escapes control characters in -F output (\x1f comes back
+# as the text "\037"), but passes tabs through, and str.split keeps the
+# empty fields a missing tag makes.
+SEP = "\t"
 
 
 def tmux(*args):
