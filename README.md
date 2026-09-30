@@ -430,7 +430,9 @@ one card per session:
 - its last 3 tool calls
 - the last 3 lines of its window
 
-Squads on other machines get cards too, built from the activity their
+At the top it shows your Claude plan's 5-hour and weekly usage and when each
+resets, as the squads' status lines last reported them (they turn yellow at
+70% and red at 90%). Squads on other machines get cards too, built from the activity their
 channel passes on: their last 3 tool calls and whether they're working, but
 no screen, since their windows are elsewhere. Under the cards, a channel
 panel shows each squad's recent channel traffic and which squads it's

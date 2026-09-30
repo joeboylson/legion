@@ -351,11 +351,50 @@ def card_lines(c, width):
     return out
 
 
+def usage(squads):
+    """The account's 5-hour and weekly usage, from the newest rate-limits.json
+    any squad's status line has written (see `legion context statusline`):
+    {"five_hour": {"used_percentage", "resets_at"}, "seven_day": ..., "as_of"},
+    or None when no session has reported it yet."""
+    best = None
+    for _, root in squads:
+        path = os.path.join(root, "local", "context", "rate-limits.json")
+        try:
+            mtime = os.path.getmtime(path)
+            data = json.loads(read(path) or "{}")
+        except (OSError, ValueError):
+            continue
+        if data and (best is None or mtime > best[0]):
+            best = (mtime, data)
+    if best is None:
+        return None
+    return dict(best[1], as_of=int(best[0]))
+
+
+def usage_text(u):
+    """5h 47% (resets 3:10pm) · week 8% (resets Tue 3:00pm)"""
+    if not u:
+        return ""
+    bits = []
+    for key, name, fmt in (("five_hour", "5h", "%H:%M"), ("seven_day", "week", "%a %H:%M")):
+        w = u.get(key) or {}
+        if "used_percentage" not in w:
+            continue
+        reset = ""
+        if w.get("resets_at"):
+            reset = " (resets %s)" % datetime.datetime.fromtimestamp(w["resets_at"]).strftime(fmt)
+        bits.append("%s %d%%%s" % (name, int(w["used_percentage"]), reset))
+    return " · ".join(bits)
+
+
 def snapshot(dash):
     rows, cards = dash.cards()
     if not rows:
         return "no squads running on this machine"
     out = [] if cards else ["no sessions running", ""]
+    text = usage_text(usage(rows))
+    if text:
+        out[:0] = ["usage: " + text, ""]
     for c in cards:
         for line in card_lines(c, 200):
             out.append("".join(t for t, _ in line))
@@ -416,9 +455,14 @@ def run(stdscr):
 
         squads = len(rows)
         put(0, 0, " legion dash ", "title")
-        put(0, 13, "%d squad%s · %d session%s · %s   ↑↓ scroll · q quit" % (
+        x = put(0, 13, "%d squad%s · %d session%s · %s   " % (
             squads, "" if squads == 1 else "s", len(cards), "" if len(cards) == 1 else "s",
             time.strftime("%H:%M:%S")), "dim")
+        u = usage(rows)
+        if u:
+            top = max((u.get(k) or {}).get("used_percentage", 0) for k in ("five_hour", "seven_day"))
+            x = put(0, x, usage_text(u) + "   ", "bad" if top >= 90 else "warn" if top >= 70 else "normal")
+        put(0, x, "↑↓ scroll · q quit", "dim")
         chan_h = (len(peers) + len(events) + 2) if peers else 0
         chan_h = min(chan_h, max(0, h // 3))
         body_h = h - 2 - chan_h
@@ -457,7 +501,8 @@ def state(dash):
     rows, cards = dash.cards()
     events, peers = dash.channel(rows)
     return {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "squads": [squad for squad, _ in rows], "cards": cards, "events": events, "peers": peers}
+            "squads": [squad for squad, _ in rows], "cards": cards, "events": events, "peers": peers,
+            "usage": usage(rows)}
 
 
 def templates_dir():

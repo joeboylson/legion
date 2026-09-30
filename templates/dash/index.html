@@ -27,7 +27,16 @@
     .wb { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "main" "status"; }
   }
   .wb-titlebar .label { white-space: nowrap; }
-  .wb-titlebar .muted { justify-self: end; font-family: var(--font-mono); font-size: var(--text-label); }
+  .usage { justify-self: end; display: flex; align-items: center; gap: var(--space-4);
+           font-family: var(--font-mono); font-size: var(--text-label); white-space: nowrap; }
+  .meter { display: flex; align-items: center; gap: var(--space-2); }
+  .meter .bar { width: var(--space-7); height: var(--space-2); border-radius: var(--radius-sm);
+                background: var(--layer-3); overflow: hidden; }
+  .meter .fill { height: 100%; background: var(--fg-muted); }
+  .meter.warn .fill { background: var(--warning); }
+  .meter.bad .fill { background: var(--danger); }
+  .meter.warn .pct { color: var(--warning); }
+  .meter.bad .pct { color: var(--danger); }
   .wb-search { cursor: text; padding-inline: var(--space-3); }
   .wb-search input {
     flex: 1; min-width: 0; border: 0; background: none; color: var(--fg);
@@ -87,7 +96,7 @@
       <svg class="icon--sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
       <input id="filter" type="search" placeholder="Filter sessions" autocomplete="off" aria-label="Filter sessions">
     </label>
-    <span class="muted" id="updated"></span>
+    <div class="usage" id="usage" title="Your Claude plan's usage, as the squads' status lines last reported it"></div>
   </header>
 
   <aside class="wb-sidebar" aria-label="Squads">
@@ -105,6 +114,7 @@
     <span id="totals"></span>
     <div class="spacer"></div>
     <span class="hide-sm" id="working"></span>
+    <span class="hide-sm" id="updated"></span>
     <button type="button" id="channel-btn" title="Open the channel in a tab"><span class="dot" style="color: var(--fg-muted)"></span>Channel <span class="count" id="peer-count">0</span></button>
     <button type="button" id="theme">Theme</button>
   </footer>
@@ -325,6 +335,31 @@
     document.getElementById("totals").textContent = `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`;
     document.getElementById("working").textContent = s.cards.filter((c) => c.working).length + " working";
     document.getElementById("updated").textContent = "updated " + clock(s.time);
+    usage(s.usage);
+  }
+
+  function usage(u) {
+    const box = document.getElementById("usage");
+    if (!u) return box.replaceChildren(el("span", "muted", "usage not reported yet"));
+    const parts = [];
+    for (const [key, name, opts] of [["five_hour", "5h", { hour: "numeric", minute: "2-digit" }],
+                                     ["seven_day", "week", { weekday: "short", hour: "numeric", minute: "2-digit" }]]) {
+      const w = u[key];
+      if (!w || w.used_percentage === undefined) continue;
+      const pct = Math.round(w.used_percentage);
+      const m = el("span", "meter" + (pct >= 90 ? " bad" : pct >= 70 ? " warn" : ""));
+      const bar = el("span", "bar");
+      const fill = el("span", "fill");
+      fill.style.display = "block";
+      fill.style.width = Math.min(100, pct) + "%";
+      bar.append(fill);
+      m.append(el("span", "muted", name), bar, el("span", "pct", pct + "%"));
+      if (w.resets_at) m.append(el("span", "muted", "resets " + new Date(w.resets_at * 1000).toLocaleString([], opts)));
+      parts.push(m);
+    }
+    const age = Date.now() / 1000 - u.as_of;
+    if (age > 600) parts.push(el("span", "muted", "as of " + ago(age) + " ago"));
+    box.replaceChildren(...parts);
   }
 
   function link(ok, text) {
