@@ -641,8 +641,11 @@ SCRIPT
   local compact_env="" limit
   limit="$(clear_at "$operator")"
   [ -n "$limit" ] && compact_env="export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$(( limit + 10 > 95 ? 95 : limit + 10 )) && "
-  local wrapped="cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && export LEGION_POSITION=$(printf '%q' "$operator") && $compact_env""exec $(printf '%q' "$launch")"
-  local window pane
+  # unset LEGION_ROOT first: a tmux server started from an activated shell
+  # hands its Legion variables to every pane, and activate refuses to run
+  # inside what looks like a Legion shell already.
+  local wrapped="unset LEGION_ROOT; cd $(printf '%q' "$project_dir") && . $(printf '%q' "$LEGION_ROOT/bin/activate") >/dev/null && export LEGION_POSITION=$(printf '%q' "$operator") && $compact_env""exec $(printf '%q' "$launch")"
+  local window pane new_window=""
   window="$(squad_window)"
   if [ -n "$window" ]; then
     pane="$(tmux split-window -d -P -F '#{pane_id}' -t "$window" "$wrapped")"
@@ -663,7 +666,11 @@ SCRIPT
     # own tmux windows too. Start it without them.
     local unset_legion=() var
     for var in $(compgen -e | grep '^LEGION_' || true); do unset_legion+=(-u "$var"); done
-    pane="$(env ${unset_legion[@]+"${unset_legion[@]}"} tmux new-session -d -P -F '#{pane_id}' -s "$LEGION_TAG $LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
+    # The window id comes back with the pane's: looked up afterwards, a pane
+    # that already exited would be answered with some other window.
+    pane="$(env ${unset_legion[@]+"${unset_legion[@]}"} tmux new-session -d -P -F '#{pane_id} #{window_id}' -s "$LEGION_TAG $LEGION_SQUAD_NAME" -n "$LEGION_SQUAD_NAME" -x 240 -y 60 "$wrapped")"
+    new_window="${pane#* }"
+    pane="${pane%% *}"
     echo "started tmux session '$LEGION_TAG $LEGION_SQUAD_NAME' — see it with: legion grid"
   fi
   # A claude that exits at once (e.g. updating itself on first launch)
@@ -677,10 +684,19 @@ SCRIPT
     exit 1
   fi
   if [ -z "$window" ]; then
-    window="$(tmux display-message -p -t "$pane" '#{window_id}')"
+    window="$new_window"
     tmux set-option -w -t "$window" @legion_grid "$LEGION_SQUAD_NAME" \
       \; set-option -w -t "$window" pane-border-status top \
       \; set-option -w -t "$window" pane-border-format ' #{@legion_addr} '
+    # When a session ends on its own, keep its pane long enough to record
+    # how (exit status, last lines) in local/sessions.log, then close it
+    # (cmd_pane_died). Legion's own stand-downs kill the pane, which skips
+    # this.
+    local self
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    tmux set-option -w -t "$window" remain-on-exit on \
+      \; set-hook -w -t "$window" pane-died \
+         "run-shell -b \"$(printf '%q' "$self") pane-died $(printf '%q' "$LEGION_LOCAL/sessions.log") #{pane_id}\""
   fi
   tmux select-layout -t "$window" tiled
 }
@@ -988,7 +1004,7 @@ Some operators are scalable: their operator.json has a 'scale' setting (true for
 
 Operators are free to message each other directly whenever one needs another's expertise — that's normal, not something you need to arrange. For a known, repeatable sequence you want formalized rather than ad hoc, declare a pipeline. Pipelines are Markdown files, $LEGION_PIPELINES/<name>.md, holding a Mermaid flowchart. Each box is a step, named after the operator who does it (builder[builder: build it]); the first box is the first step. A diamond is a statement that is either true or false (approved{the change is approved}), decided by whoever just finished, and its arrows are labelled yes or no. A labelled arrow out of a step is only followed when its label is true; an unlabelled arrow is the normal next step. A rounded box named done ends the pipeline. $LEGION_PIPELINES/README.md has the full rules. An older squad may still have a plain list at $LEGION_PIPELINES/<name> instead: one operator per line, in order, with # lines as comments. Operators named in a pipeline don't need to exist yet; they get deployed as the pipeline reaches them. Give a mission file a 'pipeline: <name>' header field. When an operator finishes its step it sends you 'HANDOFF <mission>: <next operator> next — <note>' (its handoff tool). You're the only one who starts, scales or stands down positions, so on a HANDOFF: start the next operator with the mission if it isn't running, message it if it's running and free, or scale up a copy if every copy is busy. The mission file records every step: each handoff adds a line to its Handoffs list at the top (the last line says who has it now), so never rewrite header lines to track who's next. A pipeline is a declared, named sequence; direct operator-to-operator collaboration outside one is just how this squad normally works.
 
-You have the legion MCP tools for all of this: start, scale_up, stand_down, capture, list, missions, mission_create, mission_move, mission_read, mission_note, mission_set, message, read_messages, questions and answer. Prefer them to typing legion commands. Every question for the human lives in .legion/questions/, so the human can see and answer it from outside your window. When you need a decision from the human yourself, ask it with the ask_human tool (numbered options, each with a short example, and your recommendation), never with an on-screen question box. An operator's question arrives as 'QUESTION Q-###' and is already in that list: tell the human in one line that Q-### is waiting. The human answers with the answer tool from their own Claude session, or by replying in your window; if they reply in your window, record what they say with the answer tool, which sends it back to whoever asked and logs it in the mission file. You'll get an 'ANSWERED Q-###' message when they answer from elsewhere. A message starting 'WRAP-UP' means the human is done for the day and will shut this machine down, so the squad should stop in a state it can pick up tomorrow. Stop your squad-check loop if one is running. Send every running operator (including scaled copies) this: 'WRAP-UP: stop at the next good point, not mid-change. If you hold a mission, add a handoff note to it with the mission_note tool, heading Handoff: what's done, what's next, and anything you would hate to lose. Then message commander WRAPPED, run legion refresh --stay, and end your turn.' Wait for WRAPPED from each; after 15 minutes, stop waiting for any that haven't answered and note who. Stand each operator down once it has sent WRAPPED (stand-down waits for its clear to finish), so tomorrow you start it fresh with its mission. Then add a '## Handoff' section to the end of the log: the missions in flight and who has them, what's waiting on whom, open questions, and anyone who didn't wrap up. Tell the human in one line that the squad is wrapped up and it's safe to shut down. Then run 'legion refresh --stay' and end your turn. Stand operators down when they're done, so idle sessions don't sit open. Each time a mission moves on or finishes, look at every running operator (including scaled copies). An operator with no mission in active/ that no active or todo mission can still reach (no pipeline step left for it, and no loop in the pipeline that leads back to it) should be stood down: 'legion stand-down <operator>'. For example, a planner can go once every mission has moved past planning, but a builder that a failed review could send work back to should stay. An operator that won't be needed for a long while can go too. Standing down is cheap: Legion keeps the operator's conversation, so starting it again later (by deploying it, or when a pipeline reaches it) picks up where it left off. Never stand down an operator that holds a mission in active/, and tell the human in one line whenever you stand someone down.
+You have the legion MCP tools for all of this: start, scale_up, stand_down, capture, list, missions, mission_create, mission_move, mission_read, mission_note, mission_set, message, read_messages, questions and answer. Prefer them to typing legion commands. Every question for the human lives in .legion/questions/, so the human can see and answer it from outside your window. When you need a decision from the human yourself, ask it with the ask_human tool (numbered options, each with a short example, and your recommendation), never with an on-screen question box. An operator's question arrives as 'QUESTION Q-###' and is already in that list: tell the human in one line that Q-### is waiting. The human answers with the answer tool from their own Claude session, or by replying in your window; if they reply in your window, record what they say with the answer tool, which sends it back to whoever asked and logs it in the mission file. You'll get an 'ANSWERED Q-###' message when they answer from elsewhere. A message starting 'WRAP-UP' means the human is done for the day and will shut this machine down, so the squad should stop in a state it can pick up tomorrow. Stop your squad-check loop if one is running. Send every running operator (including scaled copies) this: 'WRAP-UP: stop at the next good point, not mid-change. If you hold a mission, add a handoff note to it with the mission_note tool, heading Handoff: what's done, what's next, and anything you would hate to lose. Then message commander WRAPPED, run legion refresh --stay, and end your turn.' Wait for WRAPPED from each; after 15 minutes, stop waiting for any that haven't answered and note who. Each operator's window closes by itself once it has cleared, so tomorrow you start it fresh with its mission; stand down any that sent WRAPPED but are still open after a few minutes. Then add a '## Handoff' section to the end of the log: the missions in flight and who has them, what's waiting on whom, open questions, and anyone who didn't wrap up. Tell the human in one line that the squad is wrapped up and it's safe to shut down. Then run 'legion refresh --stay' and end your turn; your own window closes once you've cleared. Stand operators down when they're done, so idle sessions don't sit open. Each time a mission moves on or finishes, look at every running operator (including scaled copies). An operator with no mission in active/ that no active or todo mission can still reach (no pipeline step left for it, and no loop in the pipeline that leads back to it) should be stood down: 'legion stand-down <operator>'. For example, a planner can go once every mission has moved past planning, but a builder that a failed review could send work back to should stay. An operator that won't be needed for a long while can go too. Standing down is cheap: Legion keeps the operator's conversation, so starting it again later (by deploying it, or when a pipeline reaches it) picks up where it left off. Never stand down an operator that holds a mission in active/, and tell the human in one line whenever you stand someone down.
 
 Roster status also lives as files, one per operator, at $LEGION_ROSTER/<operator>.md — not deleted when someone stands down, just updated, so it doubles as a record of who has ever been on this squad. On a message starting with CHECK-IN:, parse operator/role and write/update that operator's file:
 name: $LEGION_SQUAD_NAME-<operator>
@@ -1197,6 +1213,7 @@ cmd_standdown() {
   [ -n "$pane" ] || { echo "'$name' not found" >&2; exit 1; }
   window="$(squad_window)"
   wait_for_clear "$1"
+  session_log "$1: stood down"
   tmux kill-pane -t "$pane"
   [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
   return 0
@@ -1212,12 +1229,13 @@ cmd_standdown_all() {
   while IFS="$(printf '\t')" read -r addr pane _; do
     [ "$addr" = "$LEGION_SQUAD_NAME-commander" ] && continue
     wait_for_clear "${addr#"$LEGION_SQUAD_NAME"-}"
+    session_log "${addr#"$LEGION_SQUAD_NAME"-}: stood down"
     tmux kill-pane -t "$pane" && stopped="$stopped ${addr#"$LEGION_SQUAD_NAME"-}"
   done <<EOF
 $rows
 EOF
   pane="$(pane_of "$LEGION_SQUAD_NAME-commander")"
-  [ -n "$pane" ] && tmux kill-pane -t "$pane" && stopped="$stopped commander"
+  [ -n "$pane" ] && session_log "commander: stood down" && tmux kill-pane -t "$pane" && stopped="$stopped commander"
   echo "stood down:$stopped"
 }
 
@@ -1716,6 +1734,46 @@ context_dir() {
   echo "$LEGION_LOCAL/context"
 }
 
+# Clears anything half-typed in a Claude Code pane before Legion types into
+# it. Ctrl-U deletes the line and Backspace joins the one above, so this
+# clears several lines. Never Ctrl-C: Claude Code quits on a second Ctrl-C
+# soon after a first, so two of Legion's own clears close together would
+# end the session. On an empty prompt these keys do nothing.
+pane_clear_input() {
+  local i
+  for i in 1 2 3 4; do
+    tmux send-keys -t "$1" C-u
+    tmux send-keys -t "$1" BSpace
+  done
+  tmux send-keys -t "$1" C-u
+  sleep 0.5
+}
+
+# One line in .legion/local/sessions.log: what Legion did to a session, and
+# how each session ended (see cmd_pane_died).
+session_log() {
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LEGION_LOCAL/sessions.log" 2>/dev/null || true
+}
+
+# `legion pane-died <log> <pane>`: run by the squad window's pane-died hook
+# (see open_window), which keeps an exited pane just long enough for this.
+# Records how the session ended, with its last lines, then closes the pane.
+cmd_pane_died() {
+  local log="$1" pane="$2" addr status signal window
+  addr="$(tmux display -p -t "$pane" '#{@legion_addr}' 2>/dev/null)"
+  status="$(tmux display -p -t "$pane" '#{pane_dead_status}' 2>/dev/null)"
+  signal="$(tmux display -p -t "$pane" '#{pane_dead_signal}' 2>/dev/null)"
+  window="$(tmux display -p -t "$pane" '#{window_id}' 2>/dev/null)"
+  {
+    printf '%s %s: session ended (exit status %s%s). Its last lines:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "${addr:-$pane}" "${status:-?}" "${signal:+, signal $signal}"
+    tmux capture-pane -p -t "$pane" 2>/dev/null | grep -v '^Pane is dead' | awk NF | tail -n 12 | sed 's/^/    /'
+  } >> "$log" 2>/dev/null
+  tmux kill-pane -t "$pane" 2>/dev/null
+  [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
+  return 0
+}
+
 # Called from the Stop hook. Prints a block decision, or starts a clear, and
 # returns 0 if it handled this stop; returns 1 to let the other checks run.
 context_stop() {
@@ -1806,12 +1864,11 @@ cmd_watch() {
       pane="$(pane_of "$LEGION_SQUAD_NAME-$pos")"
       [ -n "$pane" ] || { rm -f "$f"; continue; }
       echo "$now" > "$f"
-      # Ctrl-C clears anything half-typed first.
-      tmux send-keys -t "$pane" C-c
-      sleep 1
+      pane_clear_input "$pane"
       tmux send-keys -t "$pane" -l "Your usage limit should have reset now. Carry on from where you stopped."
       tmux send-keys -t "$pane" Enter
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) told $pos to carry on after its usage limit" >> "$LEGION_LOCAL/watch.log"
+      session_log "$pos: told to carry on after its usage limit"
     done
     if [ "$found" -eq 1 ]; then idle_since=""
     else
@@ -1934,14 +1991,26 @@ cmd_context() {
       done
       old_wait="$(cat "$(message_dir "$me")/waiting.pid" 2>/dev/null)" || old_wait=""
       mission="$(position_mission "$me")"
-      # Ctrl-C clears anything half-typed first.
-      tmux send-keys -t "$pane" C-c
-      sleep 1
+      pane_clear_input "$pane"
       tmux send-keys -t "$pane" -l "/clear"
       tmux send-keys -t "$pane" Enter
+      session_log "$me: cleared at $(cat "$dir/$me" 2>/dev/null || echo "?")% full$([ -f "$dir/$me.stay" ] && echo ", wrapping up")"
       # The SessionStart hook removes the .clearing file once it's done.
       n=0
       while [ -f "$dir/$me.clearing" ] && [ "$n" -lt 30 ]; do sleep 1; n=$((n + 1)); done
+      [ -f "$dir/$me.clearing" ] && session_log "$me: the clear didn't confirm within 30 seconds"
+      # Wrapping up: close the window. A cleared session left idle takes a
+      # turn from anything that reaches it (the old message wait ending,
+      # say), then reads the log and carries on with the work. The next
+      # start picks up from the notes instead (see wrap_up_resume).
+      if [ -f "$dir/$me.stay" ]; then
+        rm -f "$dir/$me.stay" "$dir/$me.clearing"
+        session_log "$me: closed its window after wrapping up"
+        tmux kill-pane -t "$pane" 2>/dev/null
+        window="$(squad_window)"
+        [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
+        exit 0
+      fi
       # The old message wait outlives /clear, but the new conversation
       # didn't start it and won't hear from it. Stop it; the kickoff below
       # starts a fresh one.
@@ -1949,8 +2018,6 @@ cmd_context() {
         [ "$(cat "$(message_dir "$me")/waiting.pid" 2>/dev/null)" = "$old_wait" ] && rm -f "$(message_dir "$me")/waiting.pid"
       fi
       sleep 1
-      # Wrapping up: stay cleared and idle until the squad starts again.
-      if [ -f "$dir/$me.stay" ]; then rm -f "$dir/$me.stay"; exit 0; fi
       kick="You were just cleared to free up room. You are still '$LEGION_SQUAD_NAME-$me' on the squad: your role and rules are in $LEGION_LOCAL/prompts/$me.md if you no longer have them. Start 'legion message wait' in the background first."
       if [ "$me" = "commander" ]; then
         kick="$kick Then read the latest '## Handoff' section at the end of $LEGION_LOG, the missions in $LEGION_MISSIONS/active/ and the roster, and carry on from there."
@@ -2103,6 +2170,7 @@ main() {
     demo) shift; cmd_demo "$@" ;;
     src) echo "$LEGION_SRC" ;;
     mcp) shift; exec python3 "$(cd "$(dirname "$0")" && pwd)/legion-mcp" "$@" ;;
+    pane-died) shift; cmd_pane_died "$@" ;;
     dash) shift; exec python3 "$(cd "$(dirname "$0")" && pwd)/legion-dash" "$@" ;;
     session) shift; cmd_session "$@" ;;
     commander) shift; cmd_commander "$@" ;;

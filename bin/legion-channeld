@@ -510,15 +510,21 @@ async def watch_deaf():
             # into it could answer it.
             if re.search(r"Do you want to|\b1\. Yes\b", screen):
                 continue
-            # Ctrl-C clears half-typed text. On an empty prompt it only
-            # arms "press again to exit", which the typing that follows
-            # cancels.
-            tmux("send-keys", "-t", pane, "C-c")
-            await asyncio.sleep(1)
+            # Clear half-typed text the way pane_clear_input in bin/legion
+            # does: Ctrl-U and Backspace, never Ctrl-C, which quits Claude
+            # Code when two land close together.
+            for _ in range(4):
+                tmux("send-keys", "-t", pane, "C-u")
+                tmux("send-keys", "-t", pane, "BSpace")
+            tmux("send-keys", "-t", pane, "C-u")
+            await asyncio.sleep(0.5)
             tmux("send-keys", "-t", pane, "-l", WAKE_TEXT)
             tmux("send-keys", "-t", pane, "Enter")
             woken[pane] = now
             log("woke %s: unread messages and no message wait running" % position)
+            with open(os.path.join(ROOT, "local", "sessions.log"), "a") as f:
+                f.write("%s %s: woken by the channel (unread messages, no message wait)\n"
+                        % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), position))
         for pane in list(screens):
             if pane not in {p for p, _ in panes.values()}:
                 del screens[pane]

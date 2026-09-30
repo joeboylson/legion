@@ -295,22 +295,30 @@ from your own Claude session). The commander then wraps up the squad:
 1. It tells every operator to stop at the next good point, not in the
    middle of a change.
 2. Each operator writes a handoff note to its mission, tells the commander
-   it's done, and clears without starting again.
-3. The commander closes each operator once it has cleared.
-4. The commander writes its own handoff note in the squad log, tells you
-   it's safe to shut down, and clears too.
+   it's done, and clears. Its window then closes.
+3. The commander writes its own handoff note in the squad log, tells you
+   it's safe to shut down, and clears. Its window closes too.
+
+A session cleared at the end of a wrap-up is always closed rather than left
+idle: an idle one takes a turn from anything that reaches it, and would
+read its note and carry on working. The commander doesn't have to remember
+to clear itself either. During a wrap-up, once its handoff is the last
+section of the squad log, the end of its next reply clears it.
 
 The next day, run `legion commander`. It reads its note and the active
 missions, then starts each operator that had a mission again. Each one
-picks up from the handoff note in its mission file. If the laptop only
-slept and the commander is still running, `legion commander` tells that
-one to pick up instead of starting another. The commander resumes the same
-way whenever it starts with missions still in `active/`, even if the squad
-was just stood down instead of wrapped up.
+picks up from the handoff note in its mission file. The commander resumes
+the same way whenever it starts with missions still in `active/`, even if
+the squad was just stood down instead of wrapped up.
 
-The commander doesn't have to remember to clear itself either. During a
-wrap-up, once its handoff is the last section of the squad log, the end of
-its next reply clears it.
+### Why a session ended: `local/sessions.log`
+
+`.legion/local/sessions.log` records what Legion does to each session:
+stand-downs, clears, wake-ups and restarts after a usage limit. When a
+session ends on its own, the log also gets its exit status and its last
+lines on screen. Legion never presses Ctrl-C in a session's window, because
+Claude Code quits on two in a row; it clears half-typed text with Ctrl-U
+instead.
 
 ### How work moves
 
