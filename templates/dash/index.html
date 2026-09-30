@@ -38,6 +38,17 @@
   .meter.warn .pct { color: var(--warning); }
   .meter.bad .pct { color: var(--danger); }
   .usage .sep { color: var(--fg-muted); }
+  /* The page's own tooltip: the browser's hides as soon as text under the
+   * pointer is touched, and this page redraws every second. */
+  .meter .pct { position: relative; cursor: help; }
+  .meter .pct:hover::after {
+    content: attr(data-tip);
+    position: absolute; top: calc(100% + var(--space-2)); right: 0; z-index: 30;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--fg-muted); border-radius: var(--radius-lg);
+    background: var(--layer-1); color: var(--fg);
+    white-space: nowrap; pointer-events: none;
+  }
   .wb-search { cursor: text; padding-inline: var(--space-3); }
   .wb-search input {
     flex: 1; min-width: 0; border: 0; background: none; color: var(--fg);
@@ -369,13 +380,15 @@
       if (!w || w.used_percentage === undefined) continue;
       const pct = Math.round(w.used_percentage);
       const { m, fill, pct: label } = meter(key);
-      m.className = "meter" + (pct >= 90 ? " bad" : pct >= 70 ? " warn" : "");
-      fill.style.width = Math.min(100, pct) + "%";
-      label.textContent = pct + "%";
-      const title = `${name} usage: ${pct}%`
+      // Touch the DOM only when something changed.
+      const cls = "meter" + (pct >= 90 ? " bad" : pct >= 70 ? " warn" : "");
+      if (m.className !== cls) m.className = cls;
+      if (fill.style.width !== Math.min(100, pct) + "%") fill.style.width = Math.min(100, pct) + "%";
+      if (label.textContent !== pct + "%") label.textContent = pct + "%";
+      const tip = `${name} usage: ${pct}%`
         + (w.resets_at ? `, resets ${new Date(w.resets_at * 1000).toLocaleString([], opts)}` : "")
         + (age > 600 ? ` (as of ${ago(age)} ago)` : "");
-      if (m.title !== title) { m.title = title; m.setAttribute("aria-label", title); }
+      if (label.dataset.tip !== tip) { label.dataset.tip = tip; label.setAttribute("aria-label", tip); }
       shown.push(m);
     }
     // Only re-place the meters when which ones are shown changes.
