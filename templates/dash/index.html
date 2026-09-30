@@ -166,8 +166,9 @@
       const head = el("li");
       const hb = el("button");
       hb.type = "button";
-      hb.tabIndex = -1;
+      hb.setAttribute("aria-selected", String(view.focus === "squad:" + squad));
       hb.append(el("span", "squad", squad), el("span", "muted", String(list.length)));
+      hb.onclick = () => { view.focus = "squad:" + squad; render(); };
       head.append(hb);
       out.push(head);
       for (const c of list) {
@@ -266,8 +267,12 @@
     const s = last;
     if (!s) return;
     const cards = visible(s);
-    if (view.focus && !s.cards.some((c) => c.addr === view.focus)) view.focus = null;
-    const shown = view.focus ? cards.filter((c) => c.addr === view.focus) : cards;
+    // Focus is one session's address, "squad:<name>" for a whole squad, or
+    // null for everything.
+    const focused = (c) => view.focus === null
+      || (view.focus.startsWith("squad:") ? squadOf(c) === view.focus.slice(6) : c.addr === view.focus);
+    if (view.focus && !s.cards.some(focused)) view.focus = null;
+    const shown = cards.filter(focused);
 
     document.getElementById("tree").replaceChildren(...tree(s, cards));
     document.getElementById("session-count").textContent = s.cards.length;
@@ -281,7 +286,8 @@
       b.onclick = () => { view.focus = key; render(); };
       return b;
     };
-    tabs.replaceChildren(tab("All sessions", null), ...(view.focus ? [tab(view.focus, view.focus)] : []));
+    const label = view.focus && view.focus.startsWith("squad:") ? view.focus.slice(6) + " (squad)" : view.focus;
+    tabs.replaceChildren(tab("All sessions", null), ...(view.focus ? [tab(label, view.focus)] : []));
 
     const editor = document.getElementById("editor");
     if (!s.squads.length) {
