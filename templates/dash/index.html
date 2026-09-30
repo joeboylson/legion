@@ -315,6 +315,7 @@
       const head = el("div", "question-head");
       head.append(el("span", "qid", q.id), el("span", "tag", q.squad));
       if (q.asked_by) head.append(el("span", "muted", "from " + q.asked_by));
+      if (q.via) head.append(el("span", "tag dim", "over the channel"));
       if (q.mission) head.append(el("span", "tag", q.mission));
       if (q.asked_at) head.append(el("span", "muted", clock(q.asked_at)));
       item.append(head, el("pre", "text", q.text.split("**").join("")));

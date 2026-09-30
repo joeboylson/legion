@@ -444,8 +444,9 @@ once as plain text.
 `http://<this machine>:7580/` that updates itself every second. It's laid
 out like an editor: squads and their sessions in a sidebar you can filter
 and click to focus on one squad or session. Under the squads, a Views
-section opens more tabs: **Questions**, every question waiting for you,
-which you can answer right there (pick an option or write your own; it
+section opens more tabs: **Questions**, every question waiting for you, from
+squads here and from squads on other machines whose channel is connected
+to one here, which you can answer right there (pick an option or write your own; it
 goes back to whoever asked, like the `answer` tool); **Channel**, the
 channel's peers and traffic; and **Log**, `local/sessions.log` with
 stand-downs, clears, wake-ups, and how any session that ended on its own
@@ -766,6 +767,14 @@ them goes through the host.
 A message for a team that isn't reachable stays queued. The channel keeps
 trying for 10 minutes, then moves it to `.legion/channel/outbox/failed/`
 and logs it. `legion channel send` warns you when the team isn't connected.
+
+**Questions cross the channel too.** Each side sends its open questions to
+the squads it's connected to (the listening side passes them on to its
+other subscribers), so `legion dash` shows another machine's questions.
+Answer one there and the answer goes back over the channel and is recorded
+on that squad's machine, as if you'd answered there. Any squad connected to
+your channel can answer your squad's questions this way, so only connect
+squads you trust.
 
 **Activity crosses the channel too, automatically.** Each side of a
 connection also mirrors its own [`activity.log`](#watching-activity-legion-activity)

@@ -73,6 +73,13 @@ OUTBOX = os.path.join(CHANNEL, "outbox")
 LOG = os.path.join(CHANNEL, "channel.log")
 ACTIVITY = os.path.join(ROOT, "activity.log")
 FEED = os.path.join(CHANNEL, "feed.jsonl")
+QUESTIONS = os.path.join(ROOT, "questions")
+# Other squads' open questions, one file per team, as they last sent them.
+REMOTE_QUESTIONS = os.path.join(CHANNEL, "remote-questions")
+QUESTIONS_POLL_SECONDS = 3
+# Sent again this often even when nothing changed, so a squad that
+# connects later (or restarts its dash) gets them.
+QUESTIONS_RESEND_SECONDS = 30
 for d in (CHANNEL, PEERS, OUTBOX):
     os.makedirs(d, exist_ok=True)
 
@@ -224,6 +231,61 @@ def feed_append(team, event):
         f.write(json.dumps({"team": team, **event}) + "\n")
 
 
+def open_questions():
+    """This squad's open questions, as {"meta": {...}, "body": "..."}."""
+    out = []
+    try:
+        names = sorted(n for n in os.listdir(QUESTIONS) if re.match(r"Q-\d+\.md$", n))
+    except FileNotFoundError:
+        return out
+    for n in names:
+        try:
+            with open(os.path.join(QUESTIONS, n)) as f:
+                text = f.read()
+        except OSError:
+            continue
+        m = re.match(r"---\n(.*?)\n---\n(.*)", text, re.S)
+        if not m:
+            continue
+        meta = {}
+        for line in m.group(1).split("\n"):
+            k, sep, v = line.partition(": ")
+            if sep:
+                meta[k] = v
+        if meta.get("status") == "open":
+            out.append({"meta": meta, "body": m.group(2)})
+    return out
+
+
+def answer_locally(qid, answer, sender_team):
+    """Answers one of this squad's questions with Legion's own human-role
+    answer tool, as if the human had answered here."""
+    mcp = os.path.join(os.path.dirname(os.path.realpath(__file__)), "legion-mcp")
+    req = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": "answer", "arguments": {"id": qid, "answer": answer}}}
+    try:
+        p = subprocess.run([sys.executable, mcp, "--role", "human", "--project", PROJECT],
+                           input=json.dumps(req) + "\n", capture_output=True, text=True, timeout=60)
+        reply = json.loads(p.stdout.strip().split("\n")[0])
+        text = "".join(c.get("text", "") for c in reply.get("result", {}).get("content", [])) \
+            or reply.get("error", {}).get("message", "")
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as e:
+        text = "couldn't run the answer tool: %s" % e
+    log("answer to %s from %s: %s (%s)" % (qid, sender_team, answer, text))
+
+
+async def handle_answer(msg, sender_team):
+    to = msg.get("to", "")
+    if to == SQUAD:
+        answer_locally(msg.get("id", ""), msg.get("answer", ""), msg.get("from") or sender_team)
+    elif to in CONNECTIONS:
+        # One hop at most, like relays.
+        await send_line(CONNECTIONS[to], msg)
+        log("forwarded an answer to %s %s from %s" % (to, msg.get("id"), sender_team))
+    else:
+        log("answer for unknown/disconnected team %r dropped (from %s)" % (to, sender_team))
+
+
 async def handle_relay(msg, sender_team, writer=None):
     to = msg.get("to", "")
     operator = msg.get("operator") or "commander"
@@ -287,6 +349,27 @@ async def handle_connection(reader, writer, key, initiated_by_us, team_hint=None
             elif mtype == "relay":
                 # The team that wrote it, not the host that passed it on.
                 await handle_relay(m, m.get("from") or peer_team or "?", writer)
+            elif mtype == "questions":
+                team = m.get("team") or peer_team or "?"
+                if team != SQUAD:
+                    os.makedirs(REMOTE_QUESTIONS, exist_ok=True)
+                    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", team)
+                    tmp = os.path.join(REMOTE_QUESTIONS, ".%s.tmp" % safe)
+                    with open(tmp, "w") as f:
+                        json.dump({"team": team, "received_at": time.time(),
+                                   "questions": m.get("questions", [])}, f)
+                    os.replace(tmp, os.path.join(REMOTE_QUESTIONS, safe + ".json"))
+                # Pass it on once, like activity.
+                if not m.get("relayed"):
+                    for other_team, other in list(CONNECTIONS.items()):
+                        if other is writer or other_team == team:
+                            continue
+                        try:
+                            await send_line(other, dict(m, relayed=True))
+                        except OSError:
+                            pass
+            elif mtype == "answer":
+                await handle_answer(m, peer_team or "?")
             elif mtype == "activity":
                 feed_append(m.get("team", peer_team or "?"), m.get("event", {}))
                 # Pass it on to the other teams connected here, so every
@@ -380,8 +463,13 @@ async def watch_outbox():
             msg = read_json(path, None)
             if msg is not None:
                 to = msg.get("to", "")
-                relay = {"type": "relay", "to": to, "from": SQUAD,
-                         "operator": msg.get("operator") or "commander", "text": msg.get("text", "")}
+                if msg.get("kind") == "answer":
+                    # An answer to another squad's question, written by legion dash.
+                    relay = {"type": "answer", "to": to, "from": SQUAD,
+                             "id": msg.get("id", ""), "answer": msg.get("answer", "")}
+                else:
+                    relay = {"type": "relay", "to": to, "from": SQUAD,
+                             "operator": msg.get("operator") or "commander", "text": msg.get("text", "")}
                 writer = route(to)
                 if writer is None:
                     # Not reachable yet (still connecting, say): keep it and
@@ -399,7 +487,7 @@ async def watch_outbox():
                     continue
                 await send_line(writer, relay)
                 log("sent to %s%s: %s" % (to, "" if to in CONNECTIONS else " via %s" % VIA.get(to),
-                                          msg.get("text", "")))
+                                          msg.get("text") or "answer %s: %s" % (msg.get("id"), msg.get("answer"))))
             try:
                 os.remove(path)
             except FileNotFoundError:
@@ -530,9 +618,27 @@ async def watch_deaf():
                 del screens[pane]
 
 
+async def watch_questions():
+    """Sends this squad's open questions to every connected team whenever
+    they change, and every so often anyway."""
+    last, sent_at, teams = None, 0, set()
+    while True:
+        qs = open_questions()
+        now = time.time()
+        if qs != last or set(CONNECTIONS) != teams or now - sent_at > QUESTIONS_RESEND_SECONDS:
+            for writer in list(CONNECTIONS.values()):
+                try:
+                    await send_line(writer, {"type": "questions", "team": SQUAD, "questions": qs})
+                except OSError:
+                    pass
+            last, sent_at, teams = qs, now, set(CONNECTIONS)
+        await asyncio.sleep(QUESTIONS_POLL_SECONDS)
+
+
 async def main():
     log("starting for squad '%s' (root=%s)" % (SQUAD, ROOT))
-    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox(), watch_activity(), watch_deaf())
+    await asyncio.gather(serve(), watch_subscriptions(), watch_outbox(), watch_activity(), watch_deaf(),
+                         watch_questions())
 
 
 if __name__ == "__main__":

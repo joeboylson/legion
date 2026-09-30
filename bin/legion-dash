@@ -498,16 +498,39 @@ def run(stdscr):
         stdscr.refresh()
 
 
+def parse_question(squad, meta, body):
+    """One question as the page shows it."""
+    lines = body.strip().split("\n")
+    if lines and re.match(r"# Q-\d+", lines[0]):
+        lines = lines[1:]
+    # ask_human writes options as "1. **label** — example", or "1. label"
+    # when they're plain strings.
+    options = [(m.group(1) or m.group(2)).strip() for m in
+               (re.match(r"\d+\. (?:\*\*(.+?)\*\*|(.+))", l) for l in lines) if m]
+    rec = next((l.split(":**", 1)[1].strip() for l in lines if l.startswith("**Recommendation:**")), "")
+    return {"squad": squad, "id": meta.get("id", ""), "asked_by": meta.get("asked_by", ""),
+            "asked_at": meta.get("asked_at", ""), "mission": meta.get("mission", ""),
+            "text": "\n".join(lines).strip(), "options": options, "recommendation": rec}
+
+
+# A squad on another machine sends its open questions every 30 seconds;
+# stop showing them if they haven't been refreshed for this long.
+REMOTE_QUESTIONS_MAX_AGE = 120
+
+
 def questions(squads):
-    """Open questions for the human in every squad here, oldest first (the
-    files `ask_human` writes in .legion/questions/)."""
-    out = []
+    """Open questions for the human, oldest first: every squad here (the
+    files `ask_human` writes in .legion/questions/), and every squad whose
+    channel sends its questions to one here. Those carry "via", the squad
+    here whose channel an answer goes back through."""
+    out, seen = [], set()
+    local = {squad for squad, _ in squads}
     for squad, root in squads:
         d = os.path.join(root, "questions")
         try:
             names = sorted(n for n in os.listdir(d) if re.match(r"Q-\d+\.md$", n))
         except OSError:
-            continue
+            names = []
         for n in names:
             text = read(os.path.join(d, n))
             m = re.match(r"---\n(.*?)\n---\n(.*)", text, re.S)
@@ -518,19 +541,29 @@ def questions(squads):
                     k, sep, v = line.partition(": ")
                     if sep:
                         meta[k] = v
-            if meta.get("status") != "open":
+            if meta.get("status") == "open":
+                meta.setdefault("id", n[:-3])
+                out.append(parse_question(squad, meta, body))
+    for via, root in squads:
+        d = os.path.join(root, "channel", "remote-questions")
+        try:
+            names = sorted(n for n in os.listdir(d) if n.endswith(".json"))
+        except OSError:
+            continue
+        for n in names:
+            try:
+                data = json.loads(read(os.path.join(d, n)) or "{}")
+            except ValueError:
                 continue
-            lines = body.strip().split("\n")
-            if lines and re.match(r"# Q-\d+", lines[0]):
-                lines = lines[1:]
-            # ask_human writes options as "1. **label** — example", or
-            # "1. label" when they're plain strings.
-            options = [(m.group(1) or m.group(2)).strip() for m in
-                       (re.match(r"\d+\. (?:\*\*(.+?)\*\*|(.+))", l) for l in lines) if m]
-            rec = next((l.split(":**", 1)[1].strip() for l in lines if l.startswith("**Recommendation:**")), "")
-            out.append({"squad": squad, "id": meta.get("id", n[:-3]), "asked_by": meta.get("asked_by", ""),
-                        "asked_at": meta.get("asked_at", ""), "mission": meta.get("mission", ""),
-                        "text": "\n".join(lines).strip(), "options": options, "recommendation": rec})
+            team = data.get("team", "")
+            if not team or team in local or time.time() - data.get("received_at", 0) > REMOTE_QUESTIONS_MAX_AGE:
+                continue
+            for q in data.get("questions", []):
+                item = parse_question(team, q.get("meta", {}), q.get("body", ""))
+                if (team, item["id"]) in seen:
+                    continue
+                seen.add((team, item["id"]))
+                out.append(dict(item, via=via))
     return sorted(out, key=lambda q: q["asked_at"])
 
 
@@ -663,10 +696,23 @@ def serve(host, port, allow_answers=False):
             except (ValueError, KeyError, TypeError):
                 return self.send(400, b'{"error": "want {squad, id, answer}"}', "application/json")
             with lock:
-                root = current["state"].get("roots", {}).get(squad)
-            if not root or not answer or not re.match(r"Q-\d+$", qid):
+                roots = current["state"].get("roots", {})
+                remote = next((q for q in current["state"].get("questions", [])
+                               if q["squad"] == squad and q["id"] == qid and q.get("via")), None)
+            if not answer or not re.match(r"Q-\d+$", qid) or (squad not in roots and not remote):
                 return self.send(400, b'{"error": "unknown squad or question, or an empty answer"}', "application/json")
-            ok, text = legion_tool(os.path.dirname(root), "answer", {"id": qid, "answer": answer})
+            if squad in roots:
+                ok, text = legion_tool(os.path.dirname(roots[squad]), "answer", {"id": qid, "answer": answer})
+            else:
+                # Another machine's squad: the answer goes back over the
+                # channel it came through, and is answered there.
+                outbox = os.path.join(roots[remote["via"]], "channel", "outbox")
+                os.makedirs(outbox, exist_ok=True)
+                name = "%s-answer-%s.json" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), qid)
+                with open(os.path.join(outbox, ".tmp-" + name), "w") as f:
+                    json.dump({"kind": "answer", "to": squad, "id": qid, "answer": answer}, f)
+                os.replace(os.path.join(outbox, ".tmp-" + name), os.path.join(outbox, name))
+                ok, text = True, "Sent the answer to %s over %s's channel." % (squad, remote["via"])
             self.send(200 if ok else 400, json.dumps({"ok": ok, "text": text}).encode(), "application/json")
 
         def log_message(self, *args):
