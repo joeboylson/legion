@@ -63,6 +63,7 @@ Once activated (source .legion/bin/activate):
   legion channel peers                              show teams this channel knows about
   legion channel close                              stop this squad's channel daemon
   legion activity tail [n]          watch every tool call any position makes, live
+  legion activity tail --all [n]    the same for every squad running on this machine; works from any shell
   legion refresh [--stay]           (from a squad session) clear this conversation when the turn ends, then restart from its handoff note (--stay: stay idle)
   legion wrap-up                    end of day: every position stops at a good point, writes a handoff note and clears; the next start picks up from the notes
   deactivate                        leave the shell (from the sourced script)
@@ -686,7 +687,8 @@ SCRIPT
   # takes its pane and its error with it, and tmux only says "no such pane".
   # Say what happened and how to see the real error instead.
   if ! tmux set-option -p -t "$pane" @legion_squad "$LEGION_SQUAD_NAME" \
-    \; set-option -p -t "$pane" @legion_addr "$name" 2>/dev/null; then
+    \; set-option -p -t "$pane" @legion_addr "$name" \
+    \; set-option -p -t "$pane" @legion_root "$LEGION_ROOT" 2>/dev/null; then
     echo "legion: $name's session closed as soon as it started. Run it by hand to see why:" >&2
     echo "  $wrapped" >&2
     exit 1
@@ -1949,7 +1951,60 @@ cmd_context() {
   esac
 }
 
+# Every squad running on this machine, from any shell: one line per squad,
+# "<squad>\t<its .legion folder>", read from the tags open_window puts on
+# each pane.
+running_squads() {
+  local squad root start sep
+  # Not a tab: read merges runs of tabs, which an empty field makes.
+  sep="$(printf '\037')"
+  { tmux list-panes -a -F "#{@legion_squad}$sep#{@legion_root}$sep#{pane_start_command}" 2>/dev/null || true; } \
+    | while IFS="$sep" read -r squad root start; do
+        [ -n "$squad" ] || continue
+        # Panes started before @legion_root existed: take the folder from
+        # the ". <.legion>/bin/activate" in the command that started them.
+        [ -n "$root" ] || root="$(printf '%s' "$start" | sed -n 's|.*&& \. \(.*\)/bin/activate .*|\1|p' | sed 's/\\\(.\)/\1/g')"
+        [ -n "$root" ] && printf '%s\t%s\n' "$squad" "$root"
+      done | awk -F '\t' '!seen[$1]++'
+}
+
+# `legion activity tail --all`: every running squad's activity at once,
+# each line labelled with its squad. Checks for newly started squads every
+# few seconds.
+activity_tail_all() {
+  local n="$1" started="" squad root
+  # Each squad's tail runs as its own job, in its own process group, so
+  # stopping this stops those and nothing else.
+  set -m
+  trap 'trap - INT TERM EXIT; for j in $(jobs -p); do kill -- "-$j" 2>/dev/null; done; exit 0' INT TERM EXIT
+  [ -n "$(running_squads)" ] || echo "no squads running yet; waiting for one to start"
+  while :; do
+    while IFS="$(printf '\t')" read -r squad root; do
+      [ -n "$squad" ] || continue
+      case " $started " in *" $squad "*) continue ;; esac
+      started="$started $squad"
+      touch "$root/activity.log" 2>/dev/null || true
+      { tail -n "$n" -F "$root/activity.log" 2>/dev/null \
+          | jq -r --unbuffered --arg s "$squad" '"\(.time)  \($s)-\(.position)\t\(.tool)\t\(.summary)"' 2>/dev/null; } &
+    done <<EOF
+$(running_squads)
+EOF
+    sleep 5
+  done
+}
+
 cmd_activity() {
+  # --all needs no activated shell: it watches every squad on the machine.
+  if [ "${1:-}" = "tail" ]; then
+    case " $* " in
+      *" --all "*)
+        local a n=20
+        for a in "$@"; do case "$a" in *[!0-9]*|"") ;; *) n="$a" ;; esac; done
+        activity_tail_all "$n"
+        return
+        ;;
+    esac
+  fi
   require_active
   local sub="${1:-}"; [ $# -gt 0 ] && shift
   local log; log="$(activity_log)"
@@ -1980,7 +2035,7 @@ cmd_activity() {
       tail -n "$n" -f "$log" | jq -r --unbuffered '"\(.time)  \(.position)\t\(.tool)\t\(.summary)"'
       ;;
     *)
-      echo "usage: legion activity tail [n]" >&2
+      echo "usage: legion activity tail [n] [--all]" >&2
       exit 1
       ;;
   esac

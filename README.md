@@ -399,7 +399,13 @@ position on the squad is actually doing, not just what they report.
 ```bash
 legion activity tail        # follow it live, most recent 20 lines to start
 legion activity tail 100    # follow it live, starting further back
+legion activity tail --all  # every squad running on this machine, from any terminal
 ```
+
+`--all` needs no activated shell. It finds every squad with a session
+running on this machine and shows their activity in one stream, each line
+labeled with the squad and position (`q4-v2-builder`). A squad that starts
+while it's running joins in within a few seconds.
 
 It's plain JSON Lines, so anything else that wants to watch — a script, a
 dashboard — can just tail the file itself. `activity.log` stays out of git;
