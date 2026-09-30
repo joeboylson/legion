@@ -37,6 +37,7 @@ legion — Claude Code squad over tmux, run on mission command, scoped per proje
   legion session [name] [--all]      jump to a squad's tmux session by name, or pick from a list; --all for every tmux session, not just squads
   legion session detach              leave tmux entirely, back to a plain shell — every session keeps running
   legion dash [--once]               live view of every squad on this machine: each session's state, last actions and screen, and channel traffic
+  legion dash --web [--port 7580] [--host <ip>]   the same view as a web page, for any browser that can reach this machine
 
 Once activated (source .legion/bin/activate):
   legion commander [mission...]     hand the squad a goal — the default way to start work; it decides whether to do it itself or deploy operators

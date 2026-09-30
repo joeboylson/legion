@@ -430,6 +430,13 @@ connected to, including a squad here that runs only a channel. Use ↑/↓ (or
 j/k) to scroll, and q to quit. `legion dash --once` prints the same thing
 once as plain text.
 
+`legion dash --web` serves the same view as a web page that updates itself
+every 2 seconds, at `http://<this machine>:7580/`. Change the port with
+`--port`. It listens on every network this machine is on, so anyone who can
+reach the machine can open the page, over Tailscale for example. There's no
+password, and the page shows each session's screen, so pass
+`--host 127.0.0.1` to keep it to this machine only.
+
 It's plain JSON Lines, so anything else that wants to watch — a script, a
 dashboard — can just tail the file itself. `activity.log` stays out of git;
 it's a live record, not something worth a commit history.

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legion dash</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
+<style>
+  .page-head { padding-block: var(--section-y) var(--space-6); }
+  .page-head .lead { margin: var(--space-3) 0 0; }
+
+  .sessions { display: flex; flex-direction: column; gap: var(--space-5); }
+
+  .session { padding: var(--space-5); min-width: 0; }
+  .session-head {
+    display: flex; flex-wrap: wrap; align-items: baseline;
+    gap: var(--space-3) var(--space-4);
+  }
+  .session-head h3 { margin-right: var(--space-3); overflow-wrap: anywhere; }
+  .state { font-family: var(--font-mono); font-size: var(--text-label); color: var(--fg-muted); }
+  .state.working { color: var(--success); }
+  .tag.warn { color: var(--warning); border-color: var(--warning); }
+  .tag.bad { color: var(--danger); border-color: var(--danger); }
+
+  .session-body {
+    display: grid; gap: var(--space-5); margin-top: var(--space-5);
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 48rem) {
+    .session-body.has-screen { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  }
+  .session-body > * { min-width: 0; }
+  .session-body .label { margin-bottom: var(--space-3); }
+
+  .calls { list-style: none; margin: 0; padding: 0; max-width: none; }
+  .calls li {
+    margin: 0; padding: var(--space-2) 0; border-top: var(--hairline);
+    font-family: var(--font-mono); font-size: var(--text-label);
+    line-height: var(--leading-normal); overflow-wrap: anywhere;
+  }
+  .calls li:first-child { border-top: 0; }
+  .calls .when { color: var(--fg-muted); margin-right: var(--space-3); }
+  .calls .tool { color: var(--fg-muted); margin-right: var(--space-3); }
+
+  .screen {
+    margin: 0; padding: var(--space-4); border-radius: var(--radius-md);
+    background: var(--layer-1); font-size: var(--text-label);
+    line-height: var(--leading-normal); white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+
+  .channel { margin-top: var(--space-7); padding-top: var(--space-6); border-top: var(--hairline); }
+  .channel h2 { margin-bottom: var(--space-5); }
+  .peers { margin: 0 0 var(--space-5); }
+  .peers p { margin: 0 0 var(--space-2); max-width: none; }
+  .events td { vertical-align: top; overflow-wrap: anywhere; }
+  .events td.when { white-space: nowrap; color: var(--fg-muted); font-family: var(--font-mono); }
+  .events td.squad { white-space: nowrap; }
+  .events tr.bad td.msg { color: var(--danger); }
+
+  .empty { color: var(--fg-muted); }
+  .foot { padding-block: var(--space-7); }
+</style>
+</head>
+<body>
+<main class="container">
+  <header class="page-head">
+    <div class="label">Legion</div>
+    <h1 class="display">Dash</h1>
+    <p class="lead" id="summary">Loading…</p>
+  </header>
+
+  <section aria-label="Sessions">
+    <div class="sessions" id="sessions"></div>
+  </section>
+
+  <section class="channel" id="channel" hidden>
+    <div class="label">Channel</div>
+    <h2>Traffic between squads</h2>
+    <div class="peers" id="peers"></div>
+    <table class="events"><tbody id="events"></tbody></table>
+  </section>
+
+  <footer class="foot label" id="updated"></footer>
+</main>
+
+<script>
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+
+  const ago = (s) => {
+    if (s === null || s === undefined) return "";
+    s = Math.floor(s);
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    return Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m";
+  };
+
+  const clock = (iso) => {
+    const d = new Date(iso);
+    return isNaN(d) ? (iso || "").slice(11, 19) : d.toLocaleTimeString([], { hour12: false });
+  };
+
+  function card(c) {
+    const box = el("article", "card session");
+    const head = el("div", "session-head");
+    head.append(el("h3", "", c.addr));
+    head.append(el("span", "state" + (c.working ? " working" : ""),
+      c.working ? "working" : (c.idle !== null ? "idle " + ago(c.idle) : "idle")));
+    if (c.ctx) head.append(el("span", "tag", "ctx " + c.ctx + "%"));
+    if (c.mission) head.append(el("span", "tag", c.mission));
+    for (const [text, style] of c.flags) head.append(el("span", "tag " + style, text));
+    box.append(head);
+
+    const body = el("div", "session-body" + (c.screen.length ? " has-screen" : ""));
+    const acts = el("div");
+    acts.append(el("div", "label", "Last tool calls"));
+    const list = el("ul", "calls");
+    if (!c.activity.length) list.append(el("li", "empty", "none yet"));
+    for (const e of c.activity) {
+      const li = el("li");
+      li.append(el("span", "when", e.time ? clock(e.time) : ""));
+      li.append(el("span", "tool", e.tool || ""));
+      li.append(document.createTextNode((e.summary || "").split(/\s+/).join(" ")));
+      list.append(li);
+    }
+    acts.append(list);
+    body.append(acts);
+    if (c.screen.length) {
+      const scr = el("div");
+      scr.append(el("div", "label", "Screen"));
+      scr.append(el("pre", "screen", c.screen.map((l) => l.trim()).join("\n")));
+      body.append(scr);
+    }
+    box.append(body);
+    return box;
+  }
+
+  function render(s) {
+    const n = s.cards.length, q = s.squads.length;
+    document.getElementById("summary").textContent = q
+      ? `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`
+      : "No squads running on this machine.";
+
+    const sessions = document.getElementById("sessions");
+    sessions.replaceChildren(...s.cards.map(card));
+    if (q && !n) sessions.append(el("p", "empty", "No sessions running."));
+
+    const channel = document.getElementById("channel");
+    channel.hidden = !s.peers.length;
+    document.getElementById("peers").replaceChildren(...s.peers.map(([squad, connected]) =>
+      el("p", "muted", `${squad} connected to: ${connected.join(", ") || "nobody"}`)));
+    document.getElementById("events").replaceChildren(...s.events.map(([ts, squad, msg]) => {
+      const tr = el("tr", /failed|cannot|rejected|dropped|couldn't/.test(msg) ? "bad" : "");
+      tr.append(el("td", "when", clock(ts)), el("td", "squad", squad), el("td", "msg", msg.split(/\s+/).join(" ")));
+      return tr;
+    }));
+    document.getElementById("updated").textContent = "Updated " + clock(s.time);
+  }
+
+  async function tick() {
+    try {
+      const r = await fetch("api/state", { cache: "no-store" });
+      if (r.ok) render(await r.json());
+      else document.getElementById("updated").textContent = "Couldn't reach legion dash (" + r.status + ")";
+    } catch (e) {
+      document.getElementById("updated").textContent = "Couldn't reach legion dash. Is it still running?";
+    }
+  }
+  tick();
+  setInterval(tick, 2000);
+</script>
+</body>
+</html>

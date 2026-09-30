@@ -3,6 +3,9 @@
 
     legion dash            full-screen view, refreshed every second (q quits)
     legion dash --once     print one snapshot as plain text and exit
+    legion dash --web [--port 7580] [--host 0.0.0.0]
+                           serve the same view as a web page that refreshes
+                           itself, for any browser that can reach this machine
 
 One card per running position, across every squad: whether it's working,
 how full its conversation is, the mission it holds, anything waiting on it
@@ -76,10 +79,15 @@ def pane_text(pane):
     status line underneath (the box sits between two rule lines)."""
     screen = tmux("capture-pane", "-p", "-t", pane) or ""
     lines = [l.rstrip() for l in screen.split("\n")]
-    rules = [i for i, l in enumerate(lines) if len(l) >= 20 and set(l.strip()) <= set("─━-")]
+    # A rule is a line mostly of ─; the box's top one can carry the session's
+    # name ("──── q4-v2-builder ─").
+    rules = [i for i, l in enumerate(lines)
+             if l.strip().startswith("──") and l.count("─") >= 0.6 * len(l.strip())]
     if len(rules) >= 2:
         lines = lines[:rules[-2]]
-    lines = [l for l in lines if l.strip() and not re.search(r"copied \d+ chars|new messages? \(click\)", l)]
+    # Claude Code's own notices sit on top of the text; take them out.
+    lines = [re.sub(r"\s*(Jump to bottom|\d+ new messages?) \(click\) ↓\s*", " ", l).rstrip() for l in lines]
+    lines = [l for l in lines if l.strip() and not re.search(r"copied \d+ chars", l)]
     return lines[-LINES_PER_CARD:], screen
 
 
@@ -444,7 +452,100 @@ def run(stdscr):
         stdscr.refresh()
 
 
+def state(dash):
+    """Everything the web page shows, as JSON-ready data."""
+    rows, cards = dash.cards()
+    events, peers = dash.channel(rows)
+    return {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "squads": [squad for squad, _ in rows], "cards": cards, "events": events, "peers": peers}
+
+
+def templates_dir():
+    """templates/dash next to this script in a clone, or where install.sh puts it."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (os.path.join(here, "..", "templates", "dash"),
+              os.path.expanduser("~/.local/share/legion/templates/dash")):
+        if os.path.isfile(os.path.join(d, "index.html")):
+            return d
+    sys.exit("legion dash: can't find templates/dash/index.html; reinstall legion")
+
+
+def serve(host, port):
+    import http.server
+    import socket
+    import threading
+
+    pages = templates_dir()
+    files = {"/": ("index.html", "text/html; charset=utf-8"),
+             "/index.html": ("index.html", "text/html; charset=utf-8"),
+             "/tokens.css": ("tokens.css", "text/css; charset=utf-8")}
+    lock = threading.Lock()
+    current = {"body": b"{}"}
+
+    # One thread gathers the state every second, however many browsers
+    # are watching.
+    def refresh():
+        dash = Dash()
+        while True:
+            try:
+                body = json.dumps(state(dash)).encode()
+            except Exception as e:  # keep serving the last good state
+                sys.stderr.write("legion dash: %s\n" % e)
+            else:
+                with lock:
+                    current["body"] = body
+            time.sleep(1)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def send(self, code, body, kind):
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/api/state":
+                with lock:
+                    body = current["body"]
+                return self.send(200, body, "application/json")
+            if path in files:
+                name, kind = files[path]
+                with open(os.path.join(pages, name), "rb") as f:
+                    return self.send(200, f.read(), kind)
+            self.send(404, b"not found", "text/plain")
+
+        def log_message(self, *args):
+            pass
+
+    threading.Thread(target=refresh, daemon=True).start()
+    try:
+        server = http.server.ThreadingHTTPServer((host, port), Handler)
+    except OSError as e:
+        sys.exit("legion dash: can't listen on %s:%d: %s" % (host, port, e.strerror or e))
+    shown = socket.gethostname() if host in ("0.0.0.0", "") else host
+    print("legion dash: serving on http://%s:%d/ (Ctrl-C to stop)" % (shown, port), flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
 def main():
+    args = sys.argv[1:]
+    if "--web" in args:
+        def opt(name, default):
+            if name in args and args.index(name) + 1 < len(args):
+                return args[args.index(name) + 1]
+            return default
+        try:
+            port = int(opt("--port", "7580"))
+        except ValueError:
+            sys.exit("legion dash: --port takes a number")
+        serve(opt("--host", "0.0.0.0"), port)
+        return
     if "--once" in sys.argv[1:] or not sys.stdout.isatty():
         print(snapshot(Dash()))
         return
