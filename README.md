@@ -407,6 +407,21 @@ running on this machine and shows their activity in one stream, each line
 labeled with the squad and position (`q4-v2-builder`). A squad that starts
 while it's running joins in within a few seconds.
 
+For a fuller picture, run `legion dash` from any terminal. It's a live,
+full-screen view of every squad on this machine, updated every second, with
+one card per session:
+
+- whether it's working or how long it has been idle
+- how full its conversation is, and the mission it holds
+- anything waiting on it: unread messages, no message wait running, a usage
+  limit, or a clear in progress
+- its last 3 tool calls
+- the last 3 lines of its window
+
+Under the cards, a channel panel shows each squad's recent channel traffic
+and which squads it's connected to. Use ↑/↓ (or j/k) to scroll, and q to
+quit. `legion dash --once` prints the same thing once as plain text.
+
 It's plain JSON Lines, so anything else that wants to watch — a script, a
 dashboard — can just tail the file itself. `activity.log` stays out of git;
 it's a live record, not something worth a commit history.

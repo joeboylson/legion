@@ -36,6 +36,7 @@ legion — Claude Code squad over tmux, run on mission command, scoped per proje
   legion mcp [--role human --project <path>]   run legion's MCP server (squad sessions get it automatically)
   legion session [name] [--all]      jump to a squad's tmux session by name, or pick from a list; --all for every tmux session, not just squads
   legion session detach              leave tmux entirely, back to a plain shell — every session keeps running
+  legion dash [--once]               live view of every squad on this machine: each session's state, last actions and screen, and channel traffic
 
 Once activated (source .legion/bin/activate):
   legion commander [mission...]     hand the squad a goal — the default way to start work; it decides whether to do it itself or deploy operators
@@ -2084,6 +2085,7 @@ main() {
     demo) shift; cmd_demo "$@" ;;
     src) echo "$LEGION_SRC" ;;
     mcp) shift; exec python3 "$(cd "$(dirname "$0")" && pwd)/legion-mcp" "$@" ;;
+    dash) shift; exec python3 "$(cd "$(dirname "$0")" && pwd)/legion-dash" "$@" ;;
     session) shift; cmd_session "$@" ;;
     commander) shift; cmd_commander "$@" ;;
     deploy) shift; cmd_deploy "$@" ;;

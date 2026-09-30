@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""legion-dash — a live view of every squad running on this machine.
+
+    legion dash            full-screen view, refreshed every second (q quits)
+    legion dash --once     print one snapshot as plain text and exit
+
+One card per running position, across every squad: whether it's working,
+how full its conversation is, the mission it holds, anything waiting on it
+(unread mail, no message wait, a usage limit), its last few tool calls from
+.legion/activity.log, and the last few lines of its tmux pane. Below the
+cards, a panel of recent channel traffic from every squad that has a
+channel, and which other squads each one is connected to.
+
+Squads are found from the tags Legion puts on each pane (@legion_squad,
+@legion_root), so no activated shell is needed. Python 3 standard library
+only.
+"""
+import collections
+import curses
+import datetime
+import json
+import locale
+import os
+import re
+import subprocess
+import sys
+import time
+
+LINES_PER_CARD = 3        # activity lines and screen lines shown per card
+WORKING_SECONDS = 20      # a tool call this recent counts as working
+CHANNEL_LINES = 8
+SEP = "\x1f"
+
+
+def tmux(*args):
+    try:
+        p = subprocess.run(["tmux"] + list(args), capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return p.stdout if p.returncode == 0 else None
+
+
+def read(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        return default
+
+
+def panes():
+    """[(squad, root, addr, pane_id)] for every Legion pane on this machine."""
+    out = tmux("list-panes", "-a", "-F", SEP.join(
+        ["#{@legion_squad}", "#{@legion_root}", "#{@legion_addr}", "#{pane_id}", "#{pane_start_command}"]))
+    seen, rows = set(), []
+    for line in (out or "").splitlines():
+        squad, root, addr, pane, start = (line.split(SEP) + [""] * 5)[:5]
+        if not squad or not addr or pane in seen:
+            continue
+        seen.add(pane)
+        if not root:
+            # Panes started before @legion_root: the activate path in the
+            # command that started them.
+            m = re.search(r"&& \. (.*?)/bin/activate ", start)
+            root = re.sub(r"\\(.)", r"\1", m.group(1)) if m else ""
+        if root:
+            rows.append((squad, root, addr, pane))
+    return rows
+
+
+def pane_text(pane):
+    """The last lines a session wrote, without Claude Code's input box and
+    status line underneath (the box sits between two rule lines)."""
+    screen = tmux("capture-pane", "-p", "-t", pane) or ""
+    lines = [l.rstrip() for l in screen.split("\n")]
+    rules = [i for i, l in enumerate(lines) if len(l) >= 20 and set(l.strip()) <= set("─━-")]
+    if len(rules) >= 2:
+        lines = lines[:rules[-2]]
+    lines = [l for l in lines if l.strip() and not re.search(r"copied \d+ chars|new messages? \(click\)", l)]
+    return lines[-LINES_PER_CARD:], screen
+
+
+class Activity:
+    """Follows each squad's activity.log, keeping the last few calls per position."""
+
+    def __init__(self):
+        self.offsets = {}
+        self.recent = collections.defaultdict(lambda: collections.deque(maxlen=LINES_PER_CARD))
+        self.last_time = {}
+
+    def poll(self, root, squad):
+        path = os.path.join(root, "activity.log")
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        off = self.offsets.get(path)
+        if off is None or size < off:
+            off = max(0, size - 65536)
+        if size == off:
+            self.offsets[path] = off
+            return
+        with open(path, "rb") as f:
+            f.seek(off)
+            data = f.read()
+        self.offsets[path] = off + len(data)
+        for raw in data.decode("utf-8", "replace").split("\n"):
+            try:
+                e = json.loads(raw)
+            except ValueError:
+                continue
+            key = (squad, e.get("position", "?"))
+            self.recent[key].append(e)
+            self.last_time[key] = e.get("time", "")
+
+
+def since(ts):
+    """Seconds since an ISO 8601 UTC time, or None."""
+    try:
+        t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds()
+
+
+def clock(ts):
+    """HH:MM:SS in local time, from an ISO 8601 UTC time."""
+    try:
+        t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return (ts or "")[11:19]
+    return t.astimezone().strftime("%H:%M:%S")
+
+
+def ago(seconds):
+    if seconds is None:
+        return "?"
+    seconds = int(seconds)
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm" % (seconds // 60)
+    return "%dh%02dm" % (seconds // 3600, seconds % 3600 // 60)
+
+
+def split_mission(text):
+    head, _, body = text.partition("\n\n")
+    return head, body
+
+
+def mission_of(root, position):
+    """The active mission a position holds (same rule as position_mission in bin/legion)."""
+    d = os.path.join(root, "missions", "active")
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".md"))
+    except OSError:
+        return ""
+    if position == "commander":
+        return "%d active" % len(names) if names else ""
+    base = re.sub(r"-\d+$", "", position)
+    for n in names:
+        head, body = split_mission(read(os.path.join(d, n)))
+        holder = ""
+        if body.startswith("## Handoffs\n"):
+            entries = [l for l in body.split("\n")[1:] if l.startswith("- ")]
+            m = re.search(r"→ (\S+?):", entries[-1]) if entries else None
+            holder = m.group(1) if m else ""
+        if not holder:
+            m = re.search(r"^operator: *(\S+)", head, re.M)
+            holder = m.group(1) if m else ""
+        if holder in (position, base):
+            return n[:-3]
+    return ""
+
+
+def pid_alive(path):
+    try:
+        os.kill(int(read(path).strip()), 0)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+class Dash:
+    def __init__(self):
+        self.activity = Activity()
+        self.screens = {}   # pane -> (screen, time it last changed)
+
+    def cards(self):
+        now = time.time()
+        rows = panes()
+        cards = []
+        live = set()
+        for squad, root, addr, pane in rows:
+            live.add(pane)
+            self.activity.poll(root, squad)
+            position = addr[len(squad) + 1:] if addr.startswith(squad + "-") else addr
+            text, screen = pane_text(pane)
+            # A pane seen for the first time hasn't been seen changing.
+            prev = self.screens.get(pane)
+            if prev is None:
+                self.screens[pane] = (screen, None)
+            elif prev[0] != screen:
+                self.screens[pane] = (screen, now)
+            changed_at = self.screens[pane][1]
+            changed = now - changed_at if changed_at is not None else None
+            last = since(self.activity.last_time.get((squad, position)))
+            working = (changed is not None and changed < 3) or (last is not None and last < WORKING_SECONDS)
+            local = os.path.join(root, "local")
+            ctx = read(os.path.join(local, "context", position)).strip()
+            msgs = os.path.join(root, "messages", position)
+            try:
+                unread = len(os.listdir(os.path.join(msgs, "new")))
+            except OSError:
+                unread = 0
+            flags = []
+            if os.path.exists(os.path.join(local, "context", position + ".limited")):
+                flags.append(("waiting on usage limit", "bad"))
+            if os.path.exists(os.path.join(local, "context", position + ".clearing")):
+                flags.append(("clearing", "warn"))
+            if unread:
+                flags.append(("%d unread" % unread, "warn"))
+            if not working and not pid_alive(os.path.join(msgs, "waiting.pid")):
+                flags.append(("not listening", "warn"))
+            cards.append({
+                "addr": addr, "working": working,
+                "idle": min([x for x in (changed, last) if x is not None], default=None),
+                "ctx": ctx, "mission": mission_of(root, position), "flags": flags,
+                "activity": list(self.activity.recent.get((squad, position), [])), "screen": text,
+            })
+        for pane in list(self.screens):
+            if pane not in live:
+                del self.screens[pane]
+        return rows, cards
+
+    def channel(self, rows):
+        """Recent channel log lines from every squad, and who each is connected to."""
+        events, peers = [], []
+        for squad, root in sorted({(s, r) for s, r, _, _ in rows}):
+            chan = os.path.join(root, "channel")
+            if not os.path.isdir(chan):
+                continue
+            for line in read(os.path.join(chan, "channel.log")).splitlines()[-CHANNEL_LINES:]:
+                ts, _, msg = line.partition(" ")
+                events.append((ts, squad, msg))
+            try:
+                names = sorted(os.listdir(os.path.join(chan, "peers")))
+            except OSError:
+                names = []
+            connected = []
+            for n in names:
+                try:
+                    info = json.loads(read(os.path.join(chan, "peers", n)) or "{}")
+                except ValueError:
+                    continue
+                if info.get("connected"):
+                    connected.append(info.get("team", n[:-5]))
+            peers.append((squad, connected))
+        events.sort()
+        return events[-CHANNEL_LINES:], peers
+
+
+def card_lines(c, width):
+    """A card as [(text, style)] lines."""
+    state = "working" if c["working"] else ("idle %s" % ago(c["idle"]) if c["idle"] is not None else "idle")
+    bits = [c["addr"], state]
+    if c["ctx"]:
+        bits.append("ctx %s%%" % c["ctx"])
+    if c["mission"]:
+        bits.append(c["mission"])
+    head = [(" " + "  ".join(bits[:1]) + "  ", "title"), (bits[1], "good" if c["working"] else "dim")]
+    for b in bits[2:]:
+        head.append(("  " + b, "normal"))
+    for text, style in c["flags"]:
+        head.append(("  " + text, style))
+    out = [head]
+    acts = c["activity"] or [{"tool": "", "summary": "no tool calls yet"}]
+    for e in acts:
+        t = clock(e.get("time", "")) if e.get("time") else ""
+        out.append([("   %s %-6s " % (t, e.get("tool", "")[:6]), "dim"),
+                    (" ".join(e.get("summary", "").split())[:width], "normal")])
+    for l in c["screen"]:
+        out.append([("   │ ", "dim"), (l.strip()[:width], "screen")])
+    return out
+
+
+def snapshot(dash):
+    rows, cards = dash.cards()
+    if not cards:
+        return "no squads running on this machine"
+    out = []
+    for c in cards:
+        for line in card_lines(c, 200):
+            out.append("".join(t for t, _ in line))
+        out.append("")
+    events, peers = dash.channel(rows)
+    if peers:
+        out.append("channel")
+        for squad, connected in peers:
+            out.append("  %s connected to: %s" % (squad, ", ".join(connected) or "nobody"))
+        for ts, squad, msg in events:
+            out.append("  %s  %s  %s" % (clock(ts), squad, " ".join(msg.split())))
+    return "\n".join(out)
+
+
+def run(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    curses.use_default_colors()
+    styles = {"normal": 0, "dim": curses.A_DIM, "title": curses.A_BOLD, "screen": 0}
+    if curses.has_colors():
+        for i, (name, color) in enumerate([("good", curses.COLOR_GREEN), ("warn", curses.COLOR_YELLOW),
+                                           ("bad", curses.COLOR_RED), ("screen", curses.COLOR_CYAN)], 1):
+            curses.init_pair(i, color, -1)
+            styles[name] = curses.color_pair(i) | (curses.A_BOLD if name != "screen" else 0)
+    for name in ("good", "warn", "bad"):
+        styles.setdefault(name, curses.A_BOLD)
+    dash = Dash()
+    scroll = 0
+    next_draw = 0
+    while True:
+        key = stdscr.getch()
+        if key in (ord("q"), ord("Q"), 27):
+            return
+        if key in (curses.KEY_DOWN, ord("j")):
+            scroll += 1
+            next_draw = 0
+        elif key in (curses.KEY_UP, ord("k")):
+            scroll = max(0, scroll - 1)
+            next_draw = 0
+        elif key == curses.KEY_RESIZE:
+            next_draw = 0
+        if time.time() < next_draw:
+            time.sleep(0.05)
+            continue
+        next_draw = time.time() + 1
+        rows, cards = dash.cards()
+        events, peers = dash.channel(rows)
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+
+        def put(y, x, text, style="normal"):
+            if 0 <= y < h and x < w - 1:
+                try:
+                    stdscr.addstr(y, x, text[:max(0, w - 1 - x)], styles.get(style, 0))
+                except curses.error:
+                    pass
+            return x + len(text)
+
+        squads = len({r[0] for r in rows})
+        put(0, 0, " legion dash ", "title")
+        put(0, 13, "%d squad%s · %d session%s · %s   ↑↓ scroll · q quit" % (
+            squads, "" if squads == 1 else "s", len(cards), "" if len(cards) == 1 else "s",
+            time.strftime("%H:%M:%S")), "dim")
+        chan_h = (len(peers) + len(events) + 2) if peers else 0
+        chan_h = min(chan_h, max(0, h // 3))
+        body_h = h - 2 - chan_h
+        lines = []
+        for c in cards:
+            lines += card_lines(c, w - 20)
+            lines.append([("", "normal")])
+        if not cards:
+            lines = [[("  no squads running on this machine", "dim")]]
+        scroll = min(scroll, max(0, len(lines) - body_h))
+        for i, line in enumerate(lines[scroll:scroll + body_h]):
+            x = 0
+            for text, style in line:
+                x = put(2 + i, x, text, style)
+        if chan_h:
+            y = h - chan_h
+            put(y, 0, "─" * (w - 1), "dim")
+            put(y, 2, " channel ", "title")
+            y += 1
+            for squad, connected in peers:
+                put(y, 1, "%s connected to: %s" % (squad, ", ".join(connected) or "nobody"), "dim")
+                y += 1
+            for ts, squad, msg in events:
+                if y >= h:
+                    break
+                x = put(y, 1, clock(ts) + "  ", "dim")
+                x = put(y, x, squad + "  ", "title")
+                style = "bad" if re.search(r"failed|cannot|rejected|dropped", msg) else "normal"
+                put(y, x, " ".join(msg.split()), style)
+                y += 1
+        stdscr.refresh()
+
+
+def main():
+    if "--once" in sys.argv[1:] or not sys.stdout.isatty():
+        print(snapshot(Dash()))
+        return
+    locale.setlocale(locale.LC_ALL, "")
+    try:
+        curses.wrapper(run)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
