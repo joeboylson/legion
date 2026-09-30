@@ -36,7 +36,7 @@
   .log td.squad { width: var(--space-9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
   .log .detail { margin: var(--space-2) 0 0; color: var(--fg-muted); white-space: pre-wrap; }
   .log tr.ended td.msg > span { color: var(--warning); }
-  #questions-btn.waiting { color: var(--warning); }
+  #questions-btn.waiting .name, #questions-btn.waiting .count { color: var(--warning); }
   .channel-view .label { display: block; margin-bottom: var(--space-2); }
   @media (max-width: 48rem) {
     .wb { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "main" "status"; }
@@ -71,6 +71,10 @@
   }
 
   .wb-sidebar .tree { flex: 1; }
+  .wb-sidebar .views { flex: none; border-top: var(--hairline); padding-bottom: var(--space-3); }
+  .wb-sidebar .views .tree { flex: none; }
+  .views .count { margin-left: auto; }
+  .views .dot-space { width: var(--space-3); flex: none; }
   .tree .dot { flex: none; }
   .tree .squad { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-label);
                  letter-spacing: var(--tracking-wide); text-transform: uppercase; }
@@ -129,6 +133,14 @@
   <aside class="wb-sidebar" aria-label="Squads">
     <div class="pane-head"><span class="label">Squads</span><span class="count" id="session-count">0</span></div>
     <ul class="tree" role="tree" id="tree"></ul>
+    <div class="views">
+      <div class="pane-head"><span class="label">Views</span></div>
+      <ul class="tree">
+        <li><button type="button" id="questions-btn" title="Open the questions waiting for you in a tab"><span class="dot-space"></span><span class="name">Questions</span><span class="count" id="question-count">0</span></button></li>
+        <li><button type="button" id="channel-btn" title="Open the channel in a tab"><span class="dot" style="color: var(--fg-muted)"></span><span class="name">Channel</span><span class="count" id="peer-count">0</span></button></li>
+        <li><button type="button" id="log-btn" title="Open the session log in a tab"><span class="dot-space"></span><span class="name">Log</span></button></li>
+      </ul>
+    </div>
   </aside>
 
   <main class="wb-main">
@@ -142,9 +154,6 @@
     <div class="spacer"></div>
     <span class="hide-sm" id="working"></span>
     <span class="hide-sm" id="updated"></span>
-    <button type="button" id="questions-btn" title="Open questions waiting for you">Questions <span class="count" id="question-count">0</span></button>
-    <button type="button" id="log-btn" title="Open the session log">Log</button>
-    <button type="button" id="channel-btn" title="Open the channel in a tab"><span class="dot" style="color: var(--fg-muted)"></span>Channel <span class="count" id="peer-count">0</span></button>
     <button type="button" id="theme">Theme</button>
   </footer>
 </div>
@@ -389,7 +398,17 @@
     return box;
   }
 
+  // The open tabs, the current one and the focus survive a reload. Storage
+  // can be missing or blocked, so every use is guarded.
+  function saveView() {
+    try {
+      localStorage.setItem("legion-dash-view", JSON.stringify(
+        { focus: view.focus, tab: view.tab, open: view.open, filter: view.filter }));
+    } catch (e) {}
+  }
+
   function render(force) {
+    saveView();
     const s = last;
     if (!s) return;
     const cards = visible(s);
@@ -461,6 +480,9 @@
     document.querySelector("#channel-btn .dot").style.color = connected ? "var(--success)" : "var(--fg-muted)";
     document.getElementById("question-count").textContent = s.questions.length;
     document.getElementById("questions-btn").classList.toggle("waiting", s.questions.length > 0);
+    for (const name of ["questions", "channel", "log"]) {
+      document.getElementById(name + "-btn").setAttribute("aria-selected", String(view.tab === name));
+    }
 
     const q = new Set([...s.squads, ...s.cards.map(squadOf)]).size, n = s.cards.length;
     document.getElementById("totals").textContent = `${q} squad${q === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}`;
@@ -544,8 +566,18 @@
   document.getElementById("log-btn").onclick = () => openTab("log");
   // http://<host>:7580/#channel opens straight on the channel tab.
   // #channel, #questions or #log opens straight on that tab.
+  try {
+    const saved = JSON.parse(localStorage.getItem("legion-dash-view") || "null");
+    if (saved) {
+      view.open = (saved.open || []).filter((n) => TAB_NAMES[n]);
+      view.tab = saved.tab === "sessions" || view.open.includes(saved.tab) ? saved.tab : "sessions";
+      view.focus = typeof saved.focus === "string" ? saved.focus : null;
+      view.filter = typeof saved.filter === "string" ? saved.filter : "";
+      document.getElementById("filter").value = view.filter;
+    }
+  } catch (e) {}
   const start = location.hash.slice(1);
-  if (TAB_NAMES[start]) { view.open.push(start); view.tab = start; }
+  if (TAB_NAMES[start]) { if (!view.open.includes(start)) view.open.push(start); view.tab = start; }
 
   const root = document.documentElement;
   const savedTheme = (() => { try { return localStorage.getItem("legion-dash-theme"); } catch (e) { return null; } })();

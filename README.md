@@ -443,14 +443,15 @@ once as plain text.
 `legion dash --web` serves the same view as a web page at
 `http://<this machine>:7580/` that updates itself every second. It's laid
 out like an editor: squads and their sessions in a sidebar you can filter
-and click to focus on one squad or session, and a Channel button in the
-status bar that opens the channel's peers and traffic in a tab. The
-status bar also has **Questions**, which opens every question waiting for
-you in a tab where you can answer it (pick an option or write your own;
-it goes back to whoever asked, like the `answer` tool), and **Log**, which
-opens `local/sessions.log`: stand-downs, clears, wake-ups, and how any
-session that ended on its own ended. `#channel`, `#questions` or `#log` on
-the end of the address opens straight on that tab.
+and click to focus on one squad or session. Under the squads, a Views
+section opens more tabs: **Questions**, every question waiting for you,
+which you can answer right there (pick an option or write your own; it
+goes back to whoever asked, like the `answer` tool); **Channel**, the
+channel's peers and traffic; and **Log**, `local/sessions.log` with
+stand-downs, clears, wake-ups, and how any session that ended on its own
+ended. Open tabs, the current tab, the focus and the filter come back when
+you reload. `#channel`, `#questions` or `#log` on the end of the address
+opens straight on that tab.
 
 Answering changes a squad's work, so it only works from the machine running
 `legion dash`. Other machines can read the questions but not answer them,
