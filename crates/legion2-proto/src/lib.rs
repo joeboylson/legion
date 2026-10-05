@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod tools;
+
 /// Every name the new version uses comes from this, so it can run beside
 /// today's Legion and switch to "legion" in one change.
 pub const NAME: &str = "legion2";

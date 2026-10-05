@@ -379,6 +379,8 @@ repos start fresh on the new version.
    machine-wide limit, the permission timeout, restarts, usage limits, and
    sessions stuck before they start. Tested end to end with Haiku sessions.
 3. Legion's tools inside Claude: the commander and operators drive the run.
+   **Done**: every session gets Legion's tools (served by `legion2 mcp`),
+   each role sees only its own, and legion2d still checks every call.
 4. The app: the main screen, live terminals, "Needs you".
 5. Channels, then reaching another machine over SSH or a private network.
 

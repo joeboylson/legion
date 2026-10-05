@@ -5,6 +5,7 @@
 
 mod arguments;
 mod client;
+mod mcp_server;
 mod plan;
 mod reply_format;
 mod time_span;
@@ -96,8 +97,12 @@ async fn run() -> Result<(), String> {
     let mission_body = read_mission_body(&command_line.action)?;
     let now_ms = jiff::Timestamp::now().as_millisecond();
     let plan = plan_action(command_line.action, command_line.run, now_ms, mission_body)?;
+    if matches!(plan, Plan::ServeTools) {
+        return mcp_server::serve_tools().await;
+    }
     let mut client = Client::connect().await?;
     match plan {
+        Plan::ServeTools => Ok(()),
         Plan::Ask(command) => {
             print_reply(&client.ask(command).await?);
             Ok(())

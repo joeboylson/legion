@@ -81,7 +81,7 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } => {
             Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish missions"))
         }
-        Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with `legion2 suggest`".into()),
+        Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with the suggest tool".into()),
         Command::Key { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
         Command::FolderAdd { .. } | Command::FolderList | Command::RunStart { .. } | Command::RunList { .. } | Command::RunClose { .. } => {
             Err(refusal(AllowedTo::HumanOnly, "add folders, or start, list or close runs"))

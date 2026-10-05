@@ -68,7 +68,10 @@ pub fn delivery_prefix() -> String {
     format!("[{NAME}]")
 }
 
-/// Lets a session run the legion2 command without asking each time.
-pub fn legion_command_tool_rule() -> String {
-    format!("Bash({NAME}:*)")
+/// The legion2 subcommand that serves Legion's tools to a session.
+pub const LEGION_TOOLS_SUBCOMMAND: &str = "mcp";
+
+/// Lets a session use every one of Legion's tools without asking each time.
+pub fn legion_tools_rule() -> String {
+    format!("mcp__{NAME}")
 }

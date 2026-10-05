@@ -13,13 +13,13 @@ use crate::{
     git::{create_worktree, is_git_repo},
     naming::{copy_positions, first_free_position},
     prompts::{commander_prompt, operator_prompt, MissionBriefing},
-    session_arguments::{session_arguments, SessionArgumentsRequest},
+    session_arguments::{legion_tools_config, session_arguments, LaunchPlan},
     sessions::{spawn_session, Session, SpawnRequest},
     setup::{read_operator, read_pipeline},
     terminal_key::TerminalKey,
 };
 
-const COMMANDER_FIRST_PROMPT: &str = "Your run has started. Check its missions with `legion2 missions` and start on any that are waiting.";
+const COMMANDER_FIRST_PROMPT: &str = "Your run has started. Check its missions with the missions tool and start on any that are waiting.";
 
 /// A waiting session costs nothing, so only starting, busy and asking ones count.
 pub fn is_busy(activity: Activity) -> bool {
@@ -40,8 +40,7 @@ fn operator_first_prompt(mission: Option<u32>) -> String {
     }
 }
 
-/// The position and `claude` arguments for a commander.
-fn commander_launch(state: &State, folder_index: usize, run: &Run, first_prompt: Option<String>) -> Result<(String, Vec<String>), String> {
+fn commander_launch(state: &State, folder_index: usize, run: &Run, first_prompt: Option<String>) -> Result<LaunchPlan, String> {
     let folder = &state.folders[folder_index];
     if state.running_positions(&run.id).iter().any(|position| position == COMMANDER) {
         return Err("the commander is already running".into());
@@ -55,19 +54,16 @@ fn commander_launch(state: &State, folder_index: usize, run: &Run, first_prompt:
     let postmortem_filter = LogFilter { kinds: Some(vec![EntryKind::Postmortem]), ..Default::default() };
     let postmortems = folder.store.entries(&run.id, &postmortem_filter)?;
     let recent_postmortems = &postmortems[postmortems.len().saturating_sub(RECENT_POSTMORTEM_COUNT)..];
-    let system_prompt = commander_prompt(run, &pipeline_text, &copy_limits, recent_postmortems);
-    let first_prompt = first_prompt.unwrap_or_else(|| COMMANDER_FIRST_PROMPT.into());
-    let arguments = session_arguments(SessionArgumentsRequest {
-        system_prompt: &system_prompt,
+    Ok(LaunchPlan {
+        position: COMMANDER.to_string(),
+        system_prompt: commander_prompt(run, &pipeline_text, &copy_limits, recent_postmortems),
         model: None,
-        allowed_tools: &[],
-        disallowed_tools: &[],
-        first_prompt: &first_prompt,
-    });
-    Ok((COMMANDER.to_string(), arguments))
+        allowed_tools: Vec::new(),
+        disallowed_tools: Vec::new(),
+        first_prompt: first_prompt.unwrap_or_else(|| COMMANDER_FIRST_PROMPT.into()),
+    })
 }
 
-/// The position and `claude` arguments for an operator.
 fn operator_launch(
     state: &State,
     folder_index: usize,
@@ -76,7 +72,7 @@ fn operator_launch(
     mission: Option<u32>,
     first_prompt: Option<String>,
     max_busy_sessions: usize,
-) -> Result<(String, Vec<String>), String> {
+) -> Result<LaunchPlan, String> {
     let folder = &state.folders[folder_index];
     let busy_session_count = state.sessions.values().filter(|session| is_busy(session.activity)).count();
     if busy_session_count >= max_busy_sessions {
@@ -99,15 +95,14 @@ fn operator_launch(
         .transpose()?;
     let briefing = mission_with_history.as_ref().map(|(number, body, history)| MissionBriefing { number: *number, body, history });
     let system_prompt = operator_prompt(&position, run, &operator, &pipeline, &pipeline_text, briefing);
-    let first_prompt = first_prompt.unwrap_or_else(|| operator_first_prompt(mission));
-    let arguments = session_arguments(SessionArgumentsRequest {
-        system_prompt: &system_prompt,
-        model: operator.config.model.as_deref(),
-        allowed_tools: &operator.config.allowed_tools,
-        disallowed_tools: &operator.config.disallowed_tools,
-        first_prompt: &first_prompt,
-    });
-    Ok((position, arguments))
+    Ok(LaunchPlan {
+        position,
+        system_prompt,
+        model: operator.config.model,
+        allowed_tools: operator.config.allowed_tools,
+        disallowed_tools: operator.config.disallowed_tools,
+        first_prompt: first_prompt.unwrap_or_else(|| operator_first_prompt(mission)),
+    })
 }
 
 /// A mission works in its own worktree, made the first time anyone starts
@@ -145,13 +140,15 @@ impl Daemon {
         let spawn_request = {
             let state = self.state.lock().unwrap();
             let (folder_index, run) = state.find_open_run(run_key)?;
-            let (position, arguments) = if operator == COMMANDER {
+            let launch = if operator == COMMANDER {
                 commander_launch(&state, folder_index, &run, first_prompt)?
             } else {
                 operator_launch(&state, folder_index, &run, operator, mission, first_prompt, self.config.max_busy_sessions)?
             };
+            let tools_config = legion_tools_config(&self.config.binary_folder, &self.config.socket_path, &run.id, &launch.position);
+            let arguments = session_arguments(&launch, &tools_config);
             let working_folder = mission_working_folder(&state, folder_index, &run.id, mission)?;
-            SpawnRequest { run: run.id, position, mission, working_folder, arguments }
+            SpawnRequest { run: run.id, position: launch.position, mission, working_folder, arguments }
         };
         let run_id = spawn_request.run.clone();
         let position = spawn_request.position.clone();

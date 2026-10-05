@@ -14,8 +14,8 @@ use crate::{
     terminal_key::TerminalKey,
 };
 
-const COMMANDER_RESTARTED_PROMPT: &str = "Your last session ended by itself, and Legion started you again. Read the run log (`legion2 log`) and the missions, and carry on from there.";
-const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the run was cut off; Legion is starting again the operators that held missions. Read the run log (`legion2 log`) and the missions, and carry on from there.";
+const COMMANDER_RESTARTED_PROMPT: &str = "Your last session ended by itself, and Legion started you again. Read the run log and the missions with your tools, and carry on from there.";
+const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the run was cut off; Legion is starting again the operators that held missions. Read the run log and the missions with your tools, and carry on from there.";
 
 pub fn can_restart_commander(last_restart_ms: Option<i64>, now: i64) -> bool {
     last_restart_ms.is_none_or(|last| now - last >= COMMANDER_RESTART_GAP_MS)
@@ -52,7 +52,7 @@ pub fn stuck_starting_text(position: &str) -> String {
 }
 
 fn restarted_operator_prompt(mission: u32) -> String {
-    format!("Legion restarted while you were on mission {mission}. Read its run log entries (`legion2 log --mission {mission}`) and carry on.")
+    format!("Legion restarted while you were on mission {mission}. Read its run log entries with the log tool (mission {mission}) and carry on.")
 }
 
 impl Daemon {
@@ -210,6 +210,6 @@ mod tests {
 
     #[test]
     fn a_restarted_operator_reads_its_missions_log() {
-        assert!(restarted_operator_prompt(4).contains("legion2 log --mission 4"));
+        assert!(restarted_operator_prompt(4).contains("log tool (mission 4)"));
     }
 }

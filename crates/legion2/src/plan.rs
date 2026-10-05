@@ -8,6 +8,8 @@ use crate::{
 };
 
 pub enum Plan {
+    /// Serve Legion's tools over stdin and stdout.
+    ServeTools,
     /// Ask once and print the reply.
     Ask(Command),
     /// Print the log, then keep printing new entries that pass the filter.
@@ -41,6 +43,7 @@ pub fn plan_action(action: Action, run: Option<String>, now_ms: i64, mission_bod
     let needs_run = || run.clone().ok_or_else(|| format!("say which run with --run, or set {ENV_RUN}"));
     let command = match action {
         Action::Ping => Command::Ping,
+        Action::Mcp => return Ok(Plan::ServeTools),
         Action::Add { path } => Command::FolderAdd { path },
         Action::Folders => Command::FolderList,
         Action::Run { folder, pipeline, name } => Command::RunStart { folder, pipeline, name },

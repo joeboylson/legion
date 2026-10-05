@@ -17,6 +17,9 @@ pub struct CommandLine {
 pub enum Action {
     /// Check legion2d is running.
     Ping,
+    /// Serve Legion's tools to the Claude session legion2d started this in.
+    #[command(hide = true)]
+    Mcp,
     /// Add a folder, setting up .legion2/ in it if it has none.
     Add { path: String },
     /// List folders.

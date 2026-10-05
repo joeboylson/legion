@@ -50,7 +50,7 @@ pub fn delivery_text(entry: &Entry) -> String {
     let body = match entry.kind {
         EntryKind::MissionAdded => {
             let number = entry.mission.unwrap_or_default();
-            format!("New mission {number}: {text}. Read it with `{NAME} mission {number}`.")
+            format!("New mission {number}: {text}. Read it with the mission_read tool.")
         }
         EntryKind::Answer => format!("The human answered your question #{}: {text}", entry.answers.unwrap_or_default()),
         EntryKind::Handoff => format!("{author} handed off{on_mission}: {text}"),
