@@ -378,6 +378,23 @@ repos start fresh on the new version.
 4. The app: the main screen, live terminals, "Needs you".
 5. Channels, then reaching another machine over SSH or a private network.
 
+**While it's being built, it stays apart from today's Legion.** Everything
+gets its own name until the switch:
+
+| Today's Legion                  | The new one while it's built |
+|---------------------------------|------------------------------|
+| `legion` command                | `legion2`                    |
+| `~/.local/share/legion/`        | `~/.local/share/legion2/`    |
+| `.legion/` in a repo            | `.legion2/`                  |
+| Legion's tools in Claude: `legion` | `legion2`                 |
+
+- The name is one setting in the Rust code, so switching is one change.
+- Testing happens only in throwaway repos, never one a current squad works in.
+- The new program only accepts connections from its own machine and never
+  touches tmux, so running squads can't be affected.
+- When it's ready, the names go back to `legion` and the old version is
+  removed.
+
 ## How today's features carry over
 
 | Today, through tmux                     | In the new app                     |
