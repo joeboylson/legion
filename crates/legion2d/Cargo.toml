@@ -1,0 +1,13 @@
+[package]
+name = "legion2d"
+version = "0.1.0"
+edition = "2021"
+description = "Legion's background program: runs Claude sessions in terminals it owns."
+
+[dependencies]
+axum = "0.8"
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-std", "io-util", "sync"] }
+vt100 = "0.15"
