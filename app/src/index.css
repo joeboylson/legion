@@ -1,0 +1,77 @@
+/* Joe's house style (Slag), workbench mode. tokens.css and workbench.css are
+ * copied from ~/.claude/skills/slag-design-system; that's where to change them. */
+@import "tailwindcss";
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+@import "@xterm/xterm/css/xterm.css";
+/* In Tailwind's lower layers, so a utility wins where a helper shares its
+   name (tokens.css has its own .grid). */
+@import "./styles/tokens.css" layer(base);
+@import "./styles/workbench.css" layer(components);
+
+/* Dark mode follows the system and [data-theme] on <html>, as tokens.css does. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* shadcn's names, pointed at Slag's tokens. shadcn's "accent" is the hover
+ * background; Slag's one accent color is `highlight` here. */
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--fg);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--fg);
+  --color-popover: var(--layer-1);
+  --color-popover-foreground: var(--fg);
+  --color-primary: var(--fg);
+  --color-primary-foreground: var(--surface);
+  --color-secondary: var(--layer-2);
+  --color-secondary-foreground: var(--fg);
+  --color-muted: var(--layer-1);
+  --color-muted-foreground: var(--fg-muted);
+  --color-accent: var(--layer-2);
+  --color-accent-foreground: var(--fg);
+  --color-destructive: var(--danger);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--accent);
+  --color-highlight: var(--accent);
+  --color-selection: var(--selection);
+  --color-layer-1: var(--layer-1);
+  --color-layer-2: var(--layer-2);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --text-label: var(--text-label);
+  --text-body: var(--text-body);
+  --text-lead: var(--text-lead);
+  --text-title: var(--text-title);
+  --text-display: var(--text-display);
+
+  /* Fibonacci spacing: p-1 is 3px, p-5 is 21px, h-6 is 34px. */
+  --spacing-0: 0px;
+  --spacing-1: var(--space-1);
+  --spacing-2: var(--space-2);
+  --spacing-3: var(--space-3);
+  --spacing-4: var(--space-4);
+  --spacing-5: var(--space-5);
+  --spacing-6: var(--space-6);
+  --spacing-7: var(--space-7);
+  --spacing-8: var(--space-8);
+  --spacing-9: var(--space-9);
+  --spacing-10: var(--space-10);
+  --spacing-row: var(--row);
+  --spacing-bar: var(--bar);
+  --spacing-sidebar: var(--sidebar);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+html, body, #root { height: 100%; }

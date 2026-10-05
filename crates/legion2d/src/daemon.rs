@@ -177,6 +177,7 @@ impl Daemon {
             Command::SessionList { run } => self.list_sessions(run.as_deref()),
             Command::Screen { run, position } => self.read_screen(&run, &position),
             Command::Key { run, position, key } => self.press_key(&run, &position, &key),
+            Command::Input { run, position, text } => self.type_input(&run, &position, &text),
             Command::Post { run, entry } => self.post_from_caller(&run, &author, entry),
             Command::Log { run, filter } => self.read_log(&run, &filter),
         }

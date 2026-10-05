@@ -71,7 +71,7 @@ pub fn reply_text(reply: &Reply) -> String {
         Reply::Missions { missions } => lines(missions, |mission| format!("#{} {:?}{}  {}", mission.number, mission.status, holder_note(mission), mission.title)),
         Reply::Session { session } => format!("{} {}", session.position, session.activity.label()),
         Reply::Sessions { sessions } => lines(sessions, session_line),
-        Reply::Screen { text } => text.clone(),
+        Reply::Screen { text, .. } => text.clone(),
         Reply::Entry { entry } => entry_line(entry),
         Reply::Entries { entries } => lines(entries, entry_line),
     }

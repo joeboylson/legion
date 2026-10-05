@@ -183,7 +183,15 @@ impl Daemon {
     pub fn read_screen(&self, run_key: &str, position: &str) -> Result<Reply, String> {
         let mut state = self.state.lock().unwrap();
         let (_, run) = state.find_run(run_key)?;
-        Ok(Reply::Screen { text: state.session_in_run(&run.id, position)?.screen_text() })
+        let session = state.session_in_run(&run.id, position)?;
+        Ok(Reply::Screen { text: session.screen_text(), ansi: session.screen_ansi() })
+    }
+
+    pub fn type_input(&self, run_key: &str, position: &str, text: &str) -> Result<Reply, String> {
+        let mut state = self.state.lock().unwrap();
+        let (_, run) = state.find_run(run_key)?;
+        state.session_in_run(&run.id, position)?.type_bytes(text.as_bytes())?;
+        Ok(Reply::Done)
     }
 
     pub fn press_key(&self, run_key: &str, position: &str, key_name: &str) -> Result<Reply, String> {

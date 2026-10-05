@@ -1,4 +1,5 @@
-//! Talking to legion2d over its WebSocket.
+//! Talking to legion2d over its WebSocket: shared by the legion2 command
+//! and the app.
 
 use futures_util::{SinkExt, StreamExt};
 use legion2_proto::{Caller, Command, Outcome, Reply, Request, ServerMessage, ENV_POSITION, ENV_RUN, ENV_SOCKET, NAME};

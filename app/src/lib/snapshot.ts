@@ -1,0 +1,82 @@
+// Debug builds with LEGION2_SNAPSHOT_DIR set: after the screen settles,
+// save the page as rendered and where every element sits, so the layout can
+// be checked without a person looking.
+
+import { invoke } from '@tauri-apps/api/core'
+
+const SETTLE_DELAY_MS = 610
+const TEXT_PREVIEW_LENGTH = 55
+
+export type ElementBox = {
+  path: string
+  text: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const describeElement = (element: Element): string => {
+  const classes = [...element.classList].slice(0, 3).map(name => `.${name}`).join('')
+  return `${element.tagName.toLowerCase()}${classes}`
+}
+
+const elementPath = (element: Element): string => {
+  const ancestors: Element[] = []
+  for (let current: Element | null = element; current !== null && current !== document.body; current = current.parentElement) {
+    ancestors.unshift(current)
+  }
+  return ancestors.map(describeElement).join(' > ')
+}
+
+const ownText = (element: Element): string =>
+  [...element.childNodes]
+    .filter(node => node.nodeType === Node.TEXT_NODE)
+    .map(node => node.textContent ?? '')
+    .join('')
+    .trim()
+    .slice(0, TEXT_PREVIEW_LENGTH)
+
+export const elementBoxes = (root: Element): ElementBox[] =>
+  [...root.querySelectorAll('*')]
+    .map(element => ({ element, rect: element.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.width > 0 && rect.height > 0)
+    .map(({ element, rect }) => ({
+      path: elementPath(element),
+      text: ownText(element),
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    }))
+
+// The page without its scripts: a browser redraws it from the HTML alone.
+const pageWithoutScripts = (): string => {
+  const copy = document.documentElement.cloneNode(true) as HTMLElement
+  copy.querySelectorAll('script').forEach(script => script.remove())
+  return `<!doctype html>\n${copy.outerHTML}`
+}
+
+const saveSnapshot = async (): Promise<void> => {
+  const layout = { width: window.innerWidth, height: window.innerHeight, elements: elementBoxes(document.body) }
+  await invoke('save_snapshot', { page: pageWithoutScripts(), layout: JSON.stringify(layout, null, 1) })
+}
+
+export type StartingView = { run: string; position: string | null }
+
+// Debug builds: the run (and position) LEGION2_OPEN names, to open at start.
+export const readStartingView = async (): Promise<StartingView | undefined> =>
+  (await invoke<StartingView | null>('starting_view')) ?? undefined
+
+export const startSnapshots = async (): Promise<void> => {
+  const isSnapshotting = await invoke<boolean>('is_snapshotting')
+  if (!isSnapshotting) return
+  let pending: number | undefined
+  const saveSoon = () => {
+    window.clearTimeout(pending)
+    pending = window.setTimeout(() => void saveSnapshot(), SETTLE_DELAY_MS)
+  }
+  new MutationObserver(saveSoon).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true })
+  window.addEventListener('resize', saveSoon)
+  saveSoon()
+}

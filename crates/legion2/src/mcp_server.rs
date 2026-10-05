@@ -9,10 +9,9 @@ use legion2_proto::{
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::{
-    client::Client,
-    reply_format::reply_text,
-};
+use legion2_client::Client;
+
+use crate::reply_format::reply_text;
 
 const JSON_RPC_VERSION: &str = "2.0";
 /// Used when the client doesn't say which protocol version it speaks.

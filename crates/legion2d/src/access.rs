@@ -82,7 +82,7 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
             Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish missions"))
         }
         Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with the suggest tool".into()),
-        Command::Key { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
+        Command::Key { .. } | Command::Input { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
         Command::FolderAdd { .. } | Command::FolderList | Command::RunStart { .. } | Command::RunList { .. } | Command::RunClose { .. } => {
             Err(refusal(AllowedTo::HumanOnly, "add folders, or start, list or close runs"))
         }
@@ -170,6 +170,12 @@ mod tests {
         assert!(postmortem.ends_with("the commander or the human"));
         let legion_entry = run_a_session_command_targets(Role::Commander, &post(EntryKind::Finished)).unwrap_err();
         assert!(legion_entry.ends_with("that's for the human"));
+    }
+
+    #[test]
+    fn no_session_types_into_another() {
+        let input = Command::Input { run: "r".into(), position: "builder".into(), text: "y".into() };
+        assert!(run_a_session_command_targets(Role::Commander, &input).is_err());
     }
 
     #[test]

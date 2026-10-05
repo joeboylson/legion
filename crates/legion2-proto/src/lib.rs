@@ -38,6 +38,7 @@ pub const HUMAN: &str = "human";
 pub const LEGION: &str = NAME;
 pub const COMMANDER: &str = "commander";
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Request {
     pub id: String,
@@ -47,12 +48,14 @@ pub struct Request {
     pub command: Command,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Caller {
     pub run: String,
     pub position: String,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
@@ -76,6 +79,8 @@ pub enum Command {
     SessionList { run: Option<String> },
     Screen { run: String, position: String },
     Key { run: String, position: String, key: String },
+    /// Types straight into a session's terminal, as the app's live terminal does.
+    Input { run: String, position: String, text: String },
     /// Adds an entry to the run log. Messages, handoffs and answers addressed
     /// to a position are handed to its session.
     Post { run: String, entry: NewEntry },
@@ -84,6 +89,7 @@ pub enum Command {
     Watch,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NewEntry {
     pub kind: EntryKind,
@@ -94,9 +100,11 @@ pub struct NewEntry {
     pub text: String,
     /// For an answer: the question entry it answers.
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub answers: Option<i64>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct LogFilter {
     #[serde(default)]
@@ -108,12 +116,14 @@ pub struct LogFilter {
     pub kinds: Option<Vec<EntryKind>>,
     /// Milliseconds since 1970.
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub since_ms: Option<i64>,
     /// Questions that have no answer yet, only.
     #[serde(default)]
     pub open_questions: bool,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
@@ -121,6 +131,7 @@ pub enum ServerMessage {
     Event { event: Event },
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -128,6 +139,7 @@ pub enum Outcome {
     Error(String),
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Reply {
@@ -141,11 +153,14 @@ pub enum Reply {
     Missions { missions: Vec<Mission> },
     Session { session: SessionInfo },
     Sessions { sessions: Vec<SessionInfo> },
-    Screen { text: String },
+    /// `text` is the screen as plain text; `ansi` redraws it, colors and
+    /// cursor included, in a terminal view.
+    Screen { text: String, ansi: String },
     Entry { entry: Entry },
     Entries { entries: Vec<Entry> },
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -153,6 +168,7 @@ pub enum Event {
     Session { session: SessionInfo },
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Folder {
     pub path: String,
@@ -161,16 +177,20 @@ pub struct Folder {
     pub operators: Vec<String>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Run {
     pub id: String,
     pub name: String,
     pub folder: String,
     pub pipeline: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub started_ms: i64,
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub closed_ms: Option<i64>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Mission {
     pub number: u32,
@@ -182,6 +202,7 @@ pub struct Mission {
     pub holder: Option<String>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum MissionStatus {
@@ -193,6 +214,7 @@ pub enum MissionStatus {
     Done,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SessionInfo {
     pub run: String,
@@ -205,6 +227,7 @@ pub struct SessionInfo {
     pub detail: Option<String>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Activity {
@@ -231,19 +254,24 @@ impl Activity {
 }
 
 /// One event in a run. Entries are only ever added.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entry {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub id: i64,
     pub run: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub at_ms: i64,
     pub mission: Option<u32>,
     pub from: String,
     pub to: Option<String>,
     pub kind: EntryKind,
     pub text: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub answers: Option<i64>,
 }
 
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {

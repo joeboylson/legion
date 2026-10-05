@@ -55,8 +55,12 @@ impl Session {
     }
 
     pub fn press_key(&mut self, key: TerminalKey) -> Result<(), String> {
+        self.type_bytes(key.bytes())
+    }
+
+    pub fn type_bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.input
-            .write_all(key.bytes())
+            .write_all(bytes)
             .and_then(|_| self.input.flush())
             .map_err(|error| format!("can't type into the session: {error}"))
     }
@@ -67,6 +71,15 @@ impl Session {
 
     pub fn screen_text(&self) -> String {
         self.screen.screen().contents().trim_end().to_string()
+    }
+
+    /// Redraws the screen in a terminal view: clear, contents with colors,
+    /// then the cursor where the session has it.
+    pub fn screen_ansi(&self) -> String {
+        let screen = self.screen.screen();
+        let (cursor_row, cursor_column) = screen.cursor_position();
+        let contents = String::from_utf8_lossy(&screen.contents_formatted()).into_owned();
+        format!("{contents}\x1b[{};{}H", cursor_row + 1, cursor_column + 1)
     }
 }
 

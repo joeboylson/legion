@@ -381,7 +381,10 @@ repos start fresh on the new version.
 3. Legion's tools inside Claude: the commander and operators drive the run.
    **Done**: every session gets Legion's tools (served by `legion2 mcp`),
    each role sees only its own, and legion2d still checks every call.
-4. The app: the main screen, live terminals, "Needs you".
+4. The app: the main screen, live terminals, "Needs you". **Done** for this
+   machine: Tauri with React and shadcn in the house style, connected to
+   legion2d. Debug builds can save what the screen looks like
+   (`LEGION2_SNAPSHOT_DIR`) and open a run at start (`LEGION2_OPEN`).
 5. Channels, then reaching another machine over SSH or a private network.
 
 **While it's being built, it stays apart from today's Legion.** Everything

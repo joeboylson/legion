@@ -4,7 +4,6 @@
 //! environment; outside one, say which run with --run.
 
 mod arguments;
-mod client;
 mod mcp_server;
 mod plan;
 mod reply_format;
@@ -13,11 +12,11 @@ mod time_span;
 use std::io::Read;
 
 use clap::Parser;
+use legion2_client::Client;
 use legion2_proto::{Command, Entry, Event, LogFilter, Reply, ServerMessage, NAME};
 
 use crate::{
     arguments::{Action, CommandLine, ExportFormat},
-    client::Client,
     plan::{plan_action, Plan},
     reply_format::{entry_line, entry_markdown, reply_text},
 };
