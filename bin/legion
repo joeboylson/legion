@@ -560,6 +560,33 @@ pane_of() {
   squad_panes | awk -F '\t' -v a="$1" '$1 == a { print $2; exit }'
 }
 
+# Whether a Claude session is running in a pane: the pane hasn't exited and
+# a claude process runs in it (the pane's own process, or one under it). An
+# open window isn't enough: a session that ended has been seen leaving its
+# pane open (tmux 3.4, Linux), showing only "Resume this session with ...".
+# legion-channeld and legion-dash check the same way.
+pane_session_running() {
+  local info dead pid
+  info="$(tmux display -p -t "$1" '#{pane_dead} #{pane_pid}' 2>/dev/null)" || return 1
+  dead="${info%% *}" pid="${info#* }"
+  [ "$dead" != 1 ] && [ -n "$pid" ] || return 1
+  ps -axo pid=,ppid=,args= 2>/dev/null | awk -v root="$pid" '
+    {
+      parent[$1] = $2
+      n = split($3, p, "/"); prog = p[n]
+      m = split($4, q, "/"); arg = q[m]
+      if (prog == "claude" || (prog ~ /^node/ && arg == "claude")) claude[$1] = 1
+    }
+    END {
+      for (c in claude)
+        for (x = c; x != "" && x != 0 && !(x in seen); x = parent[x]) {
+          seen[x] = 1
+          if (x == root) exit 0
+        }
+      exit 1
+    }'
+}
+
 squad_window() {
   { tmux list-windows -a -F '#{window_id} #{@legion_grid}' 2>/dev/null || true; } \
     | awk -v s="$LEGION_SQUAD_NAME" '$2 == s { print $1; exit }'
@@ -699,6 +726,8 @@ SCRIPT
          "run-shell -b \"$(printf '%q' "$self") pane-died $(printf '%q' "$LEGION_LOCAL/sessions.log") #{pane_id}\""
   fi
   tmux select-layout -t "$window" tiled
+  # Notices if this session ends by itself (see session_check).
+  watch_ensure
 }
 
 # Not squad-specific and doesn't need an activated shell. Scoped to
@@ -1758,16 +1787,25 @@ session_log() {
 # `legion pane-died <log> <pane>`: run by the squad window's pane-died hook
 # (see open_window), which keeps an exited pane just long enough for this.
 # Records how the session ended, with its last lines, then closes the pane.
+# It runs outside an activated shell, so it leaves the rest (restarting a
+# commander, telling it about an operator) to the watcher: a file in
+# local/ended/ named after the position.
 cmd_pane_died() {
-  local log="$1" pane="$2" addr status signal window
+  local log="$1" pane="$2" addr squad status signal window
   addr="$(tmux display -p -t "$pane" '#{@legion_addr}' 2>/dev/null)"
+  squad="$(tmux display -p -t "$pane" '#{@legion_squad}' 2>/dev/null)"
+  if [ -n "$squad" ] && [ "${addr#"$squad"-}" != "$addr" ]; then
+    mkdir -p "$(dirname "$log")/ended" && date +%s > "$(dirname "$log")/ended/${addr#"$squad"-}"
+  fi
   status="$(tmux display -p -t "$pane" '#{pane_dead_status}' 2>/dev/null)"
   signal="$(tmux display -p -t "$pane" '#{pane_dead_signal}' 2>/dev/null)"
   window="$(tmux display -p -t "$pane" '#{window_id}' 2>/dev/null)"
   {
     printf '%s %s: session ended (exit status %s%s). Its last lines:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "${addr:-$pane}" "${status:-?}" "${signal:+, signal $signal}"
-    tmux capture-pane -p -t "$pane" 2>/dev/null | grep -v '^Pane is dead' | awk NF | tail -n 12 | sed 's/^/    /'
+    # -S -: from the start of its history. tmux pushes what was on screen up
+    # there when the pane exits, leaving just "Pane is dead" in view.
+    tmux capture-pane -p -S - -t "$pane" 2>/dev/null | grep -v '^Pane is dead' | awk NF | tail -n 12 | sed 's/^/    /'
   } >> "$log" 2>/dev/null
   tmux kill-pane -t "$pane" 2>/dev/null
   [ -n "$window" ] && tmux select-layout -t "$window" tiled 2>/dev/null
@@ -1835,22 +1873,103 @@ run_detached() {
 # time isn't known, it types a line into the session telling it to carry
 # on. Any hook the session runs after that clears the mark, so a session
 # that carried on by itself (Claude Code can do that too) is left alone,
-# and one that hits the limit again is marked again. The watcher stops
-# once nothing has been marked for 10 minutes.
+# and one that hits the limit again is marked again.
+#
+# The same watcher looks for sessions that ended by themselves (see
+# session_check), so every start of a position makes sure it runs. It stops
+# once nothing has been marked and no position has run for 10 minutes.
 watch_ensure() {
   local pidf="$LEGION_LOCAL/watch.pid"
   [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null && return 0
   run_detached human watch
 }
 
+# One line in activity.log, as if position $1 had made a tool call, so the
+# dash here and on the other end of a channel shows it.
+activity_note() {
+  jq -nc --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pos "$1" --arg sum "$2" \
+    '{time: $t, position: $pos, tool: "legion", summary: $sum}' >> "$(activity_log)" 2>/dev/null || true
+}
+
+# A position whose session ended by itself, not through Legion: start the
+# commander again from its notes, or tell the commander about an operator.
+# A commander that ends again within 10 minutes of a restart is left for
+# the human, so a session that can't start doesn't loop.
+session_followup() {
+  local pos="$1" self="$2" now last mission next="Start it again if there's still work for it."
+  if [ "$pos" != "commander" ]; then
+    mission="$(position_mission "$pos" 2>/dev/null)" || mission=""
+    [ -n "$mission" ] && next="It holds mission $(basename "$mission" .md): start it again with that mission."
+    ( LEGION_MESSAGE_AS=human cmd_message send commander "SESSION ENDED: $pos's session ended by itself, so Legion closed its window (how it ended is in $LEGION_LOCAL/sessions.log). $next" >/dev/null 2>&1 ) || true
+    activity_note "$pos" "session ended by itself; Legion told the commander"
+    return 0
+  fi
+  # A squad that wrapped up is meant to be down.
+  [ -f "$LEGION_LOCAL/wrapped-up" ] && return 0
+  now="$(date +%s)"
+  last="$(cat "$LEGION_LOCAL/commander-restarted" 2>/dev/null)" || last=0
+  if [ $((now - ${last:-0})) -lt 600 ]; then
+    session_log "commander: ended by itself again within 10 minutes of a restart, so Legion left it down. Start it with: legion commander"
+    activity_note commander "session ended by itself again; not restarted. Start it with: legion commander"
+    return 0
+  fi
+  echo "$now" > "$LEGION_LOCAL/commander-restarted"
+  if LEGION_KICKOFF="Your last session ended by itself, and Legion started you again. Start 'legion message wait' in the background first. Then read your new messages, the latest '## Handoff' section at the end of $LEGION_LOG, the missions in $LEGION_MISSIONS/active/ and the roster, and carry on from there. Tell the human in one line that you were restarted." \
+      "$self" commander >/dev/null 2>&1; then
+    session_log "commander: started again after its session ended by itself"
+    activity_note commander "session ended by itself; Legion started it again"
+  else
+    session_log "commander: ended by itself, and starting it again failed. Start it with: legion commander"
+    activity_note commander "session ended by itself; starting it again failed. Start it with: legion commander"
+  fi
+}
+
+# Every squad pane whose Claude session has ended while the pane stayed
+# open. One found on two checks in a row (a pane still starting up has no
+# claude yet) is logged with its last lines, closed, and followed up. So
+# are the positions the pane-died hook left in local/ended/. $2 holds the
+# panes found last time; the ones found this time are printed.
+session_check() {
+  local self="$1" before="$2" now="" addr pane command pos f
+  while IFS="$(printf '\t')" read -r addr pane command; do
+    [ -n "$pane" ] || continue
+    pane_session_running "$pane" && continue
+    case " $before " in
+      *" $pane "*) ;;
+      *) now="$now $pane"; continue ;;
+    esac
+    pos="${addr#"$LEGION_SQUAD_NAME"-}"
+    {
+      printf '%s %s: session ended (its window stayed open, so the watcher found it). Its last lines:\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$pos"
+      tmux capture-pane -p -t "$pane" 2>/dev/null | awk NF | tail -n 12 | sed 's/^/    /'
+    } >> "$LEGION_LOCAL/sessions.log" 2>/dev/null
+    tmux kill-pane -t "$pane" 2>/dev/null
+    f="$(squad_window)"
+    [ -n "$f" ] && tmux select-layout -t "$f" tiled 2>/dev/null
+    session_followup "$pos" "$self"
+  done <<EOF
+$(squad_panes)
+EOF
+  for f in "$LEGION_LOCAL/ended"/*; do
+    [ -f "$f" ] || continue
+    rm -f "$f"
+    session_followup "$(basename "$f")" "$self"
+  done
+  echo "$now"
+}
+
 cmd_watch() {
   require_active
-  local pidf="$LEGION_LOCAL/watch.pid" dir f pos now since resets resume pane found idle_since=""
+  local pidf="$LEGION_LOCAL/watch.pid" dir f pos now since resets resume pane found idle_since="" self suspects=""
   if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then return 0; fi
   echo $$ > "$pidf"
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
   dir="$(context_dir)"
   while :; do
+    suspects="$(session_check "$self" "$suspects")"
     now="$(date +%s)" found=0
+    [ -n "$(squad_panes)" ] && found=1
     for f in "$dir"/*.limited; do
       [ -f "$f" ] || continue
       found=1
@@ -1863,6 +1982,8 @@ cmd_watch() {
       [ "$now" -ge "$resume" ] || continue
       pane="$(pane_of "$LEGION_SQUAD_NAME-$pos")"
       [ -n "$pane" ] || { rm -f "$f"; continue; }
+      # No session to type into; session_check deals with the pane.
+      pane_session_running "$pane" || continue
       echo "$now" > "$f"
       pane_clear_input "$pane"
       tmux send-keys -t "$pane" -l "Your usage limit should have reset now. Carry on from where you stopped."
@@ -1875,7 +1996,7 @@ cmd_watch() {
       idle_since="${idle_since:-$now}"
       [ $((now - idle_since)) -ge 600 ] && break
     fi
-    sleep "${LEGION_WATCH_TICK:-60}"
+    sleep "${LEGION_WATCH_TICK:-30}"
   done
   rm -f "$pidf"
 }
@@ -2130,9 +2251,17 @@ cmd_activity() {
 cmd_list() {
   require_active
   tmux list-sessions >/dev/null 2>&1 || { echo "no tmux server running"; return 0; }
-  local out
-  out="$(squad_panes | awk -F '\t' '{ printf "%s  %s  (%s)\n", $1, $2, $3 }')"
+  local out="" addr pane command
+  while IFS="$(printf '\t')" read -r addr pane command; do
+    [ -n "$addr" ] || continue
+    pane_session_running "$pane" || command="session ended"
+    out="$out$addr  $pane  ($command)
+"
+  done <<EOF
+$(squad_panes)
+EOF
   if [ -n "$out" ]; then
+    out="${out%?}"
     printf '%s\n' "$out"
   else
     echo "no panes running for squad '$LEGION_SQUAD_NAME'"

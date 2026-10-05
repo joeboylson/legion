@@ -284,8 +284,8 @@ limit, Legion marks it and starts a small watcher. A minute after the
 now. Carry on from where you stopped." into that session. If it doesn't
 know when the limit resets, it tries every 30 minutes. A session that has
 already carried on is left alone. Each restart is logged in
-`.legion/local/watch.log`, and the watcher stops by itself once no session
-is waiting.
+`.legion/local/watch.log`. The watcher stops by itself once no session is
+waiting and no position has run for 10 minutes.
 
 ### Wrapping up for the day: `legion wrap-up`
 
@@ -319,6 +319,20 @@ session ends on its own, the log also gets its exit status and its last
 lines on screen. Legion never presses Ctrl-C in a session's window, because
 Claude Code quits on two in a row; it clears half-typed text with Ctrl-U
 instead.
+
+An open window doesn't always mean a running session: a session that ended
+can leave its window open, showing only "Resume this session with ...".
+Legion counts a session as running only while a `claude` process runs in
+its window. `legion list` says "session ended" for one that isn't, and the
+dash marks it **ended**. The watcher from the section above also runs
+whenever any position is up. Every 30 seconds it looks for windows whose
+session has ended, logs each one with its last lines, and closes it. When
+it's an operator, the watcher tells the commander, with the mission the
+operator held. When it's the commander, the watcher starts it again, and
+it picks up from its messages, its handoff note and the active missions. A
+commander that ends again within 10 minutes of that is left down, and the
+log and the dash say so. `legion commander` starts it. A squad that wrapped
+up is never restarted.
 
 ### How work moves
 
@@ -812,6 +826,15 @@ hasn't changed in 2 minutes, the channel clears any half-typed text there
 and types a line telling it to read its messages. It leaves a window alone
 if it's showing a permission question, and wakes the same window at most
 once every 10 minutes. Each wake is logged in `.legion/channel/channel.log`.
+A window whose session has ended is never woken, since there's no one in
+it to read the line.
+
+**It tells the sender when no one is listening.** A message from another
+squad always lands in the position's inbox. If that position has no Claude
+session running, the channel also sends the other squad's commander a
+message starting "NOT HEARD", so the other squad knows no one will read its
+message until the session starts. It sends this at most once every 10
+minutes per squad and position, and never in answer to another "NOT HEARD".
 
 ## License
 

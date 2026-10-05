@@ -286,12 +286,46 @@ async def handle_answer(msg, sender_team):
         log("answer for unknown/disconnected team %r dropped (from %s)" % (to, sender_team))
 
 
+# (team, operator) -> when the sender was last told no one is listening.
+UNHEARD_TOLD = {}
+UNHEARD_GAP_SECONDS = 600
+UNHEARD_PREFIX = "NOT HEARD"
+
+
+async def tell_if_unheard(operator, text, sender_team):
+    """A message is in the inbox, but with no session running for that
+    position here nobody will read it. Say so to the team that sent it,
+    once every 10 minutes at most, and never in answer to one of these (two
+    squads with no one listening would pass them back and forth)."""
+    if text.startswith(UNHEARD_PREFIX) or operator in positions_running():
+        return
+    now = time.time()
+    if now - UNHEARD_TOLD.get((sender_team, operator), 0) < UNHEARD_GAP_SECONDS:
+        return
+    writer = route(sender_team)
+    if writer is None:
+        return
+    UNHEARD_TOLD[(sender_team, operator)] = now
+    note = ("%s from %s: your message to %s is in its inbox, but %s has no Claude session running on %s, "
+            "so no one will read it until one starts. The human there can start it with: legion commander"
+            % (UNHEARD_PREFIX, SQUAD, operator, operator, SQUAD)) if operator == "commander" else (
+            "%s from %s: your message to %s is in its inbox, but %s has no Claude session running on %s, "
+            "so no one will read it until it starts again." % (UNHEARD_PREFIX, SQUAD, operator, operator, SQUAD))
+    try:
+        await send_line(writer, {"type": "relay", "to": sender_team, "from": SQUAD,
+                                 "operator": "commander", "text": note})
+        log("told %s that %s isn't running: %s" % (sender_team, operator, note))
+    except OSError:
+        pass
+
+
 async def handle_relay(msg, sender_team, writer=None):
     to = msg.get("to", "")
     operator = msg.get("operator") or "commander"
     text = msg.get("text", "")
     if to == SQUAD:
         deliver_locally(operator, text, sender_team)
+        await tell_if_unheard(operator, text, sender_team)
     elif to in CONNECTIONS:
         # Only to a direct connection, never on through VIA: one hop at
         # most, so relays can't loop.
@@ -545,6 +579,54 @@ def tmux(*args):
     return p.stdout if p.returncode == 0 else None
 
 
+def claude_pids():
+    """{pid: parent pid} for every process, and the set of those that are claude."""
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}, set()
+    parent, claude = {}, set()
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) < 3:
+            continue
+        parent[f[0]] = f[1]
+        prog = os.path.basename(f[2])
+        if prog == "claude" or (prog.startswith("node") and len(f) > 3 and os.path.basename(f[3]) == "claude"):
+            claude.add(f[0])
+    return parent, claude
+
+
+def session_running(pane_pid, dead, procs):
+    """Whether a Claude session runs in a pane: it hasn't exited and a claude
+    process is the pane's own or under it. The same check as
+    pane_session_running in bin/legion: a session that ended can leave its
+    pane open."""
+    if dead == "1" or not pane_pid:
+        return False
+    parent, claude = procs
+    for pid in claude:
+        seen = set()
+        while pid and pid not in seen:
+            if pid == pane_pid:
+                return True
+            seen.add(pid)
+            pid = parent.get(pid)
+    return False
+
+
+def positions_running():
+    """This squad's positions whose Claude session is running."""
+    out = tmux("list-panes", "-a", "-F", "#{@legion_squad}\t#{@legion_addr}\t#{pane_pid}\t#{pane_dead}")
+    procs = claude_pids()
+    running = set()
+    for line in (out or "").splitlines():
+        squad, addr, pid, dead = (line.split("\t") + ["", "", "", ""])[:4]
+        if squad == SQUAD and addr.startswith(SQUAD + "-") and session_running(pid, dead, procs):
+            running.add(addr[len(SQUAD) + 1:])
+    return running
+
+
 def waiting(position):
     try:
         with open(os.path.join(MESSAGES, position, "waiting.pid")) as f:
@@ -575,11 +657,15 @@ async def watch_deaf():
     woken = {}    # pane id -> time last woken
     while True:
         await asyncio.sleep(WAKE_CHECK_SECONDS)
-        out = tmux("list-panes", "-a", "-F", "#{pane_id}\t#{@legion_squad}\t#{@legion_addr}\t#{pane_current_command}")
+        out = tmux("list-panes", "-a", "-F",
+                   "#{pane_id}\t#{@legion_squad}\t#{@legion_addr}\t#{pane_current_command}\t#{pane_pid}\t#{pane_dead}")
+        procs = claude_pids()
         panes = {}
         for line in (out or "").splitlines():
-            pane, squad, addr, command = (line.split("\t") + ["", "", ""])[:4]
-            if squad == SQUAD and addr.startswith(SQUAD + "-"):
+            pane, squad, addr, command, pid, dead = (line.split("\t") + [""] * 6)[:6]
+            # A window left open by a session that ended has no one to wake.
+            # The watcher in bin/legion finds it and closes it.
+            if squad == SQUAD and addr.startswith(SQUAD + "-") and session_running(pid, dead, procs):
                 panes[addr[len(SQUAD) + 1:]] = (pane, command)
         now = time.time()
         for position, (pane, command) in panes.items():

@@ -191,7 +191,7 @@
   const status = (c) => c.flags.some(([, s]) => s === "bad") ? "var(--danger)"
     : c.flags.some(([, s]) => s === "warn") ? "var(--warning)"
     : c.working ? "var(--success)" : "var(--fg-muted)";
-  const stateText = (c) => c.working ? "working" : (c.idle !== null ? "idle " + ago(c.idle) : "idle");
+  const stateText = (c) => c.working ? "working" : c.ended ? "ended" : (c.idle !== null ? "idle " + ago(c.idle) : "idle");
 
   function visible(s) {
     const f = view.filter.toLowerCase();
@@ -232,7 +232,7 @@
         b.setAttribute("aria-selected", String(view.tab === "sessions" && view.focus === c.addr));
         const dot = el("span", "dot");
         dot.style.color = status(c);
-        b.append(dot, el("span", "name", c.addr.slice(squad.length + 1) || c.addr), el("span", "muted", c.working ? "" : ago(c.idle)));
+        b.append(dot, el("span", "name", c.addr.slice(squad.length + 1) || c.addr), el("span", "muted", c.working ? "" : c.ended ? "ended" : ago(c.idle)));
         b.title = c.addr + " · " + stateText(c);
         b.onclick = () => { view.focus = c.addr; view.tab = "sessions"; render(); };
         li.append(b);

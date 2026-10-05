@@ -56,13 +56,50 @@ def read(path, default=""):
         return default
 
 
+def claude_pids():
+    """{pid: parent pid} for every process, and the set of those that are claude."""
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,ppid=,args="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}, set()
+    parent, claude = {}, set()
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) < 3:
+            continue
+        parent[f[0]] = f[1]
+        prog = os.path.basename(f[2])
+        if prog == "claude" or (prog.startswith("node") and len(f) > 3 and os.path.basename(f[3]) == "claude"):
+            claude.add(f[0])
+    return parent, claude
+
+
+def session_running(pane_pid, dead, procs):
+    """Whether a Claude session runs in a pane (same check as
+    pane_session_running in bin/legion): a session that ended can leave its
+    pane open, so an open pane isn't enough."""
+    if dead == "1" or not pane_pid:
+        return False
+    parent, claude = procs
+    for pid in claude:
+        seen = set()
+        while pid and pid not in seen:
+            if pid == pane_pid:
+                return True
+            seen.add(pid)
+            pid = parent.get(pid)
+    return False
+
+
 def panes():
-    """[(squad, root, addr, pane_id)] for every Legion pane on this machine."""
+    """[(squad, root, addr, pane_id, session running)] for every Legion pane on this machine."""
     out = tmux("list-panes", "-a", "-F", SEP.join(
-        ["#{@legion_squad}", "#{@legion_root}", "#{@legion_addr}", "#{pane_id}", "#{pane_start_command}"]))
+        ["#{@legion_squad}", "#{@legion_root}", "#{@legion_addr}", "#{pane_id}", "#{pane_pid}", "#{pane_dead}",
+         "#{pane_start_command}"]))
+    procs = claude_pids()
     seen, rows = set(), []
     for line in (out or "").splitlines():
-        squad, root, addr, pane, start = (line.split(SEP) + [""] * 5)[:5]
+        squad, root, addr, pane, pid, dead, start = (line.split(SEP) + [""] * 7)[:7]
         if not squad or not addr or pane in seen:
             continue
         seen.add(pane)
@@ -72,7 +109,7 @@ def panes():
             m = re.search(r"&& \. (.*?)/bin/activate ", start)
             root = re.sub(r"\\(.)", r"\1", m.group(1)) if m else ""
         if root:
-            rows.append((squad, root, addr, pane))
+            rows.append((squad, root, addr, pane, session_running(pid, dead, procs)))
     return rows
 
 
@@ -239,11 +276,11 @@ class Dash:
         now = time.time()
         rows = panes()
         squads = dict(channel_squads())
-        squads.update({s: r for s, r, _, _ in rows})
+        squads.update({s: r for s, r, _, _, _ in rows})
         self.activity.local = set(squads)
         cards = []
         live = set()
-        for squad, root, addr, pane in rows:
+        for squad, root, addr, pane, running in rows:
             live.add(pane)
             self.activity.poll(root, squad)
             position = addr[len(squad) + 1:] if addr.startswith(squad + "-") else addr
@@ -257,7 +294,7 @@ class Dash:
             changed_at = self.screens[pane][1]
             changed = now - changed_at if changed_at is not None else None
             last = since(self.activity.last_time.get((squad, position)))
-            working = (changed is not None and changed < 3) or (last is not None and last < WORKING_SECONDS)
+            working = running and ((changed is not None and changed < 3) or (last is not None and last < WORKING_SECONDS))
             local = os.path.join(root, "local")
             ctx = read(os.path.join(local, "context", position)).strip()
             msgs = os.path.join(root, "messages", position)
@@ -266,16 +303,18 @@ class Dash:
             except OSError:
                 unread = 0
             flags = []
+            if not running:
+                flags.append(("session ended", "bad"))
             if os.path.exists(os.path.join(local, "context", position + ".limited")):
                 flags.append(("waiting on usage limit", "bad"))
             if os.path.exists(os.path.join(local, "context", position + ".clearing")):
                 flags.append(("clearing", "warn"))
             if unread:
                 flags.append(("%d unread" % unread, "warn"))
-            if not working and not pid_alive(os.path.join(msgs, "waiting.pid")):
+            if running and not working and not pid_alive(os.path.join(msgs, "waiting.pid")):
                 flags.append(("not listening", "warn"))
             cards.append({
-                "squad": squad, "addr": addr, "working": working,
+                "squad": squad, "addr": addr, "working": working, "ended": not running,
                 "idle": min([x for x in (changed, last) if x is not None], default=None),
                 "ctx": ctx, "mission": mission_of(root, position), "flags": flags,
                 "activity": list(self.activity.recent.get((squad, position), [])), "screen": text,
@@ -331,7 +370,8 @@ class Dash:
 
 def card_lines(c, width):
     """A card as [(text, style)] lines."""
-    state = "working" if c["working"] else ("idle %s" % ago(c["idle"]) if c["idle"] is not None else "idle")
+    state = "working" if c["working"] else "ended" if c.get("ended") else (
+        "idle %s" % ago(c["idle"]) if c["idle"] is not None else "idle")
     bits = [c["addr"], state]
     if c["ctx"]:
         bits.append("ctx %s%%" % c["ctx"])
