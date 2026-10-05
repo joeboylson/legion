@@ -5,9 +5,12 @@ edition = "2021"
 description = "Legion's background program: runs Claude sessions in terminals it owns."
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+legion2-proto = { path = "../legion2-proto" }
 portable-pty = "0.9"
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-std", "io-util", "sync"] }
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 vt100 = "0.15"

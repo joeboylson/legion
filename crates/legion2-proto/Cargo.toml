@@ -1,0 +1,9 @@
+[package]
+name = "legion2-proto"
+version = "0.1.0"
+edition = "2021"
+description = "The messages legion2d and its clients (the legion2 command, the app, Legion's tools) send each other."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

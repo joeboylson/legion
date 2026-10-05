@@ -1,0 +1,14 @@
+[package]
+name = "legion2"
+version = "0.1.0"
+edition = "2021"
+description = "The legion2 command: talks to legion2d."
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+jiff = "0.2"
+legion2-proto = { path = "../legion2-proto" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "net", "io-std", "io-util"] }
+tokio-tungstenite = "0.28"

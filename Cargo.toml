@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["crates/legion2d"]
+members = ["crates/legion2-proto", "crates/legion2d", "crates/legion2"]

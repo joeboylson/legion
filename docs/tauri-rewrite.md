@@ -3,7 +3,7 @@
 > Writing rule for this doc: keep it short and plain. No jargon, no made-up
 > terms.
 
-Ideas only. Nothing is built. Branch: `explore/tauri`.
+Being built. Branch: `explore/tauri`. See "Build order" for where it's at.
 
 ## Goals
 
@@ -372,8 +372,12 @@ repos start fresh on the new version.
 
 1. The background program running one session: a hidden terminal with the
    add-on, which reports idle, busy or waiting on permission, and takes a
-   message in.
+   message in. **Done.**
 2. The `legion` command and the run log: a full run on a host with no screen.
+   **Done**: folders, runs, missions in their own worktrees, finishing
+   branches, the run log, questions, export, permissions per role, the
+   machine-wide limit, the permission timeout, restarts, usage limits, and
+   sessions stuck before they start. Tested end to end with Haiku sessions.
 3. Legion's tools inside Claude: the commander and operators drive the run.
 4. The app: the main screen, live terminals, "Needs you".
 5. Channels, then reaching another machine over SSH or a private network.
