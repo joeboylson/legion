@@ -2,6 +2,6 @@
 import type { EntryKind } from "./EntryKind";
 
 /**
- * One event in a run. Entries are only ever added.
+ * One event in a deployment. Entries are only ever added.
  */
-export type Entry = { id: number, run: string, at_ms: number, mission: number | null, from: string, to: string | null, kind: EntryKind, text: string, answers: number | null, };
+export type Entry = { id: number, deployment: string, at_ms: number, mission: number | null, from: string, to: string | null, kind: EntryKind, text: string, answers: number | null, };

@@ -44,16 +44,21 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .with_state(daemon)
 }
 
-/// What the add-on posts. `addon` comes once, when it connects.
+/// What the add-on posts. `addon` and `model` come once, when it connects;
+/// `context` (how full the conversation is, in percent) once it's known.
 #[derive(Deserialize)]
 struct AddonReport {
     state: Activity,
     detail: Option<String>,
     addon: Option<String>,
+    model: Option<String>,
+    context: Option<u8>,
+    /// What the session wrote at the end of its turn.
+    answer: Option<String>,
 }
 
 async fn receive_addon_report(State(daemon): State<Arc<Daemon>>, UrlPath(session_id): UrlPath<String>, Json(report): Json<AddonReport>) -> StatusCode {
-    let activity_report = ActivityReport { activity: report.state, detail: report.detail, addon_version: report.addon };
+    let activity_report = ActivityReport { activity: report.state, detail: report.detail, addon_version: report.addon, model: report.model, context_percent: report.context, final_answer: report.answer };
     match daemon.record_activity(&session_id, activity_report) {
         true => StatusCode::NO_CONTENT,
         false => StatusCode::NOT_FOUND,

@@ -17,24 +17,24 @@ Being built. Branch: `explore/tauri`. See "Build order" for where it's at.
 ## Terms
 
 - **Squad:** the commander plus the operators named in a pipeline.
-- **Run:** one working copy of a squad in one folder, on one pipeline. It
-  has its own commander, operators, run log and ID. A run works through
+- **Deployment:** one working copy of a squad in one folder, on one pipeline. It
+  has its own commander, operators, deployment log and ID. A deployment works through
   many missions.
-- **Mission:** one task, written in a file that never changes. A run's
+- **Mission:** one task, written in a file that never changes. A deployment's
   operators carry it through the pipeline.
 
 ## Decided
 
-**Starting a run takes a folder and a pipeline.** A name is optional.
+**Starting a deployment takes a folder and a pipeline.** A name is optional.
 
-**A run stays open, with its commander.** The commander stays up the whole
+**A deployment stays open, with its commander.** The commander stays up the whole
 time, so you can message it even when nothing is going on. It starts
 operators as missions arrive. When there's no work left, the operators'
 sessions close, and the commander waits. A session that's waiting uses no
 usage.
 
 **When the work runs out, the commander writes a short postmortem:**
-gotchas and learnings from that stretch of work, as a run log entry. A new
+gotchas and learnings from that stretch of work, as a deployment log entry. A new
 commander session reads the recent postmortems first.
 
 **No end-of-day wrap-up.** Pausing every mission does the same job.
@@ -92,16 +92,16 @@ carries messages both ways (a WebSocket), at one local address. The app, the
 
 - Each command carries an ID, and the reply carries the same ID: done, or
   failed and why.
-- Live updates go to everyone connected without being asked: new run log
+- Live updates go to everyone connected without being asked: new deployment log
   entries, session changes, terminal output.
 - Message shapes are defined once in Rust. The app's TypeScript versions
   are generated from them, so the two can't drift apart.
 
-**The program starts when the machine starts, and brings every open run
+**The program starts when the machine starts, and brings every open deployment
 back.** Every session stops if the program stops, since it owns their
 terminals. On start, each commander starts in a fresh session and reads the
-run log. Operators on missions that were in progress start fresh on those
-missions. A run log entry records the restart.
+deployment log. Operators on missions that were in progress start fresh on those
+missions. A deployment log entry records the restart.
 
 **Anyone who can connect to a host is "the human" there.** No accounts and
 no names: whoever gets in can do everything.
@@ -148,18 +148,18 @@ easy in the app.
   same name don't get mixed up.
 - Once it joins, its commander sends the channel a short description: what
   the team is and what it can do.
-- Each run in a channel has two switches in the app, both starting at "ask
+- Each deployment in a channel has two switches in the app, both starting at "ask
   me":
   - **Send:** whether the commander can message other squads: off, ask the
     human each time, or free.
   - **Receive:** whether messages from other squads reach the commander, or
-    wait in "Needs you" until the human passes them on.
+    wait in "Escalations" until the human passes them on.
 
-**A squad can run several times at once, one pipeline per run.** Each run
+**A squad can run several times at once, one pipeline per deployment.** Each deployment
 has its own commander, operators, sessions, messages, missions and log. A
-mission belongs to a run, so to a squad and a pipeline. Runs share the setup
-in `.legion` and nothing else. Each run gets its own ID, also used for
-channels. Runs don't clash over code, because each mission already gets its
+mission belongs to a deployment, so to a squad and a pipeline. Deployments share the setup
+in `.legion` and nothing else. Each deployment gets its own ID, also used for
+channels. Deployments don't clash over code, because each mission already gets its
 own git worktree, as it does today.
 
 **The main screen.** We'll adjust it as we build. It starts from today's web
@@ -167,7 +167,7 @@ dash.
 
 ```
 ┌───────────────┬──────────────────────────────────────────┐
-│ Needs you (3) │  myapp / feature run                      │
+│ Escalations (3) │  myapp / feature deployment                      │
 │               │  ┌ commander ● working  ┐ ┌ builder ● idle ┐│
 │ ▾ host-1      │  │ live terminal on click│ │ ...            ││
 │   ▾ myapp     │  └───────────────────────┘ └────────────────┘│
@@ -179,11 +179,11 @@ dash.
 └───────────────┴──────────────────────────────────────────┘
 ```
 
-- Left: machines, then folders, then runs, each with a dot showing if it's
+- Left: machines, then folders, then deployments, each with a dot showing if it's
   up. Channels at the bottom.
-- "Needs you": one list of everything waiting on you, across every run and
+- "Escalations": one list of everything waiting on you, across every deployment and
   machine: questions, permission requests, ended sessions, usage limits.
-- Main: the chosen run's positions as cards. Click one for its live
+- Main: the chosen deployment's positions as cards. Click one for its live
   terminal. Tabs for missions, questions, log and activity.
 
 **Everything can be set up in the app,** and it should flow well from one
@@ -216,16 +216,16 @@ decisions:
 
 The commander and operators read the table to decide who goes next; Legion
 itself doesn't route work. The app draws the table as a graph you can edit,
-and while a run is going, the graph shows who's working and where each
+and while a deployment is going, the graph shows who's working and where each
 mission is.
 
 **A mission is one file that describes a task, and it's never edited.**
 Mission files stay in one folder and never move. Where a mission stands
-(waiting, started, handed off, done) comes from its latest run log entry,
+(waiting, started, handed off, done) comes from its latest deployment log entry,
 not from `todo/`, `active/` and `done/` folders.
 
 **An operator starts a fresh session for each mission.** It reads the
-mission file and that mission's run log entries, so it starts with only
+mission file and that mission's deployment log entries, so it starts with only
 what the mission needs. A session that fills up partway through a mission
 is still cleared, as it is today.
 
@@ -238,7 +238,7 @@ moves the main branch forward to include its commits, on its own, as long
 as the main branch hasn't changed since the mission started. If it has
 changed, Legion replays the mission's commits on top of the new main
 branch. If nothing clashes and the checks still pass, the mission finishes
-on its own. A clash or a failing check sends it to "Needs you" to wait for
+on its own. A clash or a failing check sends it to "Escalations" to wait for
 the human.
 
 The checks are an optional command per folder, set in the app, such as
@@ -247,7 +247,7 @@ folder with no check command (docs work, say) counts a clean replay as
 passing.
 
 **A permission request no one answers is refused after 30 minutes.**
-Until then it waits in "Needs you". Once it's refused:
+Until then it waits in "Escalations". Once it's refused:
 
 - The operator works closely with the commander on a way around it.
 - The commander allows at most 3 attempts at a workaround.
@@ -257,14 +257,14 @@ Until then it waits in "Needs you". Once it's refused:
 
 **A blocked mission goes to the commander first.** The commander tries
 what it can, such as asking the operators. If it can't unblock it, the
-mission goes to "Needs you" with one line on what's blocking it and what
-would unblock it. The run carries on with its other missions. Once the
+mission goes to "Escalations" with one line on what's blocking it and what
+would unblock it. The deployment carries on with its other missions. Once the
 human deals with the cause, they resume the mission, which starts fresh
 with that note. The commander doesn't ask other squads for help unless the
 human has allowed it.
 
 **One mission can be paused and resumed.** Pause adds a "paused" entry to
-the run log. The operator on it stops at the next good point, writes a short
+the deployment log. The operator on it stops at the next good point, writes a short
 note on where it got to, and its session closes. Resume adds a "resumed"
 entry, and the commander starts the right operator in a fresh session, which
 reads the mission file and its log entries, note included.
@@ -273,7 +273,7 @@ reads the mission file and its log entries, note included.
 smart part; Legion is not. The commander reads the pipeline table, and
 starts, scales and stops operators as work moves, as it does today. It also handles anything sent back as
 "blocked", and talks to other squads. Legion only does what the commander
-or the human asks, and records it in the run log.
+or the human asks, and records it in the deployment log.
 
 **Each operator has a limit on copies running at once,** set in the app,
 starting at 1. The commander can't start more than that. Missions past the
@@ -285,13 +285,13 @@ starting at 6. Only busy sessions count: a commander that's just waiting
 takes no place, a busy one does. Past the limit, operators wait in line the
 same way, and the commander is told. A commander never waits in line. The app shows how much of the plan is used.
 
-**A new mission goes to a run the human picks.** If the folder has no run
+**A new mission goes to a deployment the human picks.** If the folder has no deployment
 on the pipeline wanted, the app offers to start one there. A mission
-belongs to exactly one run and never moves.
+belongs to exactly one deployment and never moves.
 
 **Only the human creates missions,** or a Claude session that isn't part of
 a squad. Operators and the commander can suggest a mission. The suggestion
-shows in "Needs you", and the human decides whether to create it.
+shows in "Escalations", and the human decides whether to create it.
 
 **What operators can do with Legion's tools.** A default list; the
 commander and the human get more.
@@ -299,15 +299,15 @@ commander and the human get more.
 Operators can:
 
 - read their mission file
-- read their run's log, including their mission's entries and notes
-- add entries to the run log: progress, a note, a pause note
+- read their deployment's log, including their mission's entries and notes
+- add entries to the deployment log: progress, a note, a pause note
 - hand off to the next operator, as the pipeline table says
 - report a mission done, or blocked (which sends it to the commander)
 - ask the human a question
 - suggest a mission
-- message other positions in their run
-- see which positions are running in their run
-- list their run's missions and where each stands
+- message other positions in their deployment
+- see which positions are running in their deployment
+- list their deployment's missions and where each stands
 - see their mission's changed files and the changes
 
 Operators can't:
@@ -319,34 +319,34 @@ Operators can't:
 - read another position's terminal
 - change pipelines, operator settings or copy limits
 - open, join or post to channels, or message other squads
-- add folders, or start runs or squads
+- add folders, or start deployments or squads
 - change app settings
-- read other runs or other Legions
+- read other deployments or other Legions
 - change or delete log entries (nobody can)
 
 The commander can do everything operators can, plus:
 
 - start, stop and add operators, within each operator's limit
 - pause and resume missions
-- read any position's terminal in its run
+- read any position's terminal in its deployment
 - pass the human's answers back to whoever asked
 - open, join and post to channels, and message other squads, once the human
   has allowed it (see Channels)
 
 The commander still can't create missions, change pipelines, operator
-settings, copy limits or app settings, add folders, or start runs or squads.
+settings, copy limits or app settings, add folders, or start deployments or squads.
 
-**One run log holds everything that happens in a run.** Each entry is one
+**One deployment log holds everything that happens in a deployment.** Each entry is one
 event, such as "builder: done, changed `src/main.ts`." Entries are only ever
 added, never changed or removed. Only Legion writes to the log; operators
 add entries through a tool. The app shows each entry as it lands.
 
 An entry about a mission carries that mission's number. A mission's history
-is the run log narrowed to those entries; there is no separate mission log.
-Entries for the whole run, like decisions or the end-of-day handoff, carry
+is the deployment log narrowed to those entries; there is no separate mission log.
+Entries for the whole deployment, like decisions or the end-of-day handoff, carry
 no mission number. This replaces today's `log.md`.
 
-Messages between operators are run log entries too, not separate inboxes.
+Messages between operators are deployment log entries too, not separate inboxes.
 A handoff like "builder → reviewer: ready for review" is one entry, and the
 add-on delivers it to the reviewer's session.
 
@@ -354,8 +354,8 @@ Questions for the human are entries too, and so are the answers. "Needs
 you" shows every question with no answer yet. This replaces today's
 `questions/` folder.
 
-The run log is stored in SQLite, one database per Legion, in its outside
-folder, holding all of its runs. Removing a Legion removes its data. An
+The deployment log is stored in SQLite, one database per Legion, in its outside
+folder, holding all of its deployments. Removing a Legion removes its data. An
 export writes all of it, or only what
 you filter for (a mission, an operator, a time span), to a file.
 
@@ -373,18 +373,18 @@ repos start fresh on the new version.
 1. The background program running one session: a hidden terminal with the
    add-on, which reports idle, busy or waiting on permission, and takes a
    message in. **Done.**
-2. The `legion` command and the run log: a full run on a host with no screen.
-   **Done**: folders, runs, missions in their own worktrees, finishing
-   branches, the run log, questions, export, permissions per role, the
+2. The `legion` command and the deployment log: a full run on a host with no screen.
+   **Done**: folders, deployments, missions in their own worktrees, finishing
+   branches, the deployment log, questions, export, permissions per role, the
    machine-wide limit, the permission timeout, restarts, usage limits, and
    sessions stuck before they start. Tested end to end with Haiku sessions.
-3. Legion's tools inside Claude: the commander and operators drive the run.
+3. Legion's tools inside Claude: the commander and operators drive the deployment.
    **Done**: every session gets Legion's tools (served by `legion2 mcp`),
    each role sees only its own, and legion2d still checks every call.
-4. The app: the main screen, live terminals, "Needs you". **Done** for this
+4. The app: the main screen, live terminals, "Escalations". **Done** for this
    machine: Tauri with React and shadcn in the house style, connected to
    legion2d. Debug builds can save what the screen looks like
-   (`LEGION2_SNAPSHOT_DIR`) and open a run at start (`LEGION2_OPEN`).
+   (`LEGION2_SNAPSHOT_DIR`) and open a deployment at start (`LEGION2_OPEN`).
 5. Channels, then reaching another machine over SSH or a private network.
 
 **While it's being built, it stays apart from today's Legion.** Everything

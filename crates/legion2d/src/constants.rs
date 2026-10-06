@@ -27,8 +27,9 @@ pub const ADDON_SESSION_ENV: &str = "LEGION_ADDON_SESSION";
 /// child, which turns off saving its transcript (and so resuming it).
 pub const CHILD_SESSION_MARKERS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT"];
 
-/// Skills turned on in claude.ai stay out of Legion's sessions.
-pub const SESSION_SETTINGS_JSON: &str = r#"{"syncClaudeAiSkills": false}"#;
+/// Skills turned on in claude.ai stay out of Legion's sessions, and their
+/// screens show no tips or suggested next prompts: no one types there.
+pub const SESSION_SETTINGS_JSON: &str = r#"{"syncClaudeAiSkills": false, "spinnerTipsEnabled": false, "promptSuggestionEnabled": false}"#;
 
 pub const TERMINAL_TYPE: &str = "xterm-256color";
 pub const TERMINAL_ROWS: u16 = 40;
@@ -42,7 +43,25 @@ pub const WAITING_SESSIONS_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// question shown before the add-on loads, such as whether to trust the folder.
 pub const SESSION_START_GRACE: Duration = Duration::from_secs(60);
 pub const MAX_WORKAROUND_ATTEMPTS: u32 = 3;
+/// How long an operator works before the commander is asked to look in on
+/// it, and again each time after.
+pub const OPERATOR_CHECK_IN_INTERVAL_MS: i64 = 5 * 60 * 1000;
+/// How long a handed-off mission may sit with no one on it before the
+/// commander is told: long enough for it to start or message the next one.
+pub const STALL_GRACE_MS: i64 = 30 * 1000;
 pub const DEFAULT_OPERATOR_COPY_LIMIT: u32 = 1;
+/// Under the data folder: each session's system prompt, as Claude reads it.
+pub const PROMPTS_FOLDER_NAME: &str = "prompts";
+
+/// How full (in percent) a conversation may get before its session hands
+/// over to a fresh one, unless legion.json or operator.json says otherwise.
+pub const DEFAULT_CLEAR_AT_PERCENT: u8 = 30;
+/// Backstop for a session that doesn't hand over: Claude Code summarizes the
+/// conversation this many points past clearAt, never past the cap.
+pub const AUTOCOMPACT_POINTS_PAST_CLEAR_AT: u8 = 10;
+pub const AUTOCOMPACT_PERCENT_CAP: u8 = 95;
+/// Claude Code reads its summarize-at percentage from this.
+pub const AUTOCOMPACT_PERCENT_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 /// A commander that ends by itself again this soon after a restart is left down.
 pub const COMMANDER_RESTART_GAP_MS: i64 = 10 * 60 * 1000;
 pub const RECENT_POSTMORTEM_COUNT: usize = 3;

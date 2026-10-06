@@ -72,6 +72,29 @@
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
   --radius-lg: var(--radius-lg);
+  /* shadcn's sidebar colors. Not through --sidebar: workbench.css owns that
+     name for the sidebar's width. */
+  --color-sidebar: var(--layer-1);
+  --color-sidebar-foreground: var(--fg);
+  --color-sidebar-primary: var(--fg);
+  --color-sidebar-primary-foreground: var(--surface);
+  --color-sidebar-accent: var(--layer-2);
+  --color-sidebar-accent-foreground: var(--fg);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--accent);
 }
 
 html, body, #root { height: 100%; }
+
+/* tokens.css indents lists for reading; the sidebar's menus are lists too.
+   Its own classes add back the spacing a menu needs. */
+@layer base {
+  /* Collapsible renames the item's data-slot, so match data-sidebar too. */
+  [data-slot^="sidebar-menu"],
+  [data-sidebar^="menu"] {
+    margin: 0;
+    padding-left: 0;
+    max-width: none;
+    list-style: none;
+  }
+}

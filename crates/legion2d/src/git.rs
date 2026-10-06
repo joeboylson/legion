@@ -24,7 +24,7 @@ pub fn is_git_repo(folder: &Path) -> bool {
     run_git(folder, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|answer| answer == "true")
 }
 
-fn current_branch(folder: &Path) -> Option<String> {
+pub fn current_branch(folder: &Path) -> Option<String> {
     run_git(folder, &["symbolic-ref", "--short", "HEAD"]).ok()
 }
 
@@ -46,6 +46,9 @@ pub enum FinishOutcome {
     /// (if any) passed, and the base moved up.
     Replayed { was_checked: bool },
     NoChanges,
+    /// The commits clash with the moved base in these files. The worktree is
+    /// left as it was, for the mission's builder to fix.
+    Clash { files: Vec<String> },
     /// Left for the human, with why.
     NeedsHuman(String),
 }
@@ -86,9 +89,12 @@ fn move_base_up(folder: &Path, worktree: &Worktree, base_commit_now: &str) -> Re
 
 fn replay_onto_moved_base(folder: &Path, worktree: &Worktree, check_command: Option<&str>, base_commit_now: &str) -> Result<FinishOutcome, String> {
     let worktree_path = Path::new(&worktree.path);
-    if let Err(clash) = run_git(worktree_path, &["rebase", &worktree.base]) {
+    if run_git(worktree_path, &["rebase", &worktree.base]).is_err() {
+        // Read before aborting: the abort clears the list of clashing files.
+        let clashing = run_git(worktree_path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
         run_git(worktree_path, &["rebase", "--abort"])?;
-        return Ok(FinishOutcome::NeedsHuman(format!("its commits clash with {} when replayed onto it: {clash}", worktree.base)));
+        let files = clashing.lines().map(str::to_string).collect();
+        return Ok(FinishOutcome::Clash { files });
     }
     let check_failure = match check_command {
         Some(command) => run_check(worktree_path, command)?.map(|tail| (command, tail)),
@@ -119,7 +125,7 @@ pub fn finish_mission_branch(folder: &Path, worktree: &Worktree, check_command: 
         }
         (_, true) => replay_onto_moved_base(folder, worktree, check_command, &base_commit_now)?,
     };
-    if matches!(outcome, FinishOutcome::NeedsHuman(_)) {
+    if matches!(outcome, FinishOutcome::NeedsHuman(_) | FinishOutcome::Clash { .. }) {
         return Ok(outcome);
     }
     run_git(folder, &["worktree", "remove", &worktree.path])?;
@@ -193,13 +199,14 @@ mod tests {
     }
 
     #[test]
-    fn a_clash_waits_for_the_human() {
+    fn a_clash_names_its_files_and_leaves_the_worktree_clean() {
         let repo = temporary_repo("clash");
         let worktree = new_worktree(&repo);
         commit_file(Path::new(&worktree.path), "readme", "mine");
         commit_file(&repo, "readme", "theirs");
         let outcome = finish_mission_branch(&repo, &worktree, None).unwrap();
-        assert!(matches!(outcome, FinishOutcome::NeedsHuman(why) if why.contains("clash")));
+        assert_eq!(outcome, FinishOutcome::Clash { files: vec!["readme".into()] });
+        assert_eq!(run_git(Path::new(&worktree.path), &["status", "--porcelain"]).unwrap(), "");
     }
 
     #[test]

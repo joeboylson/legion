@@ -51,12 +51,12 @@ const MISSION: ToolArgument = required("mission", Number, "The mission's number.
 const ABOUT_MISSION: ToolArgument = optional("mission", Number, "The mission it's about, if any.");
 
 pub const TOOLS: &[Tool] = &[
-    Tool { name: "missions", description: "List the run's missions and where each stands.", audience: Everyone, arguments: &[] },
+    Tool { name: "missions", description: "List the deployment's missions and where each stands.", audience: Everyone, arguments: &[] },
     Tool { name: "mission_read", description: "Read a mission.", audience: Everyone, arguments: &[MISSION] },
-    Tool { name: "sessions", description: "List who's running in the run, and what each is doing.", audience: Everyone, arguments: &[] },
+    Tool { name: "sessions", description: "List who's running in the deployment, and what each is doing.", audience: Everyone, arguments: &[] },
     Tool {
         name: "log",
-        description: "Read the run log, or part of it.",
+        description: "Read the deployment log, or part of it.",
         audience: Everyone,
         arguments: &[
             optional("mission", Number, "Only this mission's entries."),
@@ -65,11 +65,11 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "send",
-        description: "Message another position in the run (commander, planner, builder-2 …).",
+        description: "Message another position in the deployment (commander, planner, builder-2 …).",
         audience: Everyone,
         arguments: &[required("to", Text, "The position."), required("text", Text, "The message.")],
     },
-    Tool { name: "note", description: "Add a note to the run log.", audience: Everyone, arguments: &[required("text", Text, "The note."), ABOUT_MISSION] },
+    Tool { name: "note", description: "Add a note to the deployment log.", audience: Everyone, arguments: &[required("text", Text, "The note."), ABOUT_MISSION] },
     Tool {
         name: "ask",
         description: "Ask the human a question you can't settle yourself. The answer comes back as a message.",
@@ -86,7 +86,7 @@ pub const TOOLS: &[Tool] = &[
         name: "handoff",
         description: "Your step is done: hand the mission to whoever the pipeline table names next. Tells the commander.",
         audience: OperatorsOnly,
-        arguments: &[MISSION, required("next", Text, "The operator for the next step."), required("note", Text, "What you did.")],
+        arguments: &[MISSION, required("next", Text, "The operator for the next step, or several, comma-separated, when the table names a list."), required("note", Text, "What you did.")],
     },
     Tool {
         name: "done",
@@ -106,7 +106,12 @@ pub const TOOLS: &[Tool] = &[
         audience: CommanderOnly,
         arguments: &[required("operator", Text, "The operator, as named in the pipeline."), optional("mission", Number, "The mission to start it on.")],
     },
-    Tool { name: "stop", description: "End a position's session.", audience: CommanderOnly, arguments: &[required("position", Text, "The position.")] },
+    Tool {
+        name: "stop",
+        description: "End a position's session. Takes the position, as the sessions tool lists it, not an operator name.",
+        audience: CommanderOnly,
+        arguments: &[required("position", Text, "The position to end, e.g. planner or builder-2.")],
+    },
     Tool { name: "screen", description: "Read a position's screen.", audience: CommanderOnly, arguments: &[required("position", Text, "The position.")] },
     Tool {
         name: "finish",
@@ -194,51 +199,51 @@ fn required_mission(arguments: &Value) -> Result<u32, String> {
     mission_number(arguments, "mission")?.ok_or_else(|| "mission is missing".to_string())
 }
 
-fn post(run: &str, kind: EntryKind, mission: Option<u32>, to: Option<String>, text: String) -> Command {
-    Command::Post { run: run.to_string(), entry: NewEntry { kind, mission, to, text, answers: None } }
+fn post(deployment: &str, kind: EntryKind, mission: Option<u32>, to: Option<String>, text: String) -> Command {
+    Command::Post { deployment: deployment.to_string(), entry: NewEntry { kind, mission, to, text, answers: None } }
 }
 
-/// The legion2d command a tool call becomes, in the caller's own run.
-pub fn command_for_tool_call(name: &str, arguments: &Value, run: &str, position: &str) -> Result<Command, String> {
+/// The legion2d command a tool call becomes, in the caller's own deployment.
+pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, position: &str) -> Result<Command, String> {
     let is_offered = tools_for_position(position).iter().any(|tool| tool.name == name);
     if !is_offered {
         return Err(format!("no tool {name:?} for {position}"));
     }
-    let run = run.to_string();
+    let deployment = deployment.to_string();
     let command = match name {
-        "missions" => Command::MissionList { run },
-        "mission_read" => Command::MissionRead { run, mission: required_mission(arguments)? },
-        "sessions" => Command::SessionList { run: Some(run) },
+        "missions" => Command::MissionList { deployment },
+        "mission_read" => Command::MissionRead { deployment, mission: required_mission(arguments)? },
+        "sessions" => Command::SessionList { deployment: Some(deployment) },
         "log" => {
             let filter = LogFilter {
                 mission: mission_number(arguments, "mission")?,
                 position: arguments.get("position").and_then(Value::as_str).map(str::to_string),
                 ..Default::default()
             };
-            Command::Log { run, filter }
+            Command::Log { deployment, filter }
         }
-        "send" => post(&run, EntryKind::Message, None, Some(text_argument(arguments, "to")?), text_argument(arguments, "text")?),
-        "note" => post(&run, EntryKind::Note, mission_number(arguments, "mission")?, None, text_argument(arguments, "text")?),
-        "ask" => post(&run, EntryKind::Question, mission_number(arguments, "mission")?, None, text_argument(arguments, "question")?),
-        "suggest" => post(&run, EntryKind::Suggestion, None, None, text_argument(arguments, "text")?),
+        "send" => post(&deployment, EntryKind::Message, None, Some(text_argument(arguments, "to")?), text_argument(arguments, "text")?),
+        "note" => post(&deployment, EntryKind::Note, mission_number(arguments, "mission")?, None, text_argument(arguments, "text")?),
+        "ask" => post(&deployment, EntryKind::Question, mission_number(arguments, "mission")?, None, text_argument(arguments, "question")?),
+        "suggest" => post(&deployment, EntryKind::Suggestion, None, None, text_argument(arguments, "text")?),
         "handoff" => {
             let handoff_text = format!("→ {}: {}", text_argument(arguments, "next")?, text_argument(arguments, "note")?);
-            post(&run, EntryKind::Handoff, Some(required_mission(arguments)?), None, handoff_text)
+            post(&deployment, EntryKind::Handoff, Some(required_mission(arguments)?), None, handoff_text)
         }
-        "done" => post(&run, EntryKind::Done, Some(required_mission(arguments)?), None, text_argument(arguments, "summary")?),
-        "blocked" => post(&run, EntryKind::Blocked, Some(required_mission(arguments)?), None, text_argument(arguments, "reason")?),
-        "start" => Command::SessionStart { run, operator: text_argument(arguments, "operator")?, mission: mission_number(arguments, "mission")? },
-        "stop" => Command::SessionStop { run, position: text_argument(arguments, "position")? },
-        "screen" => Command::Screen { run, position: text_argument(arguments, "position")? },
-        "finish" => Command::MissionFinish { run, mission: required_mission(arguments)? },
-        "pause" => post(&run, EntryKind::Paused, Some(required_mission(arguments)?), None, text_argument(arguments, "why")?),
-        "resume" => post(&run, EntryKind::Resumed, Some(required_mission(arguments)?), None, text_argument(arguments, "note")?),
+        "done" => post(&deployment, EntryKind::Done, Some(required_mission(arguments)?), None, text_argument(arguments, "summary")?),
+        "blocked" => post(&deployment, EntryKind::Blocked, Some(required_mission(arguments)?), None, text_argument(arguments, "reason")?),
+        "start" => Command::SessionStart { deployment, operator: text_argument(arguments, "operator")?, mission: mission_number(arguments, "mission")? },
+        "stop" => Command::SessionStop { deployment, position: text_argument(arguments, "position")? },
+        "screen" => Command::Screen { deployment, position: text_argument(arguments, "position")? },
+        "finish" => Command::MissionFinish { deployment, mission: required_mission(arguments)? },
+        "pause" => post(&deployment, EntryKind::Paused, Some(required_mission(arguments)?), None, text_argument(arguments, "why")?),
+        "resume" => post(&deployment, EntryKind::Resumed, Some(required_mission(arguments)?), None, text_argument(arguments, "note")?),
         "answer" => {
             let question = i64::try_from(number_argument(arguments, "question_entry")?).map_err(|_| "question_entry is too large")?;
             let entry = NewEntry { kind: EntryKind::Answer, mission: None, to: None, text: text_argument(arguments, "text")?, answers: Some(question) };
-            Command::Post { run, entry }
+            Command::Post { deployment, entry }
         }
-        "postmortem" => post(&run, EntryKind::Postmortem, None, None, text_argument(arguments, "text")?),
+        "postmortem" => post(&deployment, EntryKind::Postmortem, None, None, text_argument(arguments, "text")?),
         unknown => return Err(format!("no tool {unknown:?}")),
     };
     Ok(command)
@@ -264,7 +269,7 @@ mod tests {
         });
         for tool in TOOLS {
             let caller = if tool.audience == ToolAudience::OperatorsOnly { "builder" } else { COMMANDER };
-            assert!(command_for_tool_call(tool.name, &full_arguments, "run", caller).is_ok(), "{}", tool.name);
+            assert!(command_for_tool_call(tool.name, &full_arguments, "deployment", caller).is_ok(), "{}", tool.name);
         }
     }
 
@@ -280,27 +285,27 @@ mod tests {
 
     #[test]
     fn a_tool_not_offered_is_refused() {
-        let call = command_for_tool_call("start", &json!({ "operator": "x" }), "run", "builder");
+        let call = command_for_tool_call("start", &json!({ "operator": "x" }), "deployment", "builder");
         assert!(call.unwrap_err().contains("no tool"));
     }
 
     #[test]
     fn missing_or_wrong_arguments_are_named() {
-        assert_eq!(command_for_tool_call("send", &json!({ "text": "hi" }), "run", "builder").unwrap_err(), "to is missing");
-        assert!(command_for_tool_call("done", &json!({ "mission": "two", "summary": "s" }), "run", "builder").unwrap_err().contains("whole number"));
+        assert_eq!(command_for_tool_call("send", &json!({ "text": "hi" }), "deployment", "builder").unwrap_err(), "to is missing");
+        assert!(command_for_tool_call("done", &json!({ "mission": "two", "summary": "s" }), "deployment", "builder").unwrap_err().contains("whole number"));
     }
 
     #[test]
     fn a_handoff_names_the_next_operator() {
-        let call = command_for_tool_call("handoff", &json!({ "mission": 3, "next": "reviewer", "note": "built" }), "run", "builder").unwrap();
+        let call = command_for_tool_call("handoff", &json!({ "mission": 3, "next": "reviewer", "note": "built" }), "deployment", "builder").unwrap();
         let Command::Post { entry, .. } = call else { panic!() };
         assert_eq!((entry.kind, entry.mission, entry.text.as_str()), (EntryKind::Handoff, Some(3), "→ reviewer: built"));
     }
 
     #[test]
-    fn calls_act_in_the_callers_run() {
-        let call = command_for_tool_call("missions", &json!({}), "run-7", "builder").unwrap();
-        assert!(matches!(call, Command::MissionList { run } if run == "run-7"));
+    fn calls_act_in_the_callers_deployment() {
+        let call = command_for_tool_call("missions", &json!({}), "deployment-7", "builder").unwrap();
+        assert!(matches!(call, Command::MissionList { deployment } if deployment == "deployment-7"));
     }
 
     #[test]

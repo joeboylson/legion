@@ -1,6 +1,6 @@
 //! Turning the command line into what to ask legion2d.
 
-use legion2_proto::{Command, EntryKind, LogFilter, NewEntry, ENV_RUN};
+use legion2_proto::{Command, EntryKind, LogFilter, NewEntry, ENV_DEPLOYMENT};
 
 use crate::{
     arguments::{Action, ExportFormat, FilterArguments},
@@ -13,8 +13,8 @@ pub enum Plan {
     /// Ask once and print the reply.
     Ask(Command),
     /// Print the log, then keep printing new entries that pass the filter.
-    Follow { run: String, filter: LogFilter },
-    Export { run: String, filter: LogFilter, format: ExportFormat, output: Option<String> },
+    Follow { deployment: String, filter: LogFilter },
+    Export { deployment: String, filter: LogFilter, format: ExportFormat, output: Option<String> },
 }
 
 pub fn log_filter(arguments: &FilterArguments, now_ms: i64) -> Result<LogFilter, String> {
@@ -33,53 +33,53 @@ pub fn log_filter(arguments: &FilterArguments, now_ms: i64) -> Result<LogFilter,
     })
 }
 
-fn entry(run: String, kind: EntryKind, mission: Option<u32>, to: Option<String>, words: &[String]) -> Command {
-    Command::Post { run, entry: NewEntry { kind, mission, to, text: words.join(" "), answers: None } }
+fn entry(deployment: String, kind: EntryKind, mission: Option<u32>, to: Option<String>, words: &[String]) -> Command {
+    Command::Post { deployment, entry: NewEntry { kind, mission, to, text: words.join(" "), answers: None } }
 }
 
 /// `mission_body` is the new mission's text, already read from --body,
 /// --file or stdin.
-pub fn plan_action(action: Action, run: Option<String>, now_ms: i64, mission_body: Option<String>) -> Result<Plan, String> {
-    let needs_run = || run.clone().ok_or_else(|| format!("say which run with --run, or set {ENV_RUN}"));
+pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, mission_body: Option<String>) -> Result<Plan, String> {
+    let needs_deployment = || deployment.clone().ok_or_else(|| format!("say which deployment with --deployment, or set {ENV_DEPLOYMENT}"));
     let command = match action {
         Action::Ping => Command::Ping,
         Action::Mcp => return Ok(Plan::ServeTools),
         Action::Add { path } => Command::FolderAdd { path },
         Action::Folders => Command::FolderList,
-        Action::Run { folder, pipeline, name } => Command::RunStart { folder, pipeline, name },
-        Action::Runs { folder } => Command::RunList { folder },
-        Action::Close => Command::RunClose { run: needs_run()? },
-        Action::New { title, .. } => Command::MissionAdd { run: needs_run()?, title, body: mission_body.unwrap_or_default() },
-        Action::Missions => Command::MissionList { run: needs_run()? },
-        Action::Mission { number } => Command::MissionRead { run: needs_run()?, mission: number },
-        Action::Finish { mission } => Command::MissionFinish { run: needs_run()?, mission },
-        Action::Start { operator, mission } => Command::SessionStart { run: needs_run()?, operator, mission },
-        Action::Stop { position } => Command::SessionStop { run: needs_run()?, position },
-        Action::Sessions => Command::SessionList { run: run.clone() },
-        Action::Screen { position } => Command::Screen { run: needs_run()?, position },
-        Action::Key { position, key } => Command::Key { run: needs_run()?, position, key },
-        Action::Send { to, text } => entry(needs_run()?, EntryKind::Message, None, Some(to), &text),
-        Action::Note { mission, text } => entry(needs_run()?, EntryKind::Note, mission, None, &text),
-        Action::Ask { mission, text } => entry(needs_run()?, EntryKind::Question, mission, None, &text),
+        Action::Deploy { folder, pipeline, name } => Command::DeploymentStart { folder, pipeline, name },
+        Action::Deployments { folder } => Command::DeploymentList { folder },
+        Action::Close => Command::DeploymentClose { deployment: needs_deployment()? },
+        Action::New { title, .. } => Command::MissionAdd { deployment: needs_deployment()?, title, body: mission_body.unwrap_or_default() },
+        Action::Missions => Command::MissionList { deployment: needs_deployment()? },
+        Action::Mission { number } => Command::MissionRead { deployment: needs_deployment()?, mission: number },
+        Action::Finish { mission } => Command::MissionFinish { deployment: needs_deployment()?, mission },
+        Action::Start { operator, mission } => Command::SessionStart { deployment: needs_deployment()?, operator, mission },
+        Action::Stop { position } => Command::SessionStop { deployment: needs_deployment()?, position },
+        Action::Sessions => Command::SessionList { deployment: deployment.clone() },
+        Action::Screen { position } => Command::Screen { deployment: needs_deployment()?, position },
+        Action::Key { position, key } => Command::Key { deployment: needs_deployment()?, position, key },
+        Action::Send { to, text } => entry(needs_deployment()?, EntryKind::Message, None, Some(to), &text),
+        Action::Note { mission, text } => entry(needs_deployment()?, EntryKind::Note, mission, None, &text),
+        Action::Ask { mission, text } => entry(needs_deployment()?, EntryKind::Question, mission, None, &text),
         Action::Answer { question, text } => Command::Post {
-            run: needs_run()?,
+            deployment: needs_deployment()?,
             entry: NewEntry { kind: EntryKind::Answer, mission: None, to: None, text: text.join(" "), answers: Some(question) },
         },
-        Action::Questions => Command::Log { run: needs_run()?, filter: LogFilter { open_questions: true, ..Default::default() } },
+        Action::Questions => Command::Log { deployment: needs_deployment()?, filter: LogFilter { open_questions: true, ..Default::default() } },
         Action::Handoff { mission, next, text } => {
             let handoff_text = [format!("→ {next}:")].into_iter().chain(text).collect::<Vec<_>>();
-            entry(needs_run()?, EntryKind::Handoff, Some(mission), None, &handoff_text)
+            entry(needs_deployment()?, EntryKind::Handoff, Some(mission), None, &handoff_text)
         }
-        Action::Done { mission, text } => entry(needs_run()?, EntryKind::Done, Some(mission), None, &text),
-        Action::Blocked { mission, text } => entry(needs_run()?, EntryKind::Blocked, Some(mission), None, &text),
-        Action::Pause { mission, text } => entry(needs_run()?, EntryKind::Paused, Some(mission), None, &text),
-        Action::Resume { mission, text } => entry(needs_run()?, EntryKind::Resumed, Some(mission), None, &text),
-        Action::Suggest { text } => entry(needs_run()?, EntryKind::Suggestion, None, None, &text),
-        Action::Postmortem { text } => entry(needs_run()?, EntryKind::Postmortem, None, None, &text),
-        Action::Log { filter, follow: false } => Command::Log { run: needs_run()?, filter: log_filter(&filter, now_ms)? },
-        Action::Log { filter, follow: true } => return Ok(Plan::Follow { run: needs_run()?, filter: log_filter(&filter, now_ms)? }),
+        Action::Done { mission, text } => entry(needs_deployment()?, EntryKind::Done, Some(mission), None, &text),
+        Action::Blocked { mission, text } => entry(needs_deployment()?, EntryKind::Blocked, Some(mission), None, &text),
+        Action::Pause { mission, text } => entry(needs_deployment()?, EntryKind::Paused, Some(mission), None, &text),
+        Action::Resume { mission, text } => entry(needs_deployment()?, EntryKind::Resumed, Some(mission), None, &text),
+        Action::Suggest { text } => entry(needs_deployment()?, EntryKind::Suggestion, None, None, &text),
+        Action::Postmortem { text } => entry(needs_deployment()?, EntryKind::Postmortem, None, None, &text),
+        Action::Log { filter, follow: false } => Command::Log { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)? },
+        Action::Log { filter, follow: true } => return Ok(Plan::Follow { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)? }),
         Action::Export { filter, format, output } => {
-            return Ok(Plan::Export { run: needs_run()?, filter: log_filter(&filter, now_ms)?, format, output })
+            return Ok(Plan::Export { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)?, format, output })
         }
     };
     Ok(Plan::Ask(command))
@@ -101,9 +101,9 @@ mod tests {
     }
 
     #[test]
-    fn run_commands_need_a_run() {
+    fn deployment_commands_need_a_deployment() {
         assert!(plan_action(Action::Missions, None, 0, None).is_err());
-        assert!(matches!(asked(plan_action(Action::Missions, Some("r".into()), 0, None).unwrap()), Command::MissionList { run } if run == "r"));
+        assert!(matches!(asked(plan_action(Action::Missions, Some("r".into()), 0, None).unwrap()), Command::MissionList { deployment } if deployment == "r"));
     }
 
     #[test]

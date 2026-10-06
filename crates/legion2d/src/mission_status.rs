@@ -1,4 +1,4 @@
-//! Where a mission stands, worked out from its run log entries.
+//! Where a mission stands, worked out from its deployment log entries.
 
 use legion2_proto::{Entry, EntryKind, MissionStatus};
 
@@ -32,7 +32,7 @@ mod tests {
     use super::*;
 
     fn entry(kind: EntryKind, from: &str) -> Entry {
-        Entry { id: 0, run: "r".into(), at_ms: 0, mission: Some(1), from: from.into(), to: None, kind, text: String::new(), answers: None }
+        Entry { id: 0, deployment: "r".into(), at_ms: 0, mission: Some(1), from: from.into(), to: None, kind, text: String::new(), answers: None }
     }
 
     #[test]

@@ -1,10 +1,10 @@
 //! `legion2 mcp`: Legion's tools inside Claude, as an MCP server on stdin
 //! and stdout. Every session legion2d starts runs one; each tool call
-//! becomes a legion2d command in that session's run.
+//! becomes a legion2d command in that session's deployment.
 
 use legion2_proto::{
     tools::{command_for_tool_call, tool_listing, tools_for_position},
-    ENV_POSITION, ENV_RUN, NAME,
+    ENV_POSITION, ENV_DEPLOYMENT, NAME,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -42,7 +42,7 @@ pub fn tool_result(id: &Value, text: &str, is_error: bool) -> Value {
     result_message(id, json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }))
 }
 
-pub fn handle_message(message: &Value, run: &str, position: &str) -> Handling {
+pub fn handle_message(message: &Value, deployment: &str, position: &str) -> Handling {
     let Some(id) = message.get("id").cloned() else { return Handling::Nothing };
     let method = message.get("method").and_then(Value::as_str).unwrap_or_default();
     let params = message.get("params").cloned().unwrap_or(Value::Null);
@@ -60,7 +60,7 @@ pub fn handle_message(message: &Value, run: &str, position: &str) -> Handling {
         "tools/call" => {
             let tool_name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-            match command_for_tool_call(tool_name, &arguments, run, position) {
+            match command_for_tool_call(tool_name, &arguments, deployment, position) {
                 Ok(command) => Handling::CallTool { id, command },
                 Err(problem) => Handling::Reply(tool_result(&id, &problem, true)),
             }
@@ -77,14 +77,14 @@ async fn write_message(stdout: &mut tokio::io::Stdout, message: &Value) -> Resul
 
 /// Serves until Claude closes stdin.
 pub async fn serve_tools() -> Result<(), String> {
-    let run = std::env::var(ENV_RUN).map_err(|_| format!("{NAME} mcp runs inside a session legion2d started ({ENV_RUN} isn't set)"))?;
+    let deployment = std::env::var(ENV_DEPLOYMENT).map_err(|_| format!("{NAME} mcp runs inside a session legion2d started ({ENV_DEPLOYMENT} isn't set)"))?;
     let position = std::env::var(ENV_POSITION).map_err(|_| format!("{ENV_POSITION} isn't set"))?;
     let mut client = Client::connect().await?;
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
         let handling = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle_message(&message, &run, &position),
+            Ok(message) => handle_message(&message, &deployment, &position),
             Err(error) => Handling::Reply(error_message(&Value::Null, PARSE_ERROR, &error.to_string())),
         };
         let response = match handling {

@@ -1,5 +1,5 @@
 //! What a session may ask legion2d to do. The human (a caller that isn't a
-//! session) may do everything; sessions only act in their own run.
+//! session) may do everything; sessions only act in their own deployment.
 
 use legion2_proto::{Command, EntryKind, COMMANDER};
 
@@ -31,6 +31,11 @@ const OPERATOR_ENTRY_KINDS: &[EntryKind] = &[
 const COMMANDER_ONLY_ENTRY_KINDS: &[EntryKind] =
     &[EntryKind::Paused, EntryKind::Resumed, EntryKind::Postmortem, EntryKind::Answer];
 
+/// Whether a session adds this kind of entry through its tools.
+pub fn is_session_entry_kind(kind: EntryKind) -> bool {
+    OPERATOR_ENTRY_KINDS.contains(&kind) || COMMANDER_ONLY_ENTRY_KINDS.contains(&kind)
+}
+
 fn can_add_entry(role: Role, kind: EntryKind) -> bool {
     let is_operator_kind = OPERATOR_ENTRY_KINDS.contains(&kind);
     let is_commander_kind = role == Role::Commander && COMMANDER_ONLY_ENTRY_KINDS.contains(&kind);
@@ -60,31 +65,31 @@ fn allowed_to_add(kind: EntryKind) -> AllowedTo {
     }
 }
 
-/// The run a session's command acts in (None when it acts in none), or why
+/// The deployment a session's command acts in (None when it acts in none), or why
 /// its role can't send it.
 pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Option<&str>, String> {
     let is_commander = role == Role::Commander;
     match command {
         Command::Ping => Ok(None),
-        Command::MissionList { run } | Command::MissionRead { run, .. } | Command::Log { run, .. } => Ok(Some(run)),
-        Command::SessionList { run } => run.as_deref().map(Some).ok_or_else(|| "say which run".to_string()),
-        Command::Post { run, entry } if can_add_entry(role, entry.kind) => Ok(Some(run)),
+        Command::MissionList { deployment } | Command::MissionRead { deployment, .. } | Command::Log { deployment, .. } => Ok(Some(deployment)),
+        Command::SessionList { deployment } => deployment.as_deref().map(Some).ok_or_else(|| "say which deployment".to_string()),
+        Command::Post { deployment, entry } if can_add_entry(role, entry.kind) => Ok(Some(deployment)),
         Command::Post { entry, .. } => Err(refusal(allowed_to_add(entry.kind), &format!("add {} entries", entry.kind.as_str()))),
-        Command::SessionStart { run, .. }
-        | Command::SessionStop { run, .. }
-        | Command::Screen { run, .. }
-        | Command::MissionFinish { run, .. }
+        Command::SessionStart { deployment, .. }
+        | Command::SessionStop { deployment, .. }
+        | Command::Screen { deployment, .. }
+        | Command::MissionFinish { deployment, .. }
             if is_commander =>
         {
-            Ok(Some(run))
+            Ok(Some(deployment))
         }
         Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } => {
             Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish missions"))
         }
         Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with the suggest tool".into()),
         Command::Key { .. } | Command::Input { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
-        Command::FolderAdd { .. } | Command::FolderList | Command::RunStart { .. } | Command::RunList { .. } | Command::RunClose { .. } => {
-            Err(refusal(AllowedTo::HumanOnly, "add folders, or start, list or close runs"))
+        Command::FolderAdd { .. } | Command::FolderList | Command::FolderRead { .. } | Command::DeploymentStart { .. } | Command::DeploymentList { .. } | Command::DeploymentClose { .. } => {
+            Err(refusal(AllowedTo::HumanOnly, "add folders, or start, list or close deployments"))
         }
         Command::Watch => Err(refusal(AllowedTo::HumanOnly, "watch everything")),
     }
@@ -97,11 +102,11 @@ mod tests {
     use super::*;
 
     fn post(kind: EntryKind) -> Command {
-        Command::Post { run: "r".into(), entry: NewEntry { kind, mission: None, to: None, text: String::new(), answers: None } }
+        Command::Post { deployment: "r".into(), entry: NewEntry { kind, mission: None, to: None, text: String::new(), answers: None } }
     }
 
     fn start() -> Command {
-        Command::SessionStart { run: "r".into(), operator: "builder".into(), mission: None }
+        Command::SessionStart { deployment: "r".into(), operator: "builder".into(), mission: None }
     }
 
     #[test]
@@ -111,13 +116,13 @@ mod tests {
     }
 
     #[test]
-    fn ping_targets_no_run() {
+    fn ping_targets_no_deployment() {
         assert_eq!(run_a_session_command_targets(Role::Operator, &Command::Ping), Ok(None));
     }
 
     #[test]
-    fn operators_read_and_report_in_their_run() {
-        let read = Command::Log { run: "r".into(), filter: LogFilter::default() };
+    fn operators_read_and_report_in_their_deployment() {
+        let read = Command::Log { deployment: "r".into(), filter: LogFilter::default() };
         assert_eq!(run_a_session_command_targets(Role::Operator, &read), Ok(Some("r")));
         for kind in OPERATOR_ENTRY_KINDS {
             assert_eq!(run_a_session_command_targets(Role::Operator, &post(*kind)), Ok(Some("r")), "{kind:?}");
@@ -153,18 +158,18 @@ mod tests {
     }
 
     #[test]
-    fn no_session_creates_missions_or_runs() {
-        let mission = Command::MissionAdd { run: "r".into(), title: "t".into(), body: "b".into() };
-        let run = Command::RunStart { folder: "f".into(), pipeline: "p".into(), name: None };
+    fn no_session_creates_missions_or_deployments() {
+        let mission = Command::MissionAdd { deployment: "r".into(), title: "t".into(), body: "b".into() };
+        let deployment = Command::DeploymentStart { folder: "f".into(), pipeline: "p".into(), name: None };
         for role in [Role::Commander, Role::Operator] {
             assert!(run_a_session_command_targets(role, &mission).is_err());
-            assert!(run_a_session_command_targets(role, &run).is_err());
+            assert!(run_a_session_command_targets(role, &deployment).is_err());
         }
     }
 
     #[test]
     fn refusals_name_who_can() {
-        let close = Command::RunClose { run: "r".into() };
+        let close = Command::DeploymentClose { deployment: "r".into() };
         assert!(run_a_session_command_targets(Role::Operator, &close).unwrap_err().ends_with("that's for the human"));
         let postmortem = run_a_session_command_targets(Role::Operator, &post(EntryKind::Postmortem)).unwrap_err();
         assert!(postmortem.ends_with("the commander or the human"));
@@ -174,12 +179,12 @@ mod tests {
 
     #[test]
     fn no_session_types_into_another() {
-        let input = Command::Input { run: "r".into(), position: "builder".into(), text: "y".into() };
+        let input = Command::Input { deployment: "r".into(), position: "builder".into(), text: "y".into() };
         assert!(run_a_session_command_targets(Role::Commander, &input).is_err());
     }
 
     #[test]
-    fn session_list_needs_a_run() {
-        assert!(run_a_session_command_targets(Role::Operator, &Command::SessionList { run: None }).is_err());
+    fn session_list_needs_a_deployment() {
+        assert!(run_a_session_command_targets(Role::Operator, &Command::SessionList { deployment: None }).is_err());
     }
 }

@@ -50,10 +50,26 @@ export const elementBoxes = (root: Element): ElementBox[] =>
       height: Math.round(rect.height),
     }))
 
+// A copied canvas is blank, so each becomes a picture of what it shows.
+const canvasesAsImages = (original: HTMLElement, copy: HTMLElement) => {
+  const drawn = [...original.querySelectorAll('canvas')]
+  copy.querySelectorAll('canvas').forEach((canvas, index) => {
+    const source = drawn[index]
+    if (source === undefined) return
+    const picture = document.createElement('img')
+    picture.src = source.toDataURL()
+    picture.style.cssText = canvas.style.cssText
+    picture.style.width = `${source.clientWidth}px`
+    picture.style.height = `${source.clientHeight}px`
+    canvas.replaceWith(picture)
+  })
+}
+
 // The page without its scripts: a browser redraws it from the HTML alone.
 const pageWithoutScripts = (): string => {
   const copy = document.documentElement.cloneNode(true) as HTMLElement
   copy.querySelectorAll('script').forEach(script => script.remove())
+  canvasesAsImages(document.documentElement, copy)
   return `<!doctype html>\n${copy.outerHTML}`
 }
 
@@ -62,9 +78,9 @@ const saveSnapshot = async (): Promise<void> => {
   await invoke('save_snapshot', { page: pageWithoutScripts(), layout: JSON.stringify(layout, null, 1) })
 }
 
-export type StartingView = { run: string; position: string | null }
+export type StartingView = { deployment: string; position: string | null }
 
-// Debug builds: the run (and position) LEGION2_OPEN names, to open at start.
+// Debug builds: the deployment (and position) LEGION2_OPEN names, to open at start.
 export const readStartingView = async (): Promise<StartingView | undefined> =>
   (await invoke<StartingView | null>('starting_view')) ?? undefined
 

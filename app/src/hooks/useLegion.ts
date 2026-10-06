@@ -4,10 +4,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { Folder } from '@/generated/Folder'
-import type { Run } from '@/generated/Run'
+import type { Deployment } from '@/generated/Deployment'
+import type { PipelineDetail } from '@/generated/PipelineDetail'
 import type { SessionInfo } from '@/generated/SessionInfo'
 import { askFor, onConnectionChange, onLegionEvent } from '@/lib/legion'
-import type { RunSnapshot } from '@/lib/needs-you'
+import type { DeploymentSnapshot } from '@/lib/escalations'
 
 // Changes come in bursts (a handoff is several entries); load once per burst.
 const RELOAD_DELAY_MS = 233
@@ -15,53 +16,75 @@ const RELOAD_DELAY_MS = 233
 export type LegionData = {
   isConnected: boolean
   folders: Folder[]
-  snapshots: RunSnapshot[]
+  snapshots: DeploymentSnapshot[]
   problem?: string
   // Bumps on every change, for views that load their own data.
   changeCount: number
   reload: () => void
 }
 
-const loadRunSnapshot = async (run: Run, allSessions: readonly SessionInfo[]): Promise<RunSnapshot> => {
-  const sessions = allSessions.filter(session => session.run === run.id)
-  const isOpen = run.closed_ms === null
-  if (!isOpen) return { run, sessions, missions: [], openQuestions: [], suggestions: [] }
+// Each pipeline, by folder and then pipeline name.
+type Pipelines = ReadonlyMap<string, ReadonlyMap<string, PipelineDetail>>
+
+const loadPipelines = async (folderPaths: readonly string[]): Promise<Pipelines> => {
+  const details = await Promise.all(folderPaths.map(folder => askFor('folder_detail', { type: 'folder_read', folder })))
+  return new Map(details.map(({ detail }) => [detail.folder.path, new Map(detail.pipelines.map(pipeline => [pipeline.name, pipeline]))]))
+}
+
+const loadDeploymentSnapshot = async (
+  deployment: Deployment,
+  allSessions: readonly SessionInfo[],
+  pipelines: Pipelines,
+): Promise<DeploymentSnapshot> => {
+  const sessions = allSessions.filter(session => session.deployment === deployment.id)
+  const pipeline = pipelines.get(deployment.folder)?.get(deployment.pipeline)
+  const isOpen = deployment.closed_ms === null
+  if (!isOpen) {
+    // Closed: its missions are still worth reading; nothing in it waits on the human.
+    const { missions } = await askFor('missions', { type: 'mission_list', deployment: deployment.id })
+    return { deployment, sessions, pipelineOperators: pipeline?.operators ?? [], pipelineSteps: pipeline?.decisions ?? [], missions, openQuestions: [], suggestions: [] }
+  }
   const [missionsReply, questionsReply, suggestionsReply] = await Promise.all([
-    askFor('missions', { type: 'mission_list', run: run.id }),
+    askFor('missions', { type: 'mission_list', deployment: deployment.id }),
     askFor('entries', {
       type: 'log',
-      run: run.id,
+      deployment: deployment.id,
       filter: { mission: null, position: null, kinds: null, since_ms: null, open_questions: true },
     }),
     askFor('entries', {
       type: 'log',
-      run: run.id,
+      deployment: deployment.id,
       filter: { mission: null, position: null, kinds: ['suggestion'], since_ms: null, open_questions: false },
     }),
   ])
   return {
-    run,
+    deployment,
     sessions,
+    pipelineOperators: pipeline?.operators ?? [],
+    pipelineSteps: pipeline?.decisions ?? [],
     missions: missionsReply.missions,
     openQuestions: questionsReply.entries,
     suggestions: suggestionsReply.entries,
   }
 }
 
-const loadEverything = async (): Promise<{ folders: Folder[]; snapshots: RunSnapshot[] }> => {
-  const [foldersReply, runsReply, sessionsReply] = await Promise.all([
+const loadEverything = async (): Promise<{ folders: Folder[]; snapshots: DeploymentSnapshot[] }> => {
+  const [foldersReply, deploymentsReply, sessionsReply] = await Promise.all([
     askFor('folders', { type: 'folder_list' }),
-    askFor('runs', { type: 'run_list', folder: null }),
-    askFor('sessions', { type: 'session_list', run: null }),
+    askFor('deployments', { type: 'deployment_list', folder: null }),
+    askFor('sessions', { type: 'session_list', deployment: null }),
   ])
-  const snapshots = await Promise.all(runsReply.runs.map(run => loadRunSnapshot(run, sessionsReply.sessions)))
+  const pipelines = await loadPipelines([...new Set(deploymentsReply.deployments.map(deployment => deployment.folder))])
+  const snapshots = await Promise.all(
+    deploymentsReply.deployments.map(deployment => loadDeploymentSnapshot(deployment, sessionsReply.sessions, pipelines)),
+  )
   return { folders: foldersReply.folders, snapshots }
 }
 
 export const useLegion = (): LegionData => {
   const [isConnected, setIsConnected] = useState(false)
   const [folders, setFolders] = useState<Folder[]>([])
-  const [snapshots, setSnapshots] = useState<RunSnapshot[]>([])
+  const [snapshots, setSnapshots] = useState<DeploymentSnapshot[]>([])
   const [problem, setProblem] = useState<string>()
   const [changeCount, setChangeCount] = useState(0)
   const pendingReload = useRef<number | undefined>(undefined)

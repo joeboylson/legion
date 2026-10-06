@@ -5,12 +5,33 @@
   "identifier": "com.joeboylson.legion2",
   "build": {
     "frontendDist": "../dist",
-    "beforeDevCommand": "npm run build",
+    "beforeDevCommand": {
+      "script": "npm run watch",
+      "wait": false
+    },
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [{ "title": "Legion", "width": 1440, "height": 900, "minWidth": 987, "minHeight": 610 }],
-    "security": { "csp": null }
+    "windows": [
+      {
+        "title": "Legion",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 987,
+        "minHeight": 610
+      }
+    ],
+    "security": {
+      "csp": null
+    }
   },
-  "bundle": { "active": true, "targets": ["app"], "icon": ["icons/icon.png"] }
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
 }

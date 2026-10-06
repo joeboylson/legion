@@ -1,4 +1,4 @@
-//! How replies and run log entries read on screen and in exports.
+//! How replies and deployment log entries read on screen and in exports.
 
 use legion2_proto::{Entry, Mission, Reply, SessionInfo, NAME};
 
@@ -35,7 +35,7 @@ fn session_line(session: &SessionInfo) -> String {
     let mission = session.mission.map(|number| format!(" mission {number}")).unwrap_or_default();
     let blind_note = if session.can_see_state { "" } else { " (can't see this session's state)" };
     let detail = session.detail.as_ref().map(|detail| format!(": {detail}")).unwrap_or_default();
-    format!("{} {} {}{mission}{blind_note}{detail}", session.run, session.position, session.activity.label())
+    format!("{} {} {}{mission}{blind_note}{detail}", session.deployment, session.position, session.activity.label())
 }
 
 fn lines<T>(items: &[T], line: impl Fn(&T) -> String) -> String {
@@ -61,11 +61,19 @@ pub fn reply_text(reply: &Reply) -> String {
                 folder.operators.join(", ")
             )
         }
+        Reply::FolderDetail { detail } => {
+            let pipelines = lines(&detail.pipelines, |pipeline| {
+                let problem = pipeline.problem.as_ref().map(|problem| format!("  ({problem})")).unwrap_or_default();
+                format!("  {}: {}{problem}", pipeline.name, pipeline.operators.join(" → "))
+            });
+            let operators = lines(&detail.operators, |operator| format!("  {} (up to {} at once)", operator.name, operator.copy_limit));
+            format!("{} ({})\npipelines:\n{pipelines}\noperators:\n{operators}", detail.folder.name, detail.folder.path)
+        }
         Reply::Folders { folders } => lines(folders, |folder| format!("{}  {}  pipelines: {}", folder.name, folder.path, folder.pipelines.join(", "))),
-        Reply::Run { run } => format!("run {} ({}) started on {}; its commander is starting", run.name, run.id, run.pipeline),
-        Reply::Runs { runs } => lines(runs, |run| {
-            let closed_note = if run.closed_ms.is_some() { "  (closed)" } else { "" };
-            format!("{}  {}  {}  {}{closed_note}", run.id, run.name, run.pipeline, run.folder)
+        Reply::Deployment { deployment } => format!("deployment {} ({}) started on {}; its commander is starting", deployment.name, deployment.id, deployment.pipeline),
+        Reply::Deployments { deployments } => lines(deployments, |deployment| {
+            let closed_note = if deployment.closed_ms.is_some() { "  (closed)" } else { "" };
+            format!("{}  {}  {}  {}{closed_note}", deployment.id, deployment.name, deployment.pipeline, deployment.folder)
         }),
         Reply::Mission { mission, body } => format!("#{} {:?}{}\n\n{}", mission.number, mission.status, holder_note(mission), body.trim_end()),
         Reply::Missions { missions } => lines(missions, |mission| format!("#{} {:?}{}  {}", mission.number, mission.status, holder_note(mission), mission.title)),
@@ -86,7 +94,7 @@ mod tests {
     fn entry() -> Entry {
         Entry {
             id: 9,
-            run: "r".into(),
+            deployment: "r".into(),
             at_ms: 0,
             mission: Some(2),
             from: "builder".into(),
@@ -112,13 +120,13 @@ mod tests {
 
     #[test]
     fn missions_show_who_holds_them() {
-        let mission = Mission { number: 1, run: "r".into(), title: "Do it".into(), file: String::new(), status: MissionStatus::Started, holder: Some("builder".into()) };
+        let mission = Mission { number: 1, deployment: "r".into(), title: "Do it".into(), file: String::new(), status: MissionStatus::Started, holder: Some("builder".into()) };
         assert_eq!(reply_text(&Reply::Missions { missions: vec![mission] }), "#1 Started (builder)  Do it");
     }
 
     #[test]
     fn sessions_say_when_legion_cant_see_them() {
-        let session = SessionInfo { run: "r".into(), position: "builder".into(), mission: None, activity: Activity::Idle, can_see_state: false, detail: None };
+        let session = SessionInfo { deployment: "r".into(), position: "builder".into(), mission: None, activity: Activity::Idle, can_see_state: false, detail: None, is_stuck_starting: false, model: None, context_percent: None };
         assert_eq!(reply_text(&Reply::Sessions { sessions: vec![session] }), "r builder idle (can't see this session's state)");
     }
 

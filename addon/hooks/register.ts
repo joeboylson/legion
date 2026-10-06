@@ -12,6 +12,8 @@ import { CARRY_ON_PROMPT, limitDetail, msUntilCarryOn, type RateLimitWindow } fr
 const ADDON_VERSION = '1'
 const INBOX_POLL_MS = 1000
 const LEGION_HOST = 'http://legion2d'
+// Claude's notification type for a permission prompt shown on screen.
+const PERMISSION_PROMPT_NOTIFICATION = 'permission_prompt'
 
 type Activity = 'idle' | 'busy' | 'permission' | 'limited' | 'ended'
 
@@ -20,7 +22,12 @@ type Link = {
   sessionId?: string
   lastReported: string
   rateLimits: readonly RateLimitWindow[]
+  // How full the conversation is, in percent; legion2d hands it over past
+  // its clearAt.
+  contextPercent?: number
   carryOnTimer?: { cancel: () => void }
+  // The last call put to the mode's decider, as "Tool: reason".
+  lastAsk?: string
 }
 
 // Module state: the add-on's one link to legion2d, rebuilt on each load.
@@ -44,11 +51,11 @@ async function postToLegion($: EngineInterface, body: Record<string, unknown>) {
   }
 }
 
-async function reportActivity($: EngineInterface, activity: Activity, detail?: string) {
+async function reportActivity($: EngineInterface, activity: Activity, detail?: string, answer?: string) {
   const report = `${activity}|${detail ?? ''}`
   if (report === link.lastReported) return
   link.lastReported = report
-  await postToLegion($, { state: activity, detail })
+  await postToLegion($, { state: activity, detail, answer, context: link.contextPercent })
 }
 
 // prompt.submit waits for the session to be free, so polling while it works
@@ -78,14 +85,16 @@ export const register: Register = on => {
     if (!isLinked()) return next(e)
 
     const { version } = await $.session.version()
+    const model = await $.session.model()
     link.lastReported = 'idle|'
-    await postToLegion($, { state: 'idle', addon: ADDON_VERSION, claude: version })
+    await postToLegion($, { state: 'idle', addon: ADDON_VERSION, claude: version, model })
     $.clock.every(INBOX_POLL_MS, () => deliverMessages($))
     return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
     link.rateLimits = e.rateLimits
+    link.contextPercent = e.context.percent ?? link.contextPercent
     return next(e)
   })
 
@@ -102,7 +111,8 @@ export const register: Register = on => {
     if (!isMainTurn) return next(e)
     const waitMs = e.reason === 'error' ? msUntilCarryOn(link.rateLimits, Date.now()) : undefined
     if (waitMs === undefined) {
-      await reportActivity($, 'idle')
+      // legion2d passes on what an operator wrote if it reported nothing.
+      await reportActivity($, 'idle', undefined, e.answer)
       return next(e)
     }
     link.carryOnTimer?.cancel()
@@ -111,16 +121,20 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // "ask" puts the call to the person: the session waits on a permission
-  // question until they answer.
+  // "ask" puts the call to the mode's decider: auto mode's classifier
+  // answers most by itself. Remember it to name the prompt if one shows.
   on('tool.check', async ($, e, next) => {
     const verdict = await next(e)
-    const isRealCall = e.tool_use_id !== undefined
-    if (isRealCall && verdict.decision === 'ask') {
-      const reason = verdict.reason ? `: ${verdict.reason}` : ''
-      await reportActivity($, 'permission', `${e.tool}${reason}`)
+    if (e.tool_use_id !== undefined && verdict.decision === 'ask') {
+      link.lastAsk = `${e.tool}${verdict.reason ? `: ${verdict.reason}` : ''}`
     }
     return verdict
+  })
+
+  // Fires only when a permission prompt is on screen, waiting for a person.
+  on('classic.Notification', async ($, e, next) => {
+    if (e.notification_type === PERMISSION_PROMPT_NOTIFICATION) await reportActivity($, 'permission', link.lastAsk ?? e.message)
+    return next(e)
   })
 
   // The permission check runs inside the call, so once the call returns any

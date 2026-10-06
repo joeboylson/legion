@@ -1,17 +1,20 @@
 //! legion2d: Legion's background program, one per machine. It runs every
-//! Legion folder's runs and their Claude sessions, in terminals it owns, and
-//! keeps each folder's run log.
+//! Legion folder's deployments and their Claude sessions, in terminals it owns, and
+//! keeps each folder's deployment log.
 //!
 //!     legion2d [--addon <folder>] [--claude <command>]
 
 mod access;
 mod activity_entries;
+mod check_ins;
 mod claude_version;
 mod constants;
+mod context_handover;
 mod daemon;
 mod entry_filter;
 mod entry_routing;
 mod folder_commands;
+mod folder_details;
 mod folder_state;
 mod git;
 mod ids;
@@ -21,16 +24,19 @@ mod mission_commands;
 mod mission_status;
 mod naming;
 mod prompts;
-mod run_commands;
+mod deployment_commands;
 mod server;
 mod session_arguments;
 mod session_commands;
 mod session_lifecycle;
 mod sessions;
 mod setup;
+mod shared_tools;
+mod stalled_work;
 mod state_lookup;
 mod store;
 mod terminal_key;
+mod unreported_turns;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -105,7 +111,7 @@ async fn run() -> Result<(), String> {
 
     // Sessions reach legion2d over the socket, so they start once it listens.
     let restoring_daemon = daemon.clone();
-    tokio::task::spawn_blocking(move || restoring_daemon.restore_open_runs());
+    tokio::task::spawn_blocking(move || restoring_daemon.restore_open_deployments());
     let checking_daemon = daemon.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(WAITING_SESSIONS_CHECK_INTERVAL);
@@ -115,6 +121,8 @@ async fn run() -> Result<(), String> {
             let _ = tokio::task::spawn_blocking(move || {
                 ticking_daemon.refuse_unanswered_permissions();
                 ticking_daemon.report_sessions_stuck_starting();
+                ticking_daemon.ask_commander_to_check_in();
+                ticking_daemon.point_out_stalled_work();
             })
             .await;
         }

@@ -1,4 +1,4 @@
-// Creating a mission in a run. Only the human does this.
+// Creating a mission in a deployment. Only the human does this.
 
 import { useState } from 'react'
 
@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { askFor } from '@/lib/legion'
 
-export function NewMissionDialog({ runId }: { runId: string }) {
+export function NewMissionDialog({ deploymentId }: { deploymentId: string }) {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const isComplete = title.trim() !== '' && body.trim() !== ''
@@ -20,7 +20,7 @@ export function NewMissionDialog({ runId }: { runId: string }) {
       submitLabel="Create"
       canSubmit={isComplete}
       onSubmit={async () => {
-        await askFor('missions', { type: 'mission_add', run: runId, title: title.trim(), body: body.trim() })
+        await askFor('missions', { type: 'mission_add', deployment: deploymentId, title: title.trim(), body: body.trim() })
         setTitle('')
         setBody('')
       }}

@@ -1,4 +1,4 @@
-//! How legion2d names runs, positions and missions.
+//! How legion2d names deployments, positions and missions.
 
 use crate::constants::MISSION_SLUG_MAX_LENGTH;
 
@@ -36,14 +36,36 @@ pub fn first_free_position(candidates: &[String], running_positions: &[String]) 
 }
 
 /// `base`, or `base-2`, `base-3` … whichever isn't taken yet.
-pub fn unique_run_name(base: &str, taken_names: &[String]) -> String {
+pub fn unique_deployment_name(base: &str, taken_names: &[String]) -> String {
     let candidates = std::iter::once(base.to_string()).chain((2..).map(|number| format!("{base}-{number}")));
     candidates.into_iter().find(|candidate| !taken_names.contains(candidate)).unwrap_or_else(|| base.to_string())
+}
+
+/// The idle copy to end so an operator at its limit can start on new work,
+/// or None when a position is free anyway or every copy is busy. An idle
+/// copy has handed off; keeping it only saves a restart if work comes back.
+pub fn idle_copy_to_free(candidates: &[String], running: &[(String, bool)]) -> Option<String> {
+    let running_positions: Vec<String> = running.iter().map(|(position, _)| position.clone()).collect();
+    if first_free_position(candidates, &running_positions).is_some() {
+        return None;
+    }
+    running.iter().find(|(position, is_idle)| *is_idle && candidates.contains(position)).map(|(position, _)| position.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_idle_copy_makes_room_only_when_every_copy_is_taken() {
+        let candidates = names(&["planner"]);
+        assert_eq!(idle_copy_to_free(&candidates, &[("planner".into(), true)]), Some("planner".into()));
+        assert_eq!(idle_copy_to_free(&candidates, &[("planner".into(), false)]), None);
+        assert_eq!(idle_copy_to_free(&candidates, &[]), None);
+        let two = names(&["builder", "builder-2"]);
+        assert_eq!(idle_copy_to_free(&two, &[("builder".into(), true)]), None);
+        assert_eq!(idle_copy_to_free(&two, &[("builder".into(), false), ("builder-2".into(), true)]), Some("builder-2".into()));
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|name| name.to_string()).collect()
@@ -96,8 +118,8 @@ mod tests {
     }
 
     #[test]
-    fn run_name_gets_a_number_when_taken() {
-        assert_eq!(unique_run_name("feature", &[]), "feature");
-        assert_eq!(unique_run_name("feature", &names(&["feature", "feature-2"])), "feature-3");
+    fn deployment_name_gets_a_number_when_taken() {
+        assert_eq!(unique_deployment_name("feature", &[]), "feature");
+        assert_eq!(unique_deployment_name("feature", &names(&["feature", "feature-2"])), "feature-3");
     }
 }

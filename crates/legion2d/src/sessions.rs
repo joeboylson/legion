@@ -8,26 +8,38 @@ use std::{
     time::Instant,
 };
 
-use legion2_proto::{Activity, SessionInfo, ENV_POSITION, ENV_RUN};
+use legion2_proto::{Activity, SessionInfo, ENV_POSITION, ENV_DEPLOYMENT};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
 use crate::{
     constants::{
-        ADDON_SESSION_ENV, ADDON_SOCKET_ENV, CHILD_SESSION_MARKERS, TERMINAL_COLUMNS, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
+        ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
+        CHILD_SESSION_MARKERS, TERMINAL_COLUMNS, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
+    context_handover::{autocompact_percent, HandoverPhase},
     daemon::Daemon,
     ids::new_id,
     terminal_key::TerminalKey,
 };
 
 pub struct Session {
-    pub run: String,
+    pub deployment: String,
     pub position: String,
     pub mission: Option<u32>,
     pub activity: Activity,
     pub can_see_state: bool,
     pub detail: Option<String>,
+    pub model: Option<String>,
+    /// How full its conversation is, in percent, as its add-on last said.
+    pub context_percent: Option<u8>,
+    /// The percentage it hands over to a fresh conversation at; None for never.
+    pub clear_at: Option<u8>,
+    pub handover: HandoverPhase,
+    /// When its current turn began, in milliseconds since 1970.
+    pub turn_started_ms: Option<i64>,
+    /// When the commander was last asked to look in on it.
+    pub last_check_in_ms: Option<i64>,
     /// Since when it has waited on a permission question.
     pub permission_asked_at: Option<Instant>,
     /// Set when Legion ends it on purpose, so its end isn't treated as a crash.
@@ -45,12 +57,15 @@ pub struct Session {
 impl Session {
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
-            run: self.run.clone(),
+            deployment: self.deployment.clone(),
             position: self.position.clone(),
             mission: self.mission,
             activity: self.activity,
             can_see_state: self.can_see_state,
             detail: self.detail.clone(),
+            is_stuck_starting: self.is_reported_stuck && self.activity == Activity::Starting,
+            model: self.model.clone(),
+            context_percent: self.context_percent,
         }
     }
 
@@ -84,11 +99,12 @@ impl Session {
 }
 
 pub struct SpawnRequest {
-    pub run: String,
+    pub deployment: String,
     pub position: String,
     pub mission: Option<u32>,
     pub working_folder: PathBuf,
     pub arguments: Vec<String>,
+    pub clear_at: Option<u8>,
 }
 
 fn claude_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> CommandBuilder {
@@ -102,8 +118,11 @@ fn claude_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> 
     CHILD_SESSION_MARKERS.iter().for_each(|marker| command.env_remove(marker));
     command.env(ADDON_SOCKET_ENV, &config.socket_path);
     command.env(ADDON_SESSION_ENV, session_id);
-    command.env(ENV_RUN, &request.run);
+    command.env(ENV_DEPLOYMENT, &request.deployment);
     command.env(ENV_POSITION, &request.position);
+    if let Some(clear_at) = request.clear_at {
+        command.env(AUTOCOMPACT_PERCENT_ENV, autocompact_percent(clear_at).to_string());
+    }
     // So the session finds the legion2 command next to legion2d.
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     command.env("PATH", format!("{}:{inherited_path}", config.binary_folder.display()));
@@ -127,12 +146,18 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     let input = terminal.master.take_writer().map_err(|error| format!("can't write to the terminal: {error}"))?;
 
     let session = Session {
-        run: request.run,
+        deployment: request.deployment,
         position: request.position,
         mission: request.mission,
         activity: Activity::Starting,
         can_see_state: true,
         detail: None,
+        model: None,
+        context_percent: None,
+        clear_at: request.clear_at,
+        handover: HandoverPhase::Working,
+        turn_started_ms: None,
+        last_check_in_ms: None,
         permission_asked_at: None,
         is_stopping: false,
         started_at: Instant::now(),

@@ -1,14 +1,14 @@
 //! The legion2 command's arguments.
 
 use clap::{Parser, Subcommand};
-use legion2_proto::ENV_RUN;
+use legion2_proto::ENV_DEPLOYMENT;
 
 #[derive(Parser)]
-#[command(name = "legion2", about = "Run Legion: folders, runs, missions, sessions and the run log.")]
+#[command(name = "legion2", about = "Run Legion: folders, deployments, missions, sessions and the deployment log.")]
 pub struct CommandLine {
-    /// The run, by name or ID. Inside a session, its own run.
-    #[arg(long, global = true, env = ENV_RUN)]
-    pub run: Option<String>,
+    /// The deployment, by name or ID. Inside a session, its own deployment.
+    #[arg(long, global = true, env = ENV_DEPLOYMENT)]
+    pub deployment: Option<String>,
     #[command(subcommand)]
     pub action: Action,
 }
@@ -24,18 +24,18 @@ pub enum Action {
     Add { path: String },
     /// List folders.
     Folders,
-    /// Start a run of a folder's pipeline. Its commander starts with it.
-    Run {
+    /// Start a deployment of a folder's pipeline. Its commander starts with it.
+    Deploy {
         folder: String,
         pipeline: String,
         #[arg(long)]
         name: Option<String>,
     },
-    /// List runs.
-    Runs { folder: Option<String> },
-    /// Close the run: every session in it ends, and it isn't brought back.
+    /// List deployments.
+    Deployments { folder: Option<String> },
+    /// Close the deployment: every session in it ends, and it isn't brought back.
     Close,
-    /// Create a mission in the run (human only). The body comes from --body, --file or stdin.
+    /// Create a mission in the deployment (human only). The body comes from --body, --file or stdin.
     New {
         title: String,
         #[arg(long)]
@@ -43,13 +43,13 @@ pub enum Action {
         #[arg(long, conflicts_with = "body")]
         file: Option<String>,
     },
-    /// List the run's missions and where each stands.
+    /// List the deployment's missions and where each stands.
     Missions,
     /// Read a mission.
     Mission { number: u32 },
     /// Move the base branch up to a done mission's branch.
     Finish { mission: u32 },
-    /// Start an operator, or the commander, in the run.
+    /// Start an operator, or the commander, in the deployment.
     Start {
         operator: String,
         #[arg(long)]
@@ -57,19 +57,19 @@ pub enum Action {
     },
     /// End a position's session.
     Stop { position: String },
-    /// List running sessions (every run's, without --run).
+    /// List running sessions (every deployment's, without --deployment).
     Sessions,
     /// Print a session's screen.
     Screen { position: String },
     /// Press a key in a session's terminal: enter, esc, up, down or tab.
     Key { position: String, key: String },
-    /// Message a position in the run.
+    /// Message a position in the deployment.
     Send {
         to: String,
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
-    /// Add a note to the run log.
+    /// Add a note to the deployment log.
     Note {
         #[arg(long)]
         mission: Option<u32>,
@@ -132,7 +132,7 @@ pub enum Action {
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
-    /// Show the run log.
+    /// Show the deployment log.
     Log {
         #[command(flatten)]
         filter: FilterArguments,
@@ -140,7 +140,7 @@ pub enum Action {
         #[arg(long, short)]
         follow: bool,
     },
-    /// Write the run log, or part of it, to a file.
+    /// Write the deployment log, or part of it, to a file.
     Export {
         #[command(flatten)]
         filter: FilterArguments,

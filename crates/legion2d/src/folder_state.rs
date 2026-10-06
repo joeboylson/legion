@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use legion2_proto::{Folder, Run};
+use legion2_proto::{Folder, Deployment};
 
 use crate::{
     constants::{DATABASE_FILE_NAME, FOLDERS_FOLDER_NAME, FOLDER_REGISTRY_FILE_NAME, MISSIONS_FOLDER_NAME},
@@ -20,7 +20,7 @@ pub struct FolderState {
     /// Where its missions, worktrees and database live, outside the repo.
     pub outside_folder: PathBuf,
     pub store: Store,
-    pub runs: Vec<Run>,
+    pub deployments: Vec<Deployment>,
 }
 
 /// One per folder: its name, plus a hash of its path so two repos with the
@@ -38,8 +38,8 @@ impl FolderState {
         fs::create_dir_all(&missions_folder).map_err(|error| format!("can't create {}: {error}", missions_folder.display()))?;
         let store = Store::open(&outside_folder.join(DATABASE_FILE_NAME))?;
         let folder_path = path.to_string_lossy().into_owned();
-        let runs = store.runs()?.into_iter().map(|run| Run { folder: folder_path.clone(), ..run }).collect();
-        Ok(FolderState { path: path.to_path_buf(), name: settings.name, outside_folder, store, runs })
+        let deployments = store.deployments()?.into_iter().map(|deployment| Deployment { folder: folder_path.clone(), ..deployment }).collect();
+        Ok(FolderState { path: path.to_path_buf(), name: settings.name, outside_folder, store, deployments })
     }
 
     pub fn info(&self) -> Folder {

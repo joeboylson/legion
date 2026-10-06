@@ -2,7 +2,7 @@
 //! and the app.
 
 use futures_util::{SinkExt, StreamExt};
-use legion2_proto::{Caller, Command, Outcome, Reply, Request, ServerMessage, ENV_POSITION, ENV_RUN, ENV_SOCKET, NAME};
+use legion2_proto::{Caller, Command, Outcome, Reply, Request, ServerMessage, ENV_POSITION, ENV_DEPLOYMENT, ENV_SOCKET, NAME};
 use tokio::net::UnixStream;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 
@@ -15,11 +15,11 @@ pub struct Client {
     requests_sent: u64,
 }
 
-/// Inside a session legion2d started, the run and position it speaks for.
+/// Inside a session legion2d started, the deployment and position it speaks for.
 fn caller_from_environment() -> Option<Caller> {
-    let run = std::env::var(ENV_RUN).ok()?;
+    let deployment = std::env::var(ENV_DEPLOYMENT).ok()?;
     let position = std::env::var(ENV_POSITION).ok()?;
-    Some(Caller { run, position })
+    Some(Caller { deployment, position })
 }
 
 impl Client {

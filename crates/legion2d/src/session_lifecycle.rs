@@ -1,12 +1,18 @@
 //! What Legion does on its own: when a session ends, after legion2d
-//! restarts, and when a permission request goes unanswered.
+//! restarts, when a permission request goes unanswered, and when a mission
+//! is finished.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use legion2_proto::{EntryKind, MissionStatus, NewEntry, COMMANDER, HUMAN, LEGION};
+use legion2_proto::{EntryKind, LogFilter, MissionStatus, NewEntry, COMMANDER, HUMAN, LEGION};
 
 use crate::{
-    constants::{COMMANDER_RESTART_GAP_MS, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
+    stalled_work::{stall_reminder, stalls, MissionView, Stall},
+    session_commands::is_busy,
+    setup::{read_operator, read_pipeline},
+    check_ins::{check_in_request, is_check_in_due},
+    context_handover::{fresh_start_prompt, HandoverPhase},
+    constants::{COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
     naming::operator_of_position,
     sessions::Session,
@@ -14,8 +20,8 @@ use crate::{
     terminal_key::TerminalKey,
 };
 
-const COMMANDER_RESTARTED_PROMPT: &str = "Your last session ended by itself, and Legion started you again. Read the run log and the missions with your tools, and carry on from there.";
-const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the run was cut off; Legion is starting again the operators that held missions. Read the run log and the missions with your tools, and carry on from there.";
+const COMMANDER_RESTARTED_PROMPT: &str = "Your last session ended by itself, and Legion started you again. Read the deployment log and the missions with your tools, and carry on from there.";
+const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the deployment was cut off; Legion is starting again the operators that held missions. Read the deployment log and the missions with your tools, and carry on from there.";
 
 pub fn can_restart_commander(last_restart_ms: Option<i64>, now: i64) -> bool {
     last_restart_ms.is_none_or(|last| now - last >= COMMANDER_RESTART_GAP_MS)
@@ -23,6 +29,18 @@ pub fn can_restart_commander(last_restart_ms: Option<i64>, now: i64) -> bool {
 
 fn entry(kind: EntryKind, to: Option<&str>, mission: Option<u32>, text: String) -> NewEntry {
     NewEntry { kind, mission, to: to.map(String::from), text, answers: None }
+}
+
+/// Ends every session working on the mission, on purpose: none of them is
+/// treated as a crash or brought back.
+pub fn end_mission_sessions(sessions: &mut HashMap<String, Session>, deployment_id: &str, mission: u32) -> Result<(), String> {
+    sessions
+        .values_mut()
+        .filter(|session| session.deployment == deployment_id && session.mission == Some(mission))
+        .try_for_each(|session| {
+            session.is_stopping = true;
+            session.end()
+        })
 }
 
 pub fn minutes_label(minutes: u64) -> String {
@@ -52,7 +70,7 @@ pub fn stuck_starting_text(position: &str) -> String {
 }
 
 fn restarted_operator_prompt(mission: u32) -> String {
-    format!("Legion restarted while you were on mission {mission}. Read its run log entries with the log tool (mission {mission}) and carry on.")
+    format!("Legion restarted while you were on mission {mission}. Read its deployment log entries with the log tool (mission {mission}) and carry on.")
 }
 
 impl Daemon {
@@ -61,71 +79,85 @@ impl Daemon {
     pub fn handle_session_end(self: &Arc<Self>, session: &Session, how_it_ended: &str) {
         self.announce_session(&legion2_proto::SessionInfo { activity: legion2_proto::Activity::Ended, ..session.info() });
         let ended_text = format!("{}'s session ended ({how_it_ended})", session.position);
-        self.post_legion_entry(&session.run, entry(EntryKind::SessionEnded, None, session.mission, ended_text));
-        let is_run_open = self.state.lock().unwrap().find_open_run(&session.run).is_ok();
-        if session.is_stopping || !is_run_open {
+        self.post_legion_entry(&session.deployment, entry(EntryKind::SessionEnded, None, session.mission, ended_text));
+        let is_deployment_open = self.state.lock().unwrap().find_open_deployment(&session.deployment).is_ok();
+        if session.handover == HandoverPhase::Restarting && is_deployment_open {
+            return self.start_fresh(session);
+        }
+        if session.is_stopping || !is_deployment_open {
             return;
         }
         if session.position != COMMANDER {
             let holding = session.mission.map(|mission| format!(" while holding mission {mission}")).unwrap_or_default();
             let text = format!("{}'s session ended by itself{holding}. Start it again if there's still work for it.", session.position);
-            self.post_legion_entry(&session.run, entry(EntryKind::Message, Some(COMMANDER), session.mission, text));
+            self.post_legion_entry(&session.deployment, entry(EntryKind::Message, Some(COMMANDER), session.mission, text));
             return;
         }
         let now = now_ms();
         let may_restart = {
             let mut state = self.state.lock().unwrap();
-            let may_restart = can_restart_commander(state.commander_restarted_at.get(&session.run).copied(), now);
+            let may_restart = can_restart_commander(state.commander_restarted_at.get(&session.deployment).copied(), now);
             if may_restart {
-                state.commander_restarted_at.insert(session.run.clone(), now);
+                state.commander_restarted_at.insert(session.deployment.clone(), now);
             }
             may_restart
         };
         if !may_restart {
             let text = "the commander ended by itself again soon after a restart, so Legion left it down. Start it with `legion2 start commander`.";
-            self.post_legion_entry(&session.run, entry(EntryKind::Note, Some(HUMAN), None, text.into()));
+            self.post_legion_entry(&session.deployment, entry(EntryKind::Note, Some(HUMAN), None, text.into()));
             return;
         }
-        let restart_entry = match self.start_session(&session.run, COMMANDER, None, LEGION, Some(COMMANDER_RESTARTED_PROMPT.into())) {
+        let restart_entry = match self.start_session(&session.deployment, COMMANDER, None, LEGION, Some(COMMANDER_RESTARTED_PROMPT.into())) {
             Ok(_) => entry(EntryKind::Note, None, None, "the commander ended by itself; Legion started it again".into()),
             Err(error) => entry(EntryKind::Note, Some(HUMAN), None, format!("the commander ended by itself, and starting it again failed: {error}")),
         };
-        self.post_legion_entry(&session.run, restart_entry);
+        self.post_legion_entry(&session.deployment, restart_entry);
     }
 
-    /// After legion2d starts: every open run's commander starts again, and so
+    /// Starts a position again after it handed over a full conversation.
+    fn start_fresh(self: &Arc<Self>, session: &Session) {
+        let operator = operator_of_position(&session.position);
+        let mission = if session.position == COMMANDER { None } else { session.mission };
+        let fresh_entry = match self.start_session(&session.deployment, operator, mission, LEGION, Some(fresh_start_prompt(mission))) {
+            Ok(_) => entry(EntryKind::Note, None, session.mission, format!("{}'s conversation was full; Legion started it again fresh", session.position)),
+            Err(error) => entry(EntryKind::Note, Some(HUMAN), session.mission, format!("couldn't start {} again after its handover: {error}", session.position)),
+        };
+        self.post_legion_entry(&session.deployment, fresh_entry);
+    }
+
+    /// After legion2d starts: every open deployment's commander starts again, and so
     /// does every operator that held a mission in progress.
-    pub fn restore_open_runs(self: &Arc<Self>) {
-        let runs_to_restore: Vec<(String, Vec<(String, u32)>)> = {
+    pub fn restore_open_deployments(self: &Arc<Self>) {
+        let deployments_to_restore: Vec<(String, Vec<(String, u32)>)> = {
             let state = self.state.lock().unwrap();
             state
                 .folders
                 .iter()
                 .flat_map(|folder| {
-                    folder.runs.iter().filter(|run| run.closed_ms.is_none()).map(|run| {
+                    folder.deployments.iter().filter(|deployment| deployment.closed_ms.is_none()).map(|deployment| {
                         let held_missions = folder
                             .store
-                            .missions(&run.id)
+                            .missions(&deployment.id)
                             .unwrap_or_default()
                             .into_iter()
                             .filter(|mission| mission.status == MissionStatus::Started)
                             .filter_map(|mission| mission.holder.map(|holder| (operator_of_position(&holder).to_string(), mission.number)))
                             .collect();
-                        (run.id.clone(), held_missions)
+                        (deployment.id.clone(), held_missions)
                     })
                 })
                 .collect()
         };
-        runs_to_restore.into_iter().for_each(|(run_id, held_missions)| {
-            let cut_off = "legion2d restarted, which cut off every session in this run".to_string();
-            self.post_legion_entry(&run_id, entry(EntryKind::Note, None, None, cut_off));
-            if let Err(error) = self.start_session(&run_id, COMMANDER, None, LEGION, Some(LEGION_RESTARTED_COMMANDER_PROMPT.into())) {
-                self.post_legion_entry(&run_id, entry(EntryKind::Note, Some(HUMAN), None, format!("couldn't start the commander again: {error}")));
+        deployments_to_restore.into_iter().for_each(|(deployment_id, held_missions)| {
+            let cut_off = "legion2d restarted, which cut off every session in this deployment".to_string();
+            self.post_legion_entry(&deployment_id, entry(EntryKind::Note, None, None, cut_off));
+            if let Err(error) = self.start_session(&deployment_id, COMMANDER, None, LEGION, Some(LEGION_RESTARTED_COMMANDER_PROMPT.into())) {
+                self.post_legion_entry(&deployment_id, entry(EntryKind::Note, Some(HUMAN), None, format!("couldn't start the commander again: {error}")));
             }
             held_missions.into_iter().for_each(|(operator, mission)| {
-                if let Err(error) = self.start_session(&run_id, &operator, Some(mission), LEGION, Some(restarted_operator_prompt(mission))) {
+                if let Err(error) = self.start_session(&deployment_id, &operator, Some(mission), LEGION, Some(restarted_operator_prompt(mission))) {
                     let text = format!("couldn't start {operator} again on mission {mission}: {error}");
-                    self.post_legion_entry(&run_id, entry(EntryKind::Message, Some(COMMANDER), Some(mission), text));
+                    self.post_legion_entry(&deployment_id, entry(EntryKind::Message, Some(COMMANDER), Some(mission), text));
                 }
             });
         });
@@ -134,7 +166,7 @@ impl Daemon {
     /// Tells the human about sessions whose add-on hasn't reported in time,
     /// once each.
     pub fn report_sessions_stuck_starting(&self) {
-        let stuck: Vec<(String, String, Option<u32>)> = {
+        let stuck: Vec<(legion2_proto::SessionInfo, Option<u32>)> = {
             let mut state = self.state.lock().unwrap();
             state
                 .sessions
@@ -143,12 +175,92 @@ impl Daemon {
                 .filter(|session| session.started_at.elapsed() >= SESSION_START_GRACE)
                 .map(|session| {
                     session.is_reported_stuck = true;
-                    (session.run.clone(), session.position.clone(), session.mission)
+                    (session.info(), session.mission)
                 })
                 .collect()
         };
-        stuck.into_iter().for_each(|(run_id, position, mission)| {
-            self.post_legion_entry(&run_id, entry(EntryKind::Note, Some(HUMAN), mission, stuck_starting_text(&position)));
+        stuck.into_iter().for_each(|(info, mission)| {
+            self.announce_session(&info);
+            self.post_legion_entry(&info.deployment, entry(EntryKind::Note, Some(HUMAN), mission, stuck_starting_text(&info.position)));
+        });
+    }
+
+    /// Asks the commander to look in on each operator that has been working
+    /// a long while.
+    pub fn ask_commander_to_check_in(&self) {
+        let now = now_ms();
+        let due: Vec<(String, String, Option<u32>, i64)> = {
+            let mut state = self.state.lock().unwrap();
+            state
+                .sessions
+                .values_mut()
+                .filter(|session| session.position != COMMANDER && session.activity == legion2_proto::Activity::Busy)
+                .filter(|session| is_check_in_due(session.turn_started_ms, session.last_check_in_ms, now))
+                .map(|session| {
+                    session.last_check_in_ms = Some(now);
+                    let working_ms = now - session.turn_started_ms.unwrap_or(now);
+                    (session.deployment.clone(), session.position.clone(), session.mission, working_ms)
+                })
+                .collect()
+        };
+        due.into_iter().for_each(|(deployment, position, mission, working_ms)| {
+            self.post_legion_entry(&deployment, entry(EntryKind::Message, Some(COMMANDER), mission, check_in_request(&position, mission, working_ms)));
+        });
+    }
+
+    /// Tells each idle commander about work it has lost track of, once each.
+    pub fn point_out_stalled_work(&self) {
+        let now = now_ms();
+        let reminders: Vec<(String, String)> = {
+            let mut state = self.state.lock().unwrap();
+            let idle_commanders: Vec<String> = state
+                .sessions
+                .values()
+                .filter(|session| session.position == COMMANDER && session.activity == legion2_proto::Activity::Idle)
+                .map(|session| session.deployment.clone())
+                .collect();
+            let found: Vec<(String, String, Vec<Stall>)> = idle_commanders
+                .iter()
+                .filter_map(|deployment_id| {
+                    let (folder_index, deployment) = state.find_open_deployment(deployment_id).ok()?;
+                    let folder = &state.folders[folder_index];
+                    let (pipeline, _) = read_pipeline(&folder.path, &deployment.pipeline).ok()?;
+                    let limit = read_operator(&folder.path, &pipeline.first).ok()?.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
+                    let deployment_sessions: Vec<&Session> = state.sessions.values().filter(|session| &session.deployment == deployment_id).collect();
+                    let first_copies: Vec<&&Session> =
+                        deployment_sessions.iter().filter(|session| operator_of_position(&session.position) == pipeline.first).collect();
+                    let first_has_room = first_copies.len() < limit as usize || first_copies.iter().any(|session| session.activity == legion2_proto::Activity::Idle);
+                    let missions: Vec<MissionView> = folder
+                        .store
+                        .missions(deployment_id)
+                        .ok()?
+                        .into_iter()
+                        .map(|mission| {
+                            let handoffs = LogFilter { mission: Some(mission.number), kinds: Some(vec![EntryKind::Handoff]), ..Default::default() };
+                            MissionView {
+                                number: mission.number,
+                                status: mission.status,
+                                handed_off_at_ms: folder.store.entries(deployment_id, &handoffs).ok().and_then(|entries| entries.last().map(|entry| entry.at_ms)),
+                                is_being_worked: deployment_sessions.iter().any(|session| session.mission == Some(mission.number) && is_busy(session.activity)),
+                            }
+                        })
+                        .collect();
+                    Some((deployment_id.clone(), pipeline.first, stalls(&missions, first_has_room, now)))
+                })
+                .collect();
+            found
+                .into_iter()
+                .filter_map(|(deployment_id, first, found_stalls)| {
+                    let fresh: Vec<Stall> = found_stalls
+                        .into_iter()
+                        .filter(|stall| state.stalls_pointed_out.insert(format!("{deployment_id}:{}", stall.key())))
+                        .collect();
+                    (!fresh.is_empty()).then(|| (deployment_id, stall_reminder(&fresh, &first)))
+                })
+                .collect()
+        };
+        reminders.into_iter().for_each(|(deployment_id, text)| {
+            self.post_legion_entry(&deployment_id, entry(EntryKind::Message, Some(COMMANDER), None, text));
         });
     }
 
@@ -169,15 +281,15 @@ impl Daemon {
                     if let Err(error) = pressed {
                         eprintln!("{LEGION}d: {error}");
                     }
-                    (session.run.clone(), session.position.clone(), session.mission, session.detail.clone().unwrap_or_default())
+                    (session.deployment.clone(), session.position.clone(), session.mission, session.detail.clone().unwrap_or_default())
                 })
                 .collect()
         };
         let timeout_minutes = timeout.as_secs() / 60;
-        refused.into_iter().for_each(|(run_id, position, mission, request)| {
+        refused.into_iter().for_each(|(deployment_id, position, mission, request)| {
             let (to_operator, to_commander) = refusal_messages(&position, timeout_minutes, &request);
-            self.post_legion_entry(&run_id, entry(EntryKind::Message, Some(&position), mission, to_operator));
-            self.post_legion_entry(&run_id, entry(EntryKind::Message, Some(COMMANDER), mission, to_commander));
+            self.post_legion_entry(&deployment_id, entry(EntryKind::Message, Some(&position), mission, to_operator));
+            self.post_legion_entry(&deployment_id, entry(EntryKind::Message, Some(COMMANDER), mission, to_commander));
         });
     }
 }

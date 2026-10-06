@@ -31,25 +31,39 @@ fn snapshot_folder() -> Option<std::path::PathBuf> {
     is_debug_build.then(|| folder.into())
 }
 
-/// Debug builds only: LEGION2_OPEN=<run>[/<position>] opens that run (and
-/// that position's terminal) at start, so a snapshot can show it.
+/// Debug builds only: LEGION2_OPEN=<deployment>[/<position>] opens that deployment (and
+/// that position's terminal) at start, so a snapshot can show it. With
+/// snapshots on, a file in the snapshot folder says the same and is read on
+/// every reload, so the view can change without relaunching the app.
 const OPEN_AT_START_ENV: &str = "LEGION2_OPEN";
+const OPEN_AT_START_FILE_NAME: &str = "open.txt";
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug, PartialEq)]
 struct StartingView {
-    run: String,
+    deployment: String,
     position: Option<String>,
+}
+
+/// `deployment`, `deployment/position`, or a page named by kind (`folder:<path>`,
+/// `question:<entry>`), which is passed on whole: a path has slashes too.
+fn parse_starting_view(requested: &str) -> StartingView {
+    let names_a_page = requested.starts_with("folder:") || requested.starts_with("question:");
+    match requested.split_once('/') {
+        Some((deployment, position)) if !names_a_page => StartingView { deployment: deployment.to_string(), position: Some(position.to_string()) },
+        _ => StartingView { deployment: requested.to_string(), position: None },
+    }
 }
 
 #[tauri::command]
 fn starting_view() -> Option<StartingView> {
     let is_debug_build = cfg!(debug_assertions);
-    let requested = std::env::var(OPEN_AT_START_ENV).ok().filter(|_| is_debug_build)?;
-    let (run, position) = match requested.split_once('/') {
-        Some((run, position)) => (run.to_string(), Some(position.to_string())),
-        None => (requested, None),
-    };
-    Some(StartingView { run, position })
+    let from_file = snapshot_folder().and_then(|folder| std::fs::read_to_string(folder.join(OPEN_AT_START_FILE_NAME)).ok());
+    let requested = from_file
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .or_else(|| std::env::var(OPEN_AT_START_ENV).ok())
+        .filter(|_| is_debug_build)?;
+    Some(parse_starting_view(&requested))
 }
 
 #[tauri::command]
@@ -120,4 +134,20 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("the Legion app failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deployment_and_position_split_on_the_slash() {
+        assert_eq!(parse_starting_view("q-test/builder"), StartingView { deployment: "q-test".into(), position: Some("builder".into()) });
+        assert_eq!(parse_starting_view("q-test"), StartingView { deployment: "q-test".into(), position: None });
+    }
+
+    #[test]
+    fn a_named_page_keeps_its_slashes() {
+        assert_eq!(parse_starting_view("folder:/repo/app"), StartingView { deployment: "folder:/repo/app".into(), position: None });
+    }
 }

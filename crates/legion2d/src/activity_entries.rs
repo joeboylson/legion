@@ -4,7 +4,7 @@ use legion2_proto::{Activity, EntryKind};
 
 const DEFAULT_PERMISSION_REQUEST: &str = "a tool needs permission";
 
-/// The run log entry a change calls for, if any: a new permission question,
+/// The deployment log entry a change calls for, if any: a new permission question,
 /// or a new wait on a usage limit. Both go to the human.
 pub fn entry_for_activity_change(position: &str, previous: Activity, current: Activity, detail: Option<&str>) -> Option<(EntryKind, String)> {
     if previous == current {

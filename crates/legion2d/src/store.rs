@@ -1,10 +1,10 @@
-//! One SQLite database per folder, in its outside folder: its runs, its
-//! missions and every run's log. Log entries are only ever added; the
+//! One SQLite database per folder, in its outside folder: its deployments, its
+//! missions and every deployment's log. Log entries are only ever added; the
 //! database itself refuses to change or delete one.
 
 use std::path::Path;
 
-use legion2_proto::{Entry, EntryKind, LogFilter, Mission, NewEntry, Run};
+use legion2_proto::{Entry, EntryKind, LogFilter, Mission, NewEntry, Deployment};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::{entry_filter::entries_matching, mission_status::mission_standing};
@@ -23,7 +23,7 @@ pub struct Worktree {
 }
 
 const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS runs (
+CREATE TABLE IF NOT EXISTS deployments (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     pipeline TEXT NOT NULL,
@@ -32,13 +32,13 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE TABLE IF NOT EXISTS missions (
     number INTEGER PRIMARY KEY,
-    run TEXT NOT NULL REFERENCES runs(id),
+    deployment TEXT NOT NULL REFERENCES deployments(id),
     title TEXT NOT NULL,
     file TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run TEXT NOT NULL REFERENCES runs(id),
+    deployment TEXT NOT NULL REFERENCES deployments(id),
     at_ms INTEGER NOT NULL,
     mission INTEGER,
     from_position TEXT NOT NULL,
@@ -47,11 +47,11 @@ CREATE TABLE IF NOT EXISTS entries (
     text TEXT NOT NULL,
     answers INTEGER
 );
-CREATE INDEX IF NOT EXISTS entries_by_run ON entries(run, id);
+CREATE INDEX IF NOT EXISTS entries_by_deployment ON entries(deployment, id);
 CREATE TRIGGER IF NOT EXISTS entries_never_change BEFORE UPDATE ON entries
-    BEGIN SELECT RAISE(ABORT, 'run log entries never change'); END;
+    BEGIN SELECT RAISE(ABORT, 'deployment log entries never change'); END;
 CREATE TRIGGER IF NOT EXISTS entries_never_removed BEFORE DELETE ON entries
-    BEGIN SELECT RAISE(ABORT, 'run log entries are never removed'); END;
+    BEGIN SELECT RAISE(ABORT, 'deployment log entries are never removed'); END;
 -- Which entries have been handed to a session. Not part of the log.
 CREATE TABLE IF NOT EXISTS delivered_entries (entry INTEGER PRIMARY KEY);
 -- Each mission's own checkout of the repo, on its own branch.
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS worktrees (
 );
 ";
 
-const ENTRY_COLUMNS: &str = "id, run, at_ms, mission, from_position, to_position, kind, text, answers";
+const ENTRY_COLUMNS: &str = "id, deployment, at_ms, mission, from_position, to_position, kind, text, answers";
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -85,7 +85,7 @@ fn entry_from_row(row: &Row) -> rusqlite::Result<Entry> {
     })?;
     Ok(Entry {
         id: row.get(0)?,
-        run: row.get(1)?,
+        deployment: row.get(1)?,
         at_ms: row.get(2)?,
         mission: row.get(3)?,
         from: row.get(4)?,
@@ -96,8 +96,8 @@ fn entry_from_row(row: &Row) -> rusqlite::Result<Entry> {
     })
 }
 
-fn run_from_row(row: &Row) -> rusqlite::Result<Run> {
-    Ok(Run {
+fn deployment_from_row(row: &Row) -> rusqlite::Result<Deployment> {
+    Ok(Deployment {
         id: row.get(0)?,
         name: row.get(1)?,
         folder: String::new(),
@@ -134,19 +134,19 @@ impl Store {
         self.database.execute(sql, parameters).map(|_| ()).map_err(database_error)
     }
 
-    pub fn runs(&self) -> Result<Vec<Run>, String> {
-        self.query_all("SELECT id, name, pipeline, started_ms, closed_ms FROM runs ORDER BY started_ms", [], run_from_row)
+    pub fn deployments(&self) -> Result<Vec<Deployment>, String> {
+        self.query_all("SELECT id, name, pipeline, started_ms, closed_ms FROM deployments ORDER BY started_ms", [], deployment_from_row)
     }
 
-    pub fn add_run(&self, run: &Run) -> Result<(), String> {
+    pub fn add_deployment(&self, deployment: &Deployment) -> Result<(), String> {
         self.execute(
-            "INSERT INTO runs (id, name, pipeline, started_ms) VALUES (?1, ?2, ?3, ?4)",
-            params![run.id, run.name, run.pipeline, run.started_ms],
+            "INSERT INTO deployments (id, name, pipeline, started_ms) VALUES (?1, ?2, ?3, ?4)",
+            params![deployment.id, deployment.name, deployment.pipeline, deployment.started_ms],
         )
     }
 
-    pub fn close_run(&self, run_id: &str, closed_ms: i64) -> Result<(), String> {
-        self.execute("UPDATE runs SET closed_ms = ?2 WHERE id = ?1", params![run_id, closed_ms])
+    pub fn close_deployment(&self, deployment_id: &str, closed_ms: i64) -> Result<(), String> {
+        self.execute("UPDATE deployments SET closed_ms = ?2 WHERE id = ?1", params![deployment_id, closed_ms])
     }
 
     pub fn next_mission_number(&self) -> Result<u32, String> {
@@ -155,40 +155,40 @@ impl Store {
             .map_err(database_error)
     }
 
-    pub fn add_mission(&self, number: u32, run_id: &str, title: &str, file: &str) -> Result<(), String> {
-        self.execute("INSERT INTO missions (number, run, title, file) VALUES (?1, ?2, ?3, ?4)", params![number, run_id, title, file])
+    pub fn add_mission(&self, number: u32, deployment_id: &str, title: &str, file: &str) -> Result<(), String> {
+        self.execute("INSERT INTO missions (number, deployment, title, file) VALUES (?1, ?2, ?3, ?4)", params![number, deployment_id, title, file])
     }
 
-    /// A run's missions, each with where it stands from its entries.
-    pub fn missions(&self, run_id: &str) -> Result<Vec<Mission>, String> {
-        let run_entries = self.all_entries(run_id)?;
+    /// A deployment's missions, each with where it stands from its entries.
+    pub fn missions(&self, deployment_id: &str) -> Result<Vec<Mission>, String> {
+        let deployment_entries = self.all_entries(deployment_id)?;
         let rows = self.query_all(
-            "SELECT number, title, file FROM missions WHERE run = ?1 ORDER BY number",
-            [run_id],
+            "SELECT number, title, file FROM missions WHERE deployment = ?1 ORDER BY number",
+            [deployment_id],
             |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         )?;
         Ok(rows
             .into_iter()
             .map(|(number, title, file)| {
-                let mission_entries: Vec<Entry> = run_entries.iter().filter(|entry| entry.mission == Some(number)).cloned().collect();
+                let mission_entries: Vec<Entry> = deployment_entries.iter().filter(|entry| entry.mission == Some(number)).cloned().collect();
                 let standing = mission_standing(&mission_entries);
-                Mission { number, run: run_id.to_string(), title, file, status: standing.status, holder: standing.holder }
+                Mission { number, deployment: deployment_id.to_string(), title, file, status: standing.status, holder: standing.holder }
             })
             .collect())
     }
 
-    pub fn mission(&self, run_id: &str, number: u32) -> Result<Mission, String> {
-        self.missions(run_id)?
+    pub fn mission(&self, deployment_id: &str, number: u32) -> Result<Mission, String> {
+        self.missions(deployment_id)?
             .into_iter()
             .find(|mission| mission.number == number)
-            .ok_or_else(|| format!("this run has no mission {number}"))
+            .ok_or_else(|| format!("this deployment has no mission {number}"))
     }
 
-    pub fn add_entry(&self, run_id: &str, author: &str, entry: &NewEntry) -> Result<Entry, String> {
+    pub fn add_entry(&self, deployment_id: &str, author: &str, entry: &NewEntry) -> Result<Entry, String> {
         self.execute(
-            "INSERT INTO entries (run, at_ms, mission, from_position, to_position, kind, text, answers)
+            "INSERT INTO entries (deployment, at_ms, mission, from_position, to_position, kind, text, answers)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![run_id, now_ms(), entry.mission, author, entry.to, entry.kind.as_str(), entry.text, entry.answers],
+            params![deployment_id, now_ms(), entry.mission, author, entry.to, entry.kind.as_str(), entry.text, entry.answers],
         )?;
         let new_id = self.database.last_insert_rowid();
         self.database
@@ -196,29 +196,29 @@ impl Store {
             .map_err(database_error)
     }
 
-    pub fn entry(&self, run_id: &str, entry_id: i64) -> Result<Option<Entry>, String> {
+    pub fn entry(&self, deployment_id: &str, entry_id: i64) -> Result<Option<Entry>, String> {
         self.database
-            .query_row(&format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE id = ?1 AND run = ?2"), params![entry_id, run_id], entry_from_row)
+            .query_row(&format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE id = ?1 AND deployment = ?2"), params![entry_id, deployment_id], entry_from_row)
             .optional()
             .map_err(database_error)
     }
 
-    fn all_entries(&self, run_id: &str) -> Result<Vec<Entry>, String> {
-        self.query_all(&format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE run = ?1 ORDER BY id"), [run_id], entry_from_row)
+    fn all_entries(&self, deployment_id: &str) -> Result<Vec<Entry>, String> {
+        self.query_all(&format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE deployment = ?1 ORDER BY id"), [deployment_id], entry_from_row)
     }
 
-    pub fn entries(&self, run_id: &str, filter: &LogFilter) -> Result<Vec<Entry>, String> {
-        Ok(entries_matching(self.all_entries(run_id)?, filter))
+    pub fn entries(&self, deployment_id: &str, filter: &LogFilter) -> Result<Vec<Entry>, String> {
+        Ok(entries_matching(self.all_entries(deployment_id)?, filter))
     }
 
     /// Entries addressed to a position that no session has been handed yet.
-    pub fn undelivered_entries(&self, run_id: &str, position: &str) -> Result<Vec<Entry>, String> {
+    pub fn undelivered_entries(&self, deployment_id: &str, position: &str) -> Result<Vec<Entry>, String> {
         let addressed = self.query_all(
             &format!(
                 "SELECT {ENTRY_COLUMNS} FROM entries
-                 WHERE run = ?1 AND to_position = ?2 AND id NOT IN (SELECT entry FROM delivered_entries) ORDER BY id"
+                 WHERE deployment = ?1 AND to_position = ?2 AND id NOT IN (SELECT entry FROM delivered_entries) ORDER BY id"
             ),
-            [run_id, position],
+            [deployment_id, position],
             entry_from_row,
         )?;
         Ok(addressed.into_iter().filter(|entry| entry.kind.is_delivered()).collect())
@@ -257,10 +257,10 @@ impl Store {
 mod tests {
     use super::*;
 
-    fn store_with_run() -> Store {
+    fn store_with_deployment() -> Store {
         let store = Store::open(Path::new(":memory:")).unwrap();
-        let run = Run { id: "r".into(), name: "feature".into(), folder: String::new(), pipeline: "feature".into(), started_ms: 1, closed_ms: None };
-        store.add_run(&run).unwrap();
+        let deployment = Deployment { id: "r".into(), name: "feature".into(), folder: String::new(), pipeline: "feature".into(), started_ms: 1, closed_ms: None };
+        store.add_deployment(&deployment).unwrap();
         store
     }
 
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn entries_come_back_in_order() {
-        let store = store_with_run();
+        let store = store_with_deployment();
         store.add_entry("r", "builder", &note("one")).unwrap();
         store.add_entry("r", "builder", &note("two")).unwrap();
         let texts: Vec<String> = store.entries("r", &LogFilter::default()).unwrap().into_iter().map(|entry| entry.text).collect();
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn entries_never_change_or_go() {
-        let store = store_with_run();
+        let store = store_with_deployment();
         store.add_entry("r", "builder", &note("one")).unwrap();
         assert!(store.execute("UPDATE entries SET text = 'x'", []).is_err());
         assert!(store.execute("DELETE FROM entries", []).is_err());
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn delivery_happens_once() {
-        let store = store_with_run();
+        let store = store_with_deployment();
         let message = NewEntry { kind: EntryKind::Message, to: Some("reviewer".into()), ..note("look") };
         let added = store.add_entry("r", "builder", &message).unwrap();
         store.add_entry("r", "builder", &NewEntry { to: Some("reviewer".into()), ..note("not delivered") }).unwrap();
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn missions_are_numbered_and_tracked() {
-        let store = store_with_run();
+        let store = store_with_deployment();
         assert_eq!(store.next_mission_number().unwrap(), 1);
         store.add_mission(1, "r", "Do it", "/m/0001-do-it.md").unwrap();
         assert_eq!(store.next_mission_number().unwrap(), 2);
@@ -310,9 +310,9 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_run_is_remembered() {
-        let store = store_with_run();
-        store.close_run("r", 42).unwrap();
-        assert_eq!(store.runs().unwrap()[0].closed_ms, Some(42));
+    fn closing_a_deployment_is_remembered() {
+        let store = store_with_deployment();
+        store.close_deployment("r", 42).unwrap();
+        assert_eq!(store.deployments().unwrap()[0].closed_ms, Some(42));
     }
 }

@@ -4,6 +4,6 @@ import type { Command } from "./Command";
 
 export type Request = { id: string, 
 /**
- * The run and position the caller speaks for, when it's a session.
+ * The deployment and position the caller speaks for, when it's a session.
  */
 from?: Caller | null, command: Command, };

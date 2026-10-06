@@ -21,9 +21,9 @@ const terminalTheme = () => ({
   selectionBackground: cssVariable('--selection'),
 })
 
-type TerminalViewProps = { runId: string; position: string }
+type TerminalViewProps = { deploymentId: string; position: string }
 
-export function TerminalView({ runId, position }: TerminalViewProps) {
+export function TerminalView({ deploymentId, position }: TerminalViewProps) {
   const holder = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -39,14 +39,14 @@ export function TerminalView({ runId, position }: TerminalViewProps) {
     terminal.open(holder.current)
     terminal.focus()
     const typing = terminal.onData(text => {
-      void askLegion({ type: 'input', run: runId, position, text })
+      void askLegion({ type: 'input', deployment: deploymentId, position, text })
     })
     let lastDrawn = ''
     let isStopped = false
     const redraw = async () => {
       if (isStopped) return
       try {
-        const { ansi } = await askFor('screen', { type: 'screen', run: runId, position })
+        const { ansi } = await askFor('screen', { type: 'screen', deployment: deploymentId, position })
         if (ansi !== lastDrawn) {
           lastDrawn = ansi
           terminal.write(ansi)
@@ -64,7 +64,8 @@ export function TerminalView({ runId, position }: TerminalViewProps) {
       typing.dispose()
       terminal.dispose()
     }
-  }, [runId, position])
+  }, [deploymentId, position])
 
-  return <div ref={holder} className="overflow-auto p-3" />
+  // As wide as the terminal it holds, so the dialog around it fits it exactly.
+  return <div ref={holder} className="w-max" />
 }

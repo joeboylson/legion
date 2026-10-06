@@ -26,13 +26,13 @@ pub fn socket_path() -> Option<std::path::PathBuf> {
 }
 
 /// Set in every session legion2d starts, so the `legion2` command run inside
-/// it knows which run and position it speaks for.
-pub const ENV_RUN: &str = "LEGION2_RUN";
+/// it knows which deployment and position it speaks for.
+pub const ENV_DEPLOYMENT: &str = "LEGION2_DEPLOYMENT";
 pub const ENV_POSITION: &str = "LEGION2_POSITION";
 /// Set when the `legion2` command should reach a legion2d elsewhere.
 pub const ENV_SOCKET: &str = "LEGION2_SOCKET";
 
-/// Who the human is in the run log.
+/// Who the human is in the deployment log.
 pub const HUMAN: &str = "human";
 /// Entries Legion writes itself come from this.
 pub const LEGION: &str = NAME;
@@ -42,7 +42,7 @@ pub const COMMANDER: &str = "commander";
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Request {
     pub id: String,
-    /// The run and position the caller speaks for, when it's a session.
+    /// The deployment and position the caller speaks for, when it's a session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<Caller>,
     pub command: Command,
@@ -51,7 +51,7 @@ pub struct Request {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Caller {
-    pub run: String,
+    pub deployment: String,
     pub position: String,
 }
 
@@ -63,28 +63,30 @@ pub enum Command {
     /// Adds a folder, setting up `.legion2/` in it if it has none.
     FolderAdd { path: String },
     FolderList,
-    RunStart { folder: String, pipeline: String, name: Option<String> },
-    RunList { folder: Option<String> },
-    /// Ends every session in the run; it isn't brought back after a restart.
-    RunClose { run: String },
-    MissionAdd { run: String, title: String, body: String },
-    MissionList { run: String },
-    MissionRead { run: String, mission: u32 },
+    /// Everything about one folder: its settings, pipelines, operators and deployments.
+    FolderRead { folder: String },
+    DeploymentStart { folder: String, pipeline: String, name: Option<String> },
+    DeploymentList { folder: Option<String> },
+    /// Ends every session in the deployment; it isn't brought back after a restart.
+    DeploymentClose { deployment: String },
+    MissionAdd { deployment: String, title: String, body: String },
+    MissionList { deployment: String },
+    MissionRead { deployment: String, mission: u32 },
     /// Moves the base branch up to a done mission's branch, replaying it
     /// and running the folder's check first if the base has moved on.
-    MissionFinish { run: String, mission: u32 },
-    /// Starts an operator, or the commander, in the run.
-    SessionStart { run: String, operator: String, mission: Option<u32> },
-    SessionStop { run: String, position: String },
-    SessionList { run: Option<String> },
-    Screen { run: String, position: String },
-    Key { run: String, position: String, key: String },
+    MissionFinish { deployment: String, mission: u32 },
+    /// Starts an operator, or the commander, in the deployment.
+    SessionStart { deployment: String, operator: String, mission: Option<u32> },
+    SessionStop { deployment: String, position: String },
+    SessionList { deployment: Option<String> },
+    Screen { deployment: String, position: String },
+    Key { deployment: String, position: String, key: String },
     /// Types straight into a session's terminal, as the app's live terminal does.
-    Input { run: String, position: String, text: String },
-    /// Adds an entry to the run log. Messages, handoffs and answers addressed
+    Input { deployment: String, position: String, text: String },
+    /// Adds an entry to the deployment log. Messages, handoffs and answers addressed
     /// to a position are handed to its session.
-    Post { run: String, entry: NewEntry },
-    Log { run: String, filter: LogFilter },
+    Post { deployment: String, entry: NewEntry },
+    Log { deployment: String, filter: LogFilter },
     /// Sends events from now on, for as long as the connection stays open.
     Watch,
 }
@@ -147,8 +149,9 @@ pub enum Reply {
     Done,
     Folder { folder: Folder, created_setup: bool },
     Folders { folders: Vec<Folder> },
-    Run { run: Run },
-    Runs { runs: Vec<Run> },
+    FolderDetail { detail: FolderDetail },
+    Deployment { deployment: Deployment },
+    Deployments { deployments: Vec<Deployment> },
     Mission { mission: Mission, body: String },
     Missions { missions: Vec<Mission> },
     Session { session: SessionInfo },
@@ -179,7 +182,54 @@ pub struct Folder {
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct Run {
+pub struct FolderDetail {
+    pub folder: Folder,
+    /// The command that checks a mission's work, if any.
+    pub check: Option<String>,
+    pub permission_mode: Option<String>,
+    /// Where its missions, worktrees and deployment log live, outside the repo.
+    pub outside_folder: String,
+    pub pipelines: Vec<PipelineDetail>,
+    pub operators: Vec<OperatorDetail>,
+    pub deployments: Vec<Deployment>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PipelineDetail {
+    pub name: String,
+    pub operators: Vec<String>,
+    pub first: Option<String>,
+    pub decisions: Vec<DecisionDetail>,
+    /// Why Legion can't use it as written, if it can't.
+    pub problem: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DecisionDetail {
+    pub operator: String,
+    pub condition: String,
+    pub next: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OperatorDetail {
+    pub name: String,
+    pub definition: String,
+    pub model: Option<String>,
+    pub copy_limit: u32,
+    pub permission_mode: Option<String>,
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    /// Why Legion can't read it, if it can't.
+    pub problem: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Deployment {
     pub id: String,
     pub name: String,
     pub folder: String,
@@ -194,7 +244,7 @@ pub struct Run {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Mission {
     pub number: u32,
-    pub run: String,
+    pub deployment: String,
     pub title: String,
     pub file: String,
     pub status: MissionStatus,
@@ -217,7 +267,7 @@ pub enum MissionStatus {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SessionInfo {
-    pub run: String,
+    pub deployment: String,
     pub position: String,
     pub mission: Option<u32>,
     pub activity: Activity,
@@ -225,6 +275,13 @@ pub struct SessionInfo {
     pub can_see_state: bool,
     /// What the session is waiting on, for a permission question.
     pub detail: Option<String>,
+    /// It hasn't started in time: it's likely waiting on a question shown
+    /// before the add-on loads, such as whether to trust the folder.
+    pub is_stuck_starting: bool,
+    /// The model it runs, as Claude names it; known once its add-on reports.
+    pub model: Option<String>,
+    /// How full its conversation is, in percent; known once its add-on reports.
+    pub context_percent: Option<u8>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
@@ -253,13 +310,13 @@ impl Activity {
     }
 }
 
-/// One event in a run. Entries are only ever added.
+/// One event in a deployment. Entries are only ever added.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entry {
     #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub id: i64,
-    pub run: String,
+    pub deployment: String,
     #[cfg_attr(feature = "typescript", ts(type = "number"))]
     pub at_ms: i64,
     pub mission: Option<u32>,
@@ -275,8 +332,8 @@ pub struct Entry {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
-    RunStarted,
-    RunClosed,
+    DeploymentStarted,
+    DeploymentClosed,
     MissionAdded,
     SessionStarted,
     SessionEnded,
@@ -299,8 +356,8 @@ pub enum EntryKind {
 impl EntryKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            EntryKind::RunStarted => "run_started",
-            EntryKind::RunClosed => "run_closed",
+            EntryKind::DeploymentStarted => "deployment_started",
+            EntryKind::DeploymentClosed => "deployment_closed",
             EntryKind::MissionAdded => "mission_added",
             EntryKind::SessionStarted => "session_started",
             EntryKind::SessionEnded => "session_ended",
@@ -359,13 +416,13 @@ mod tests {
 
     #[test]
     fn errors_come_back_as_text() {
-        let reply = ServerMessage::Reply { id: "1".into(), outcome: Outcome::Error("no run".into()) };
-        assert!(matches!(round_trip(&reply), ServerMessage::Reply { outcome: Outcome::Error(text), .. } if text == "no run"));
+        let reply = ServerMessage::Reply { id: "1".into(), outcome: Outcome::Error("no deployment".into()) };
+        assert!(matches!(round_trip(&reply), ServerMessage::Reply { outcome: Outcome::Error(text), .. } if text == "no deployment"));
     }
 
     #[test]
     fn commands_are_tagged_by_type() {
-        let request = Request { id: "1".into(), from: None, command: Command::MissionFinish { run: "r".into(), mission: 3 } };
+        let request = Request { id: "1".into(), from: None, command: Command::MissionFinish { deployment: "r".into(), mission: 3 } };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["command"]["type"], "mission_finish");
         assert!(json.get("from").is_none());
@@ -375,8 +432,8 @@ mod tests {
     #[test]
     fn every_entry_kind_names_itself_the_way_it_serializes() {
         let kinds = [
-            EntryKind::RunStarted,
-            EntryKind::RunClosed,
+            EntryKind::DeploymentStarted,
+            EntryKind::DeploymentClosed,
             EntryKind::MissionAdded,
             EntryKind::SessionStarted,
             EntryKind::SessionEnded,

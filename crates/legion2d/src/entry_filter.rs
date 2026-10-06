@@ -1,4 +1,4 @@
-//! Narrowing a run log down to what a reader asked for.
+//! Narrowing a deployment log down to what a reader asked for.
 
 use std::collections::HashSet;
 
@@ -17,7 +17,7 @@ fn passes_filter(entry: &Entry, filter: &LogFilter, answered_question_ids: &Hash
     is_on_mission && involves_position && is_wanted_kind && is_recent_enough && passes_open_question_filter
 }
 
-/// `entries` are the whole run's, oldest first, so every answer is in view.
+/// `entries` are the whole deployment's, oldest first, so every answer is in view.
 pub fn entries_matching(entries: Vec<Entry>, filter: &LogFilter) -> Vec<Entry> {
     let answered_question_ids: HashSet<i64> = entries.iter().filter_map(|entry| entry.answers).collect();
     entries.into_iter().filter(|entry| passes_filter(entry, filter, &answered_question_ids)).collect()
@@ -28,7 +28,7 @@ mod tests {
     use super::*;
 
     fn entry(id: i64, kind: EntryKind, from: &str, to: Option<&str>, mission: Option<u32>, answers: Option<i64>) -> Entry {
-        Entry { id, run: "r".into(), at_ms: id * 1000, mission, from: from.into(), to: to.map(String::from), kind, text: String::new(), answers }
+        Entry { id, deployment: "r".into(), at_ms: id * 1000, mission, from: from.into(), to: to.map(String::from), kind, text: String::new(), answers }
     }
 
     fn sample_log() -> Vec<Entry> {

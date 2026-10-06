@@ -9,6 +9,7 @@ use crate::{
     daemon::Daemon,
     git::{finish_mission_branch, FinishOutcome},
     naming::mission_slug,
+    session_lifecycle::end_mission_sessions,
     setup::read_settings,
 };
 
@@ -17,7 +18,7 @@ pub fn mission_file_name(number: u32, title: &str) -> String {
     format!("{number:04}-{}.md", mission_slug(title))
 }
 
-/// The run log entry for how a finish went.
+/// The deployment log entry for how a finish went.
 pub fn finish_entry(outcome: FinishOutcome, mission: u32, branch: &str, base: &str) -> NewEntry {
     let (kind, to, text) = match outcome {
         FinishOutcome::Moved => (EntryKind::Finished, None, format!("{base} moved up to {branch}")),
@@ -26,6 +27,16 @@ pub fn finish_entry(outcome: FinishOutcome, mission: u32, branch: &str, base: &s
             (EntryKind::Finished, None, format!("{base} had moved on: replayed {branch} onto it{check_note}, and moved {base} up"))
         }
         FinishOutcome::NoChanges => (EntryKind::Finished, None, format!("{branch} had no commits; nothing to move")),
+        // Left done: the builder fixes only the clash and reports done again,
+        // then the finish runs again with no new round of checks.
+        FinishOutcome::Clash { files } => (
+            EntryKind::Message,
+            Some(COMMANDER.to_string()),
+            format!(
+                "{branch} clashes with {base} in {}. Send it to the operator that built mission {mission}: it runs `git rebase {base}` in the mission's folder, fixes only the clash (keeping both sides where both belong), checks the change still works, commits, and reports the mission done again. Then use the finish tool again; it doesn't need to go through the checks again.",
+                files.join(", ")
+            ),
+        ),
         FinishOutcome::NeedsHuman(reason) => {
             (EntryKind::Blocked, Some(HUMAN.to_string()), format!("{branch} can't finish on its own: {reason}. It's left as it is for you."))
         }
@@ -34,44 +45,46 @@ pub fn finish_entry(outcome: FinishOutcome, mission: u32, branch: &str, base: &s
 }
 
 impl Daemon {
-    pub fn add_mission(&self, run_key: &str, title: &str, body: &str) -> Result<Reply, String> {
-        let (run_id, number) = {
+    pub fn add_mission(&self, deployment_key: &str, title: &str, body: &str) -> Result<Reply, String> {
+        let (deployment_id, number) = {
             let state = self.state.lock().unwrap();
-            let (folder_index, run) = state.find_open_run(run_key)?;
+            let (folder_index, deployment) = state.find_open_deployment(deployment_key)?;
             let folder = &state.folders[folder_index];
             let number = folder.store.next_mission_number()?;
             let mission_path = folder.outside_folder.join(MISSIONS_FOLDER_NAME).join(mission_file_name(number, title));
             fs::write(&mission_path, format!("# {title}\n\n{}\n", body.trim()))
                 .map_err(|error| format!("can't write {}: {error}", mission_path.display()))?;
-            folder.store.add_mission(number, &run.id, title, &mission_path.to_string_lossy())?;
-            (run.id, number)
+            folder.store.add_mission(number, &deployment.id, title, &mission_path.to_string_lossy())?;
+            (deployment.id, number)
         };
         let added = NewEntry { kind: EntryKind::MissionAdded, mission: Some(number), to: Some(COMMANDER.into()), text: title.to_string(), answers: None };
-        self.post_entry(&run_id, HUMAN, added)?;
+        self.post_entry(&deployment_id, HUMAN, added)?;
         let state = self.state.lock().unwrap();
-        let (folder_index, _) = state.find_run(&run_id)?;
-        Ok(Reply::Missions { missions: vec![state.folders[folder_index].store.mission(&run_id, number)?] })
+        let (folder_index, _) = state.find_deployment(&deployment_id)?;
+        Ok(Reply::Missions { missions: vec![state.folders[folder_index].store.mission(&deployment_id, number)?] })
     }
 
-    pub fn list_missions(&self, run_key: &str) -> Result<Reply, String> {
+    pub fn list_missions(&self, deployment_key: &str) -> Result<Reply, String> {
         let state = self.state.lock().unwrap();
-        let (folder_index, run) = state.find_run(run_key)?;
-        Ok(Reply::Missions { missions: state.folders[folder_index].store.missions(&run.id)? })
+        let (folder_index, deployment) = state.find_deployment(deployment_key)?;
+        Ok(Reply::Missions { missions: state.folders[folder_index].store.missions(&deployment.id)? })
     }
 
-    pub fn read_mission(&self, run_key: &str, number: u32) -> Result<Reply, String> {
+    pub fn read_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {
         let state = self.state.lock().unwrap();
-        let (folder_index, run) = state.find_run(run_key)?;
-        let (mission, body) = state.mission_with_body(folder_index, &run.id, number)?;
+        let (folder_index, deployment) = state.find_deployment(deployment_key)?;
+        let (mission, body) = state.mission_with_body(folder_index, &deployment.id, number)?;
         Ok(Reply::Mission { mission, body })
     }
 
-    pub fn finish_mission(&self, run_key: &str, number: u32) -> Result<Reply, String> {
-        let (run_id, entry) = {
-            let state = self.state.lock().unwrap();
-            let (folder_index, run) = state.find_run(run_key)?;
+    pub fn finish_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {
+        let (deployment_id, entry) = {
+            let mut guard = self.state.lock().unwrap();
+            // Through one borrow, so its folders and sessions can be used apart.
+            let state = &mut *guard;
+            let (folder_index, deployment) = state.find_deployment(deployment_key)?;
             let folder = &state.folders[folder_index];
-            let mission = folder.store.mission(&run.id, number)?;
+            let mission = folder.store.mission(&deployment.id, number)?;
             if mission.status != MissionStatus::Done {
                 return Err(format!("mission {number} isn't done yet"));
             }
@@ -82,13 +95,16 @@ impl Daemon {
                 .ok_or_else(|| format!("mission {number} has no branch to finish"))?;
             let check_command = read_settings(&folder.path)?.check;
             let outcome = finish_mission_branch(&folder.path, &worktree, check_command.as_deref())?;
-            let is_finished = !matches!(outcome, FinishOutcome::NeedsHuman(_));
+            let is_finished = !matches!(outcome, FinishOutcome::NeedsHuman(_) | FinishOutcome::Clash { .. });
             if is_finished {
                 folder.store.mark_worktree_removed(number)?;
+                // Operators stay idle between handoffs in case the work comes
+                // back; once it's finished, nothing will.
+                end_mission_sessions(&mut state.sessions, &deployment.id, number)?;
             }
-            (run.id, finish_entry(outcome, number, &worktree.branch, &worktree.base))
+            (deployment.id, finish_entry(outcome, number, &worktree.branch, &worktree.base))
         };
-        Ok(Reply::Entry { entry: self.post_entry(&run_id, LEGION, entry)? })
+        Ok(Reply::Entry { entry: self.post_entry(&deployment_id, LEGION, entry)? })
     }
 }
 
@@ -114,6 +130,14 @@ mod tests {
         let unchecked = finish_entry(FinishOutcome::Replayed { was_checked: false }, 2, "b", "main");
         assert!(checked.text.contains("the check passed"));
         assert!(!unchecked.text.contains("check"));
+    }
+
+    #[test]
+    fn a_clash_goes_to_the_commander_and_names_the_files() {
+        let entry = finish_entry(FinishOutcome::Clash { files: vec!["style.css".into(), "app.js".into()] }, 15, "mission/0015", "main");
+        assert_eq!((entry.kind, entry.to.as_deref()), (EntryKind::Message, Some(COMMANDER)));
+        assert!(entry.text.contains("in style.css, app.js"));
+        assert!(entry.text.contains("doesn't need to go through the checks again"));
     }
 
     #[test]

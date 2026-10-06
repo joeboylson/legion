@@ -9,7 +9,8 @@
     "types": "cd .. && TS_RS_EXPORT_DIR=\"$PWD/app/src/generated\" cargo test -p legion2-proto --features typescript",
     "app": "cargo tauri dev",
     "bundle": "cargo tauri build",
-    "doctor": "react-doctor --verbose -y --no-score"
+    "doctor": "react-doctor --verbose -y --no-score",
+    "watch": "vite build --watch"
   },
   "dependencies": {
     "@fontsource/geist-mono": "^5.3.0",
@@ -20,6 +21,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cn": "^0.4.0",
+    "cytoscape": "^3.34.3",
     "lucide-react": "^1.52.0",
     "radix-ui": "^1.6.7",
     "react": "^19.3.0",

@@ -4,7 +4,7 @@ use legion2_proto::{Entry, EntryKind, NewEntry, COMMANDER, HUMAN, NAME};
 
 use crate::constants::delivery_prefix;
 
-/// What routing needs to know from the run log. The caller looks it up.
+/// What routing needs to know from the deployment log. The caller looks it up.
 #[derive(Default)]
 pub struct RoutingFacts {
     /// For an answer: who asked the question it answers, and on which mission.
@@ -28,7 +28,7 @@ pub fn route_entry(entry: NewEntry, facts: RoutingFacts) -> Result<NewEntry, Str
         EntryKind::Answer => {
             let question_number = entry.answers.ok_or("an answer needs the question it answers")?;
             let (asker, question_mission) =
-                facts.question.ok_or_else(|| format!("entry {question_number} isn't a question in this run"))?;
+                facts.question.ok_or_else(|| format!("entry {question_number} isn't a question in this deployment"))?;
             Ok(NewEntry { to: Some(asker), mission: entry.mission.or(question_mission), ..entry })
         }
         EntryKind::Handoff | EntryKind::Done | EntryKind::Blocked | EntryKind::Resumed => {
@@ -75,7 +75,7 @@ mod tests {
     }
 
     fn entry(kind: EntryKind, mission: Option<u32>) -> Entry {
-        Entry { id: 1, run: "r".into(), at_ms: 0, mission, from: "builder".into(), to: None, kind, text: "ok".into(), answers: Some(7) }
+        Entry { id: 1, deployment: "r".into(), at_ms: 0, mission, from: "builder".into(), to: None, kind, text: "ok".into(), answers: Some(7) }
     }
 
     #[test]

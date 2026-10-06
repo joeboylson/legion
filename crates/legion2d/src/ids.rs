@@ -1,4 +1,4 @@
-//! Short IDs for runs and sessions, and a stable hash for folder paths.
+//! Short IDs for deployments and sessions, and a stable hash for folder paths.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
