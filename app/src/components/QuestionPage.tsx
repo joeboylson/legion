@@ -1,5 +1,6 @@
-// A question for the human, on a page of its own: the whole question, the
-// mission it's about, and room for a proper answer.
+// A question for the human, or a decision a session made and carried on
+// with, on a page of its own: the whole text, the mission it's about, and
+// room for a proper answer. A decision can be dismissed instead.
 
 import { useEffect, useState } from 'react'
 
@@ -13,9 +14,11 @@ type QuestionPageProps = {
   question: Escalation
   onAnswered: () => void
   onBack: () => void
+  onDismiss: () => void
 }
 
-export function QuestionPage({ question, onAnswered, onBack }: QuestionPageProps) {
+export function QuestionPage({ question, onAnswered, onBack, onDismiss }: QuestionPageProps) {
+  const isDecision = question.kind === 'decision'
   const [answer, setAnswer] = useState('')
   const [missionText, setMissionText] = useState<string>()
   const [problem, setProblem] = useState<string>()
@@ -54,7 +57,7 @@ export function QuestionPage({ question, onAnswered, onBack }: QuestionPageProps
         <Button variant="ghost" size="sm" onClick={onBack}>
           ← Back
         </Button>
-        <span className="label">Question</span>
+        <span className="label">{isDecision ? 'Decision' : 'Question'}</span>
         <span className="font-mono text-label text-muted-foreground">{askedBy}</span>
       </header>
 
@@ -75,16 +78,22 @@ export function QuestionPage({ question, onAnswered, onBack }: QuestionPageProps
             void send()
           }}
         >
-          <Label htmlFor="answer">Your answer</Label>
+          <Label htmlFor="answer">{isDecision ? 'Your answer, if you want it changed' : 'Your answer'}</Label>
           <Textarea id="answer" className="min-h-9" value={answer} onChange={event => setAnswer(event.target.value)} autoFocus />
           {problem !== undefined && <p className="text-danger">{problem}</p>}
           <div className="flex gap-3">
             <Button type="submit" disabled={!hasAnswer || isSending}>
               Send answer
             </Button>
-            <Button type="button" variant="ghost" onClick={onBack}>
-              Not now
-            </Button>
+            {isDecision ? (
+              <Button type="button" variant="ghost" onClick={onDismiss}>
+                Dismiss
+              </Button>
+            ) : (
+              <Button type="button" variant="ghost" onClick={onBack}>
+                Not now
+              </Button>
+            )}
           </div>
         </form>
       </div>

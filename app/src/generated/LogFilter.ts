@@ -11,6 +11,6 @@ position: string | null, kinds: Array<EntryKind> | null,
  */
 since_ms: number | null, 
 /**
- * Questions that have no answer yet, only.
+ * Questions and decisions that have no answer yet, only.
  */
 open_questions: boolean, };

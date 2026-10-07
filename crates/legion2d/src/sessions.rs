@@ -4,11 +4,11 @@
 use std::{
     io::{Read, Write},
     path::PathBuf,
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     time::Instant,
 };
 
-use legion2_proto::{Activity, SessionInfo, ENV_POSITION, ENV_DEPLOYMENT};
+use legion2_proto::{Activity, SessionInfo, ENV_DEPLOYMENT, ENV_POSITION, LEGION};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
     context_handover::{autocompact_percent, HandoverPhase},
     daemon::Daemon,
     ids::new_id,
+    store::RunningSession,
     terminal_key::TerminalKey,
 };
 
@@ -173,7 +174,16 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         _terminal: terminal.master,
     };
     let info = session.info();
-    daemon.state.lock().unwrap().sessions.insert(session_id.clone(), session);
+    let running = RunningSession { deployment: info.deployment.clone(), position: info.position.clone(), mission: info.mission, part: info.part, session_id: session_id.clone() };
+    {
+        let mut state = daemon.state.lock().unwrap();
+        state.sessions.insert(session_id.clone(), session);
+        // The session runs either way; a failure here only means it won't come back after a restart.
+        let recorded = state.find_deployment(&running.deployment).and_then(|(folder_index, _)| state.folders[folder_index].store.record_running_session(&running));
+        if let Err(error) = recorded {
+            eprintln!("{LEGION}d: {error}");
+        }
+    }
     daemon.announce_session(&info);
 
     // Keep reading the terminal, or claude blocks once its buffer fills.
@@ -197,7 +207,17 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             Ok(status) => format!("exit status {}", status.exit_code()),
             Err(error) => error.to_string(),
         };
-        let ended_session = waiting_daemon.state.lock().unwrap().sessions.remove(&session_id);
+        let ended_session = {
+            let mut state = waiting_daemon.state.lock().unwrap();
+            if !waiting_daemon.is_shutting_down.load(Ordering::SeqCst) {
+                // By session ID: a session Legion already took out of its state (to free a copy) has none left to say which folder.
+                let forgotten = state.folders.iter().try_for_each(|folder| folder.store.forget_running_session(&session_id));
+                if let Err(error) = forgotten {
+                    eprintln!("{LEGION}d: {error}");
+                }
+            }
+            state.sessions.remove(&session_id)
+        };
         if let Some(session) = ended_session {
             waiting_daemon.handle_session_end(&session, &how_it_ended);
         }

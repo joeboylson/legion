@@ -35,6 +35,17 @@ pub fn first_free_position(candidates: &[String], running_positions: &[String]) 
     candidates.iter().find(|candidate| !running_positions.contains(candidate)).cloned()
 }
 
+/// The wanted position when it's one of the candidates and free, as when a
+/// session comes back after a restart under its old name; otherwise the
+/// first free one.
+pub fn choose_position(candidates: &[String], running_positions: &[String], wanted: Option<&str>) -> Option<String> {
+    let wanted_is_free = |position: &&str| candidates.iter().any(|candidate| candidate == position) && !running_positions.iter().any(|running| running == position);
+    match wanted.filter(wanted_is_free) {
+        Some(position) => Some(position.to_string()),
+        None => first_free_position(candidates, running_positions),
+    }
+}
+
 /// `base`, or `base-2`, `base-3` … whichever isn't taken yet.
 pub fn unique_deployment_name(base: &str, taken_names: &[String]) -> String {
     let candidates = std::iter::once(base.to_string()).chain((2..).map(|number| format!("{base}-{number}")));
@@ -115,6 +126,21 @@ mod tests {
         let candidates = names(&["builder", "builder-2"]);
         assert_eq!(first_free_position(&candidates, &names(&["builder"])), Some("builder-2".into()));
         assert_eq!(first_free_position(&candidates, &names(&["builder", "builder-2"])), None);
+    }
+
+    #[test]
+    fn a_free_wanted_position_is_kept() {
+        let candidates = names(&["builder", "builder-2", "builder-3"]);
+        assert_eq!(choose_position(&candidates, &[], Some("builder-3")), Some("builder-3".into()));
+        assert_eq!(choose_position(&candidates, &[], None), Some("builder".into()));
+    }
+
+    #[test]
+    fn a_taken_or_unknown_wanted_position_falls_back_to_the_first_free() {
+        let candidates = names(&["builder", "builder-2"]);
+        assert_eq!(choose_position(&candidates, &names(&["builder-2"]), Some("builder-2")), Some("builder".into()));
+        assert_eq!(choose_position(&candidates, &[], Some("builder-4")), Some("builder".into()));
+        assert_eq!(choose_position(&candidates, &names(&["builder", "builder-2"]), Some("builder-2")), None);
     }
 
     #[test]

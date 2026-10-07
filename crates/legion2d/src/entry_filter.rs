@@ -12,7 +12,8 @@ fn passes_filter(entry: &Entry, filter: &LogFilter, answered_question_ids: &Hash
         .is_none_or(|position| &entry.from == position || entry.to.as_ref() == Some(position));
     let is_wanted_kind = filter.kinds.as_ref().is_none_or(|kinds| kinds.contains(&entry.kind));
     let is_recent_enough = filter.since_ms.is_none_or(|since| entry.at_ms >= since);
-    let is_open_question = entry.kind == EntryKind::Question && !answered_question_ids.contains(&entry.id);
+    let waits_on_an_answer = matches!(entry.kind, EntryKind::Question | EntryKind::Decision);
+    let is_open_question = waits_on_an_answer && !answered_question_ids.contains(&entry.id);
     let passes_open_question_filter = !filter.open_questions || is_open_question;
     is_on_mission && involves_position && is_wanted_kind && is_recent_enough && passes_open_question_filter
 }
@@ -71,5 +72,12 @@ mod tests {
     fn open_questions_leave_out_answered_ones() {
         let filter = LogFilter { open_questions: true, ..Default::default() };
         assert_eq!(ids(&entries_matching(sample_log(), &filter)), vec![2]);
+    }
+
+    #[test]
+    fn open_questions_include_decisions_with_no_answer() {
+        let log = [sample_log(), vec![entry(5, EntryKind::Decision, "builder", Some("human"), Some(1), None), entry(6, EntryKind::Decision, "planner", Some("human"), None, None), entry(7, EntryKind::Answer, "human", Some("planner"), None, Some(6))]].concat();
+        let filter = LogFilter { open_questions: true, ..Default::default() };
+        assert_eq!(ids(&entries_matching(log, &filter)), vec![2, 5]);
     }
 }

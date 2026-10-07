@@ -25,6 +25,7 @@ const OPERATOR_ENTRY_KINDS: &[EntryKind] = &[
     EntryKind::Done,
     EntryKind::Blocked,
     EntryKind::Suggestion,
+    EntryKind::Decision,
 ];
 
 /// The commander also passes the human's answers back.

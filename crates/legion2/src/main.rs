@@ -7,6 +7,7 @@ mod arguments;
 mod mcp_server;
 mod plan;
 mod reply_format;
+mod service;
 mod time_span;
 
 use std::io::Read;
@@ -99,9 +100,13 @@ async fn run() -> Result<(), String> {
     if matches!(plan, Plan::ServeTools) {
         return mcp_server::serve_tools().await;
     }
+    if let Plan::Service(action) = plan {
+        println!("{}", service::run_service_action(action)?);
+        return Ok(());
+    }
     let mut client = Client::connect().await?;
     match plan {
-        Plan::ServeTools => Ok(()),
+        Plan::ServeTools | Plan::Service(_) => Ok(()),
         Plan::Ask(command) => {
             print_reply(&client.ask(command).await?);
             Ok(())

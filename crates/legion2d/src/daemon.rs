@@ -4,8 +4,8 @@
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    sync::{atomic::AtomicBool, Arc, Mutex},
+    time::Instant,
 };
 
 use legion2_proto::{Activity, Caller, Command, Entry, Event, NewEntry, Reply, SessionInfo, HUMAN, LEGION};
@@ -19,6 +19,8 @@ use crate::{
     constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS},
     entry_routing::delivery_text,
     folder_state::{read_folder_registry, FolderState},
+    machine_settings::{read_machine_settings, MachineSettings},
+    session_commands::StartRequest,
     sessions::Session,
 };
 
@@ -29,17 +31,15 @@ pub struct Config {
     pub claude_command: String,
     /// Where legion2d and the legion2 command live.
     pub binary_folder: PathBuf,
-    /// The most sessions busy at once across the machine. A waiting
-    /// commander doesn't count.
-    pub max_busy_sessions: usize,
-    /// How long a permission request waits for an answer before it's refused.
-    pub permission_timeout: Duration,
 }
 
 pub struct Daemon {
     pub config: Config,
     pub state: Mutex<State>,
     pub events: broadcast::Sender<Event>,
+    /// Set once legion2d is stopping: sessions cut off by its exit are
+    /// still remembered as running, so they come back when it starts again.
+    pub is_shutting_down: AtomicBool,
 }
 
 pub struct State {
@@ -50,6 +50,19 @@ pub struct State {
     pub commander_restarted_at: HashMap<String, i64>,
     /// Stalled work already pointed out to a commander, by deployment and stall.
     pub stalls_pointed_out: std::collections::HashSet<String>,
+    /// Each deployment's pipeline and copy limits, as its commander last heard them.
+    pub team_told_to_commander: HashMap<String, String>,
+    /// Sessions to bring back after a restart once the machine has room.
+    pub pending_restores: Vec<PendingRestore>,
+}
+
+/// A session that was running when legion2d stopped, waiting for room to start again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingRestore {
+    pub deployment: String,
+    pub position: String,
+    pub mission: u32,
+    pub part: Option<u32>,
 }
 
 /// What the add-on reports about its session.
@@ -74,8 +87,20 @@ impl Daemon {
             })
             .collect();
         let (events, _) = broadcast::channel(EVENT_BUFFER_SIZE);
-        let state = State { folders, sessions: HashMap::new(), commander_restarted_at: HashMap::new(), stalls_pointed_out: Default::default() };
-        Arc::new(Daemon { config, state: Mutex::new(state), events })
+        let state = State {
+            folders,
+            sessions: HashMap::new(),
+            commander_restarted_at: HashMap::new(),
+            stalls_pointed_out: Default::default(),
+            team_told_to_commander: HashMap::new(),
+            pending_restores: Vec::new(),
+        };
+        Arc::new(Daemon { config, state: Mutex::new(state), events, is_shutting_down: AtomicBool::new(false) })
+    }
+
+    /// Read fresh each time, so a change to settings.json needs no restart.
+    pub fn machine_settings(&self) -> Result<MachineSettings, String> {
+        read_machine_settings(&self.config.data_folder)
     }
 
     pub fn announce_session(&self, info: &SessionInfo) {
@@ -255,7 +280,9 @@ impl Daemon {
             Command::MissionList { deployment } => self.list_missions(&deployment),
             Command::MissionRead { deployment, mission } => self.read_mission(&deployment, mission),
             Command::MissionFinish { deployment, mission } => self.finish_mission(&deployment, mission),
-            Command::SessionStart { deployment, operator, mission, part } => self.start_session_on(&deployment, &operator, mission, part, &author, None),
+            Command::SessionStart { deployment, operator, mission, part } => {
+                self.start_session_on(&deployment, StartRequest { operator: &operator, mission, part, position: None, starter: &author, first_prompt: None })
+            }
             Command::SessionStop { deployment, position } => self.stop_session(&deployment, &position),
             Command::SessionList { deployment } => self.list_sessions(deployment.as_deref()),
             Command::Screen { deployment, position } => self.read_screen(&deployment, &position),

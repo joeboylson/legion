@@ -1,18 +1,18 @@
-//! What Legion does on its own: when a session ends, after legion2d
-//! restarts, when a permission request goes unanswered, and when a mission
-//! is finished.
+//! What Legion does on its own: when a session ends, when a session is
+//! stuck starting or working a long while, when work stalls, when a
+//! permission request goes unanswered, and when a mission is finished.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use legion2_proto::{EntryKind, LogFilter, MissionStatus, NewEntry, COMMANDER, HUMAN, LEGION};
+use legion2_proto::{EntryKind, LogFilter, NewEntry, COMMANDER, HUMAN, LEGION};
 
 use crate::{
     stalled_work::{stall_reminder, stalls, MissionView, Stall},
-    session_commands::is_busy,
+    session_commands::{is_busy, StartRequest},
     setup::{read_operator, read_pipeline},
     check_ins::{check_in_request, is_check_in_due},
     context_handover::{fresh_start_prompt, HandoverPhase},
-    constants::{COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
+    constants::{SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
     naming::operator_of_position,
     sessions::Session,
@@ -21,7 +21,6 @@ use crate::{
 };
 
 const COMMANDER_RESTARTED_PROMPT: &str = "Your last session ended by itself, and Legion started you again. Read the deployment log and the missions with your tools, and carry on from there.";
-const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the deployment was cut off; Legion is starting again the operators that held missions. Read the deployment log and the missions with your tools, and carry on from there.";
 
 pub fn can_restart_commander(last_restart_ms: Option<i64>, now: i64) -> bool {
     last_restart_ms.is_none_or(|last| now - last >= COMMANDER_RESTART_GAP_MS)
@@ -69,10 +68,6 @@ pub fn stuck_starting_text(position: &str) -> String {
     )
 }
 
-fn restarted_operator_prompt(mission: u32) -> String {
-    format!("Legion restarted while you were on mission {mission}. Read its deployment log entries with the log tool (mission {mission}) and carry on.")
-}
-
 impl Daemon {
     /// If no one asked for the session to end, the commander starts again (at
     /// most once per gap), or hears that its operator's session ended.
@@ -114,53 +109,22 @@ impl Daemon {
         self.post_legion_entry(&session.deployment, restart_entry);
     }
 
-    /// Starts a position again after it handed over a full conversation.
+    /// Starts a position again, under the same name, after it handed over a full conversation.
     fn start_fresh(self: &Arc<Self>, session: &Session) {
-        let operator = operator_of_position(&session.position);
         let mission = if session.position == COMMANDER { None } else { session.mission };
-        let fresh_entry = match self.start_session(&session.deployment, operator, mission, LEGION, Some(fresh_start_prompt(mission))) {
+        let request = StartRequest {
+            operator: operator_of_position(&session.position),
+            mission,
+            part: session.part,
+            position: Some(&session.position),
+            starter: LEGION,
+            first_prompt: Some(fresh_start_prompt(mission)),
+        };
+        let fresh_entry = match self.start_session_on(&session.deployment, request) {
             Ok(_) => entry(EntryKind::Note, None, session.mission, format!("{}'s conversation was full; Legion started it again fresh", session.position)),
             Err(error) => entry(EntryKind::Note, Some(HUMAN), session.mission, format!("couldn't start {} again after its handover: {error}", session.position)),
         };
         self.post_legion_entry(&session.deployment, fresh_entry);
-    }
-
-    /// After legion2d starts: every open deployment's commander starts again, and so
-    /// does every operator that held a mission in progress.
-    pub fn restore_open_deployments(self: &Arc<Self>) {
-        let deployments_to_restore: Vec<(String, Vec<(String, u32)>)> = {
-            let state = self.state.lock().unwrap();
-            state
-                .folders
-                .iter()
-                .flat_map(|folder| {
-                    folder.deployments.iter().filter(|deployment| deployment.closed_ms.is_none()).map(|deployment| {
-                        let held_missions = folder
-                            .store
-                            .missions(&deployment.id)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|mission| mission.status == MissionStatus::Started)
-                            .filter_map(|mission| mission.holder.map(|holder| (operator_of_position(&holder).to_string(), mission.number)))
-                            .collect();
-                        (deployment.id.clone(), held_missions)
-                    })
-                })
-                .collect()
-        };
-        deployments_to_restore.into_iter().for_each(|(deployment_id, held_missions)| {
-            let cut_off = "legion2d restarted, which cut off every session in this deployment".to_string();
-            self.post_legion_entry(&deployment_id, entry(EntryKind::Note, None, None, cut_off));
-            if let Err(error) = self.start_session(&deployment_id, COMMANDER, None, LEGION, Some(LEGION_RESTARTED_COMMANDER_PROMPT.into())) {
-                self.post_legion_entry(&deployment_id, entry(EntryKind::Note, Some(HUMAN), None, format!("couldn't start the commander again: {error}")));
-            }
-            held_missions.into_iter().for_each(|(operator, mission)| {
-                if let Err(error) = self.start_session(&deployment_id, &operator, Some(mission), LEGION, Some(restarted_operator_prompt(mission))) {
-                    let text = format!("couldn't start {operator} again on mission {mission}: {error}");
-                    self.post_legion_entry(&deployment_id, entry(EntryKind::Message, Some(COMMANDER), Some(mission), text));
-                }
-            });
-        });
     }
 
     /// Tells the human about sessions whose add-on hasn't reported in time,
@@ -267,7 +231,11 @@ impl Daemon {
     /// Refuses permission requests no one has answered in time, and tells
     /// the operator and the commander how to go on without them.
     pub fn refuse_unanswered_permissions(&self) {
-        let timeout = self.config.permission_timeout;
+        let timeout_minutes = match self.machine_settings() {
+            Ok(settings) => settings.permission_timeout_minutes,
+            Err(error) => return eprintln!("{LEGION}d: {error}"),
+        };
+        let timeout = Duration::from_secs(timeout_minutes * SECONDS_PER_MINUTE);
         let refused: Vec<(String, String, Option<u32>, String)> = {
             let mut state = self.state.lock().unwrap();
             state
@@ -285,7 +253,6 @@ impl Daemon {
                 })
                 .collect()
         };
-        let timeout_minutes = timeout.as_secs() / 60;
         refused.into_iter().for_each(|(deployment_id, position, mission, request)| {
             let (to_operator, to_commander) = refusal_messages(&position, timeout_minutes, &request);
             self.post_legion_entry(&deployment_id, entry(EntryKind::Message, Some(&position), mission, to_operator));
@@ -318,10 +285,5 @@ mod tests {
     fn a_stuck_session_tells_the_human_how_to_look() {
         let text = stuck_starting_text("planner");
         assert!(text.contains("legion2 screen planner") && text.contains("legion2 key planner"));
-    }
-
-    #[test]
-    fn a_restarted_operator_reads_its_missions_log() {
-        assert!(restarted_operator_prompt(4).contains("log tool (mission 4)"));
     }
 }

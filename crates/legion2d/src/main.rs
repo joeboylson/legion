@@ -30,6 +30,7 @@ mod server;
 mod session_arguments;
 mod session_commands;
 mod session_lifecycle;
+mod session_restore;
 mod sessions;
 mod setup;
 mod shared_tools;
@@ -37,13 +38,17 @@ mod stalled_work;
 mod state_lookup;
 mod store;
 mod terminal_key;
+mod team_changes;
 mod tool_sharing;
 mod unreported_turns;
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::atomic::Ordering};
 
 use legion2_proto::NAME;
-use tokio::net::UnixListener;
+use tokio::{
+    net::UnixListener,
+    signal::unix::{signal, SignalKind},
+};
 
 use crate::{
     claude_version::{check_claude_supported, version_label},
@@ -97,17 +102,10 @@ async fn run() -> Result<(), String> {
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from))
         .ok_or("can't tell where legion2d lives")?;
-    let settings = read_machine_settings(&data_folder)?;
+    // Read now only to refuse a broken file at the start; it's read again each time it's needed.
+    read_machine_settings(&data_folder)?;
 
-    let daemon = Daemon::new(Config {
-        data_folder,
-        socket_path: socket_path.clone(),
-        addon_folder: arguments.addon_folder,
-        claude_command: arguments.claude_command,
-        binary_folder,
-        max_busy_sessions: settings.max_busy_sessions,
-        permission_timeout: Duration::from_secs(settings.permission_timeout_minutes * 60),
-    });
+    let daemon = Daemon::new(Config { data_folder, socket_path: socket_path.clone(), addon_folder: arguments.addon_folder, claude_command: arguments.claude_command, binary_folder });
     let folder_count = daemon.state.lock().unwrap().folders.len();
     println!("{NAME}d: listening on {} (Claude Code {}, {folder_count} folders)", socket_path.display(), version_label(claude_version));
 
@@ -125,13 +123,23 @@ async fn run() -> Result<(), String> {
                 ticking_daemon.report_sessions_stuck_starting();
                 ticking_daemon.ask_commander_to_check_in();
                 ticking_daemon.point_out_stalled_work();
+                ticking_daemon.restart_pending_sessions();
+                ticking_daemon.tell_commanders_about_team_changes();
             })
             .await;
         }
     });
 
-    let stop_signal = async {
-        let _ = tokio::signal::ctrl_c().await;
+    // Ctrl-C by hand, or SIGTERM from launchd stopping the service.
+    let mut terminate = signal(SignalKind::terminate()).map_err(|error| format!("can't listen for SIGTERM: {error}"))?;
+    let stopping_daemon = daemon.clone();
+    let stop_signal = async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+        stopping_daemon.is_shutting_down.store(true, Ordering::SeqCst);
+        println!("{NAME}d: stopping");
     };
     let served = axum::serve(listener, router(daemon)).with_graceful_shutdown(stop_signal).await;
     std::fs::remove_file(&socket_path).map_err(|error| format!("can't remove {}: {error}", socket_path.display()))?;

@@ -73,6 +73,16 @@ CREATE TABLE IF NOT EXISTS parts (
     is_merged INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (mission, number)
 );
+-- The sessions running now, so they come back under the same names after
+-- legion2d restarts. Not part of the log.
+CREATE TABLE IF NOT EXISTS running_sessions (
+    deployment TEXT NOT NULL,
+    position TEXT NOT NULL,
+    mission INTEGER,
+    part INTEGER,
+    session_id TEXT NOT NULL,
+    PRIMARY KEY (deployment, position)
+);
 ";
 
 /// A part of a split mission, with where it's worked.
@@ -80,6 +90,16 @@ pub struct PartCheckout {
     pub part: Part,
     pub path: String,
     pub branch: String,
+}
+
+/// A session as it was started, kept until it ends.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunningSession {
+    pub deployment: String,
+    pub position: String,
+    pub mission: Option<u32>,
+    pub part: Option<u32>,
+    pub session_id: String,
 }
 
 const ENTRY_COLUMNS: &str = "id, deployment, at_ms, mission, from_position, to_position, kind, text, answers";
@@ -130,6 +150,10 @@ fn part_from_row(row: &Row) -> rusqlite::Result<PartCheckout> {
         path: row.get(3)?,
         branch: row.get(4)?,
     })
+}
+
+fn running_session_from_row(row: &Row) -> rusqlite::Result<RunningSession> {
+    Ok(RunningSession { deployment: row.get(0)?, position: row.get(1)?, mission: row.get(2)?, part: row.get(3)?, session_id: row.get(4)? })
 }
 
 fn worktree_from_row(row: &Row) -> rusqlite::Result<Worktree> {
@@ -298,6 +322,30 @@ impl Store {
     pub fn mark_part_merged(&self, mission: u32, number: u32) -> Result<(), String> {
         self.execute("UPDATE parts SET is_merged = 1 WHERE mission = ?1 AND number = ?2", [mission, number])
     }
+
+    /// A new session in a position replaces whatever was recorded there.
+    pub fn record_running_session(&self, session: &RunningSession) -> Result<(), String> {
+        self.execute(
+            "INSERT OR REPLACE INTO running_sessions (deployment, position, mission, part, session_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session.deployment, session.position, session.mission, session.part, session.session_id],
+        )
+    }
+
+    pub fn forget_running_session(&self, session_id: &str) -> Result<(), String> {
+        self.execute("DELETE FROM running_sessions WHERE session_id = ?1", [session_id])
+    }
+
+    pub fn forget_running_sessions(&self, deployment_id: &str) -> Result<(), String> {
+        self.execute("DELETE FROM running_sessions WHERE deployment = ?1", [deployment_id])
+    }
+
+    pub fn running_sessions(&self, deployment_id: &str) -> Result<Vec<RunningSession>, String> {
+        self.query_all(
+            "SELECT deployment, position, mission, part, session_id FROM running_sessions WHERE deployment = ?1 ORDER BY position",
+            [deployment_id],
+            running_session_from_row,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -370,6 +418,32 @@ mod tests {
         let mission = store.mission("r", 1).unwrap();
         assert_eq!(mission.holder.as_deref(), Some("builder"));
         assert!(store.mission("r", 9).is_err());
+    }
+
+    fn running(position: &str, session_id: &str) -> RunningSession {
+        RunningSession { deployment: "r".into(), position: position.into(), mission: Some(2), part: None, session_id: session_id.into() }
+    }
+
+    #[test]
+    fn a_running_session_is_kept_until_it_ends() {
+        let store = store_with_deployment();
+        store.record_running_session(&running("builder-2", "a")).unwrap();
+        store.record_running_session(&running("planner", "b")).unwrap();
+        assert_eq!(store.running_sessions("r").unwrap(), [running("builder-2", "a"), running("planner", "b")]);
+        store.forget_running_session("a").unwrap();
+        assert_eq!(store.running_sessions("r").unwrap(), [running("planner", "b")]);
+        store.forget_running_sessions("r").unwrap();
+        assert!(store.running_sessions("r").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_new_session_in_a_position_replaces_the_old_one() {
+        let store = store_with_deployment();
+        store.record_running_session(&running("builder", "old")).unwrap();
+        store.record_running_session(&running("builder", "new")).unwrap();
+        // The old session's end comes later and must not forget the new one.
+        store.forget_running_session("old").unwrap();
+        assert_eq!(store.running_sessions("r").unwrap(), [running("builder", "new")]);
     }
 
     #[test]

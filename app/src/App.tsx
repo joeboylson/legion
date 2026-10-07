@@ -11,7 +11,7 @@ import { StatusBar } from '@/components/StatusBar'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { useLegion } from '@/hooks/useLegion'
 import { useSidebarWidth } from '@/hooks/useSidebarWidth'
-import { type Escalation, escalationsIn } from '@/lib/escalations'
+import { ANSWERABLE_KINDS, type Escalation, escalationsIn } from '@/lib/escalations'
 import { hashToRoute, routeToHash } from '@/lib/route'
 import { type DeploymentTab, mainView, type Selection, selectedRowKey } from '@/lib/selection'
 import { readStartingView } from '@/lib/snapshot'
@@ -23,6 +23,7 @@ const TAB_FOR_ITEM: Record<Escalation['kind'], DeploymentTab> = {
   permission: 'operators',
   limit: 'operators',
   blocked: 'missions',
+  decision: 'missions',
   suggestion: 'log',
 }
 
@@ -67,7 +68,7 @@ export function App() {
   const shownQuestion = escalations.find(item => view.kind === 'question' && item.key === view.key)
 
   const openItem = (item: Escalation) => {
-    setSelection(item.kind === 'question' ? { questionKey: item.key } : { deploymentId: item.deploymentId })
+    setSelection(ANSWERABLE_KINDS.includes(item.kind) ? { questionKey: item.key } : { deploymentId: item.deploymentId })
     setDeploymentTab(TAB_FOR_ITEM[item.kind])
     setOpenPosition(POSITION_ITEM_KINDS.includes(item.kind) ? item.position : undefined)
   }
@@ -80,11 +81,21 @@ export function App() {
     setOpenPosition(undefined)
   }
   const closeQuestion = () => setSelection({})
+  const dismiss = (item: Escalation) => setDismissedKeys(keys => new Set([...keys, item.key]))
 
   const emptyMessage = legion.folders.length === 0 ? 'Add a folder to get started.' : 'Choose a deployment, or start one.'
   const main =
     shownQuestion !== undefined ? (
-      <QuestionPage key={shownQuestion.key} question={shownQuestion} onAnswered={closeQuestion} onBack={closeQuestion} />
+      <QuestionPage
+        key={shownQuestion.key}
+        question={shownQuestion}
+        onAnswered={closeQuestion}
+        onBack={closeQuestion}
+        onDismiss={() => {
+          dismiss(shownQuestion)
+          closeQuestion()
+        }}
+      />
     ) : view.kind === 'folder' ? (
       <FolderPage
         key={view.path}
@@ -119,7 +130,7 @@ export function App() {
           openOperator(position)
         }}
         onOpenEscalation={openItem}
-        onDismissEscalation={item => setDismissedKeys(keys => new Set([...keys, item.key]))}
+        onDismissEscalation={dismiss}
       />
       {/* Drag to resize the sidebar. */}
       <div

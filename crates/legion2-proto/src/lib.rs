@@ -129,7 +129,7 @@ pub struct LogFilter {
     #[serde(default)]
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub since_ms: Option<i64>,
-    /// Questions that have no answer yet, only.
+    /// Questions and decisions that have no answer yet, only.
     #[serde(default)]
     pub open_questions: bool,
 }
@@ -374,6 +374,9 @@ pub enum EntryKind {
     Suggestion,
     /// A mission's branch made it onto the base branch.
     Finished,
+    /// A choice a session made and carried on with, for the human to
+    /// overrule with an answer if they want.
+    Decision,
 }
 
 impl EntryKind {
@@ -397,6 +400,7 @@ impl EntryKind {
             EntryKind::Postmortem => "postmortem",
             EntryKind::Suggestion => "suggestion",
             EntryKind::Finished => "finished",
+            EntryKind::Decision => "decision",
         }
     }
 
@@ -473,6 +477,7 @@ mod tests {
             EntryKind::Postmortem,
             EntryKind::Suggestion,
             EntryKind::Finished,
+            EntryKind::Decision,
         ];
         for kind in kinds {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());

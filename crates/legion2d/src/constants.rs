@@ -38,6 +38,7 @@ pub const TERMINAL_READ_BUFFER_BYTES: usize = 8192;
 
 pub const DEFAULT_MAX_BUSY_SESSIONS: usize = 6;
 pub const DEFAULT_PERMISSION_TIMEOUT_MINUTES: u64 = 30;
+pub const SECONDS_PER_MINUTE: u64 = 60;
 pub const WAITING_SESSIONS_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// A session whose add-on hasn't reported by now is likely stuck on a
 /// question shown before the add-on loads, such as whether to trust the folder.

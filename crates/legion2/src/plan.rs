@@ -3,13 +3,15 @@
 use legion2_proto::{Command, EntryKind, LogFilter, NewEntry, ENV_DEPLOYMENT};
 
 use crate::{
-    arguments::{Action, ExportFormat, FilterArguments},
+    arguments::{Action, ExportFormat, FilterArguments, ServiceAction},
     time_span::parse_time_span_ms,
 };
 
 pub enum Plan {
     /// Serve Legion's tools over stdin and stdout.
     ServeTools,
+    /// Install or remove the launchd service, without legion2d.
+    Service(ServiceAction),
     /// Ask once and print the reply.
     Ask(Command),
     /// Print the log, then keep printing new entries that pass the filter.
@@ -74,6 +76,7 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
         Action::Blocked { mission, text } => entry(needs_deployment()?, EntryKind::Blocked, Some(mission), None, &text),
         Action::Pause { mission, text } => entry(needs_deployment()?, EntryKind::Paused, Some(mission), None, &text),
         Action::Resume { mission, text } => entry(needs_deployment()?, EntryKind::Resumed, Some(mission), None, &text),
+        Action::Flag { mission, text } => entry(needs_deployment()?, EntryKind::Decision, mission, None, &text),
         Action::Suggest { text } => entry(needs_deployment()?, EntryKind::Suggestion, None, None, &text),
         Action::Postmortem { text } => entry(needs_deployment()?, EntryKind::Postmortem, None, None, &text),
         Action::Log { filter, follow: false } => Command::Log { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)? },
@@ -81,6 +84,7 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
         Action::Export { filter, format, output } => {
             return Ok(Plan::Export { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)?, format, output })
         }
+        Action::Service { action } => return Ok(Plan::Service(action)),
     };
     Ok(Plan::Ask(command))
 }

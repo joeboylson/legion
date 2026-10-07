@@ -83,13 +83,13 @@ pub enum Action {
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
-    /// Answer a question, by its entry number. The answer goes to whoever asked.
+    /// Answer a question or decision, by its entry number. The answer goes to whoever sent it.
     Answer {
         question: i64,
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
-    /// List questions with no answer yet.
+    /// List questions and decisions with no answer yet.
     Questions,
     /// Hand a mission to the next operator. Tells the commander.
     Handoff {
@@ -122,6 +122,13 @@ pub enum Action {
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
+    /// Tell the human about a choice made without stopping; they can overrule it with an answer.
+    Flag {
+        #[arg(long)]
+        mission: Option<u32>,
+        #[arg(required = true, trailing_var_arg = true)]
+        text: Vec<String>,
+    },
     /// Suggest a mission to the human.
     Suggest {
         #[arg(required = true, trailing_var_arg = true)]
@@ -150,6 +157,26 @@ pub enum Action {
         #[arg(long, short)]
         output: Option<String>,
     },
+    /// Run legion2d as a launchd service: it starts at login and comes back if it crashes.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+}
+
+#[derive(Subcommand, Clone, Debug, PartialEq)]
+pub enum ServiceAction {
+    /// Install the service and start it. Its output goes to legion2d.log in Legion's data folder.
+    Install {
+        /// The Claude command legion2d runs sessions with.
+        #[arg(long, default_value = "claude")]
+        claude: String,
+        /// The add-on folder; legion2d's own default without it.
+        #[arg(long)]
+        addon: Option<String>,
+    },
+    /// Stop the service and remove it.
+    Remove,
 }
 
 #[derive(clap::Args, Clone, Default)]

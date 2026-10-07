@@ -14,13 +14,29 @@ use crate::{
     constants::{DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
     daemon::{Daemon, State},
     git::{create_worktree, current_branch, is_git_repo},
-    naming::{copy_positions, first_free_position, idle_copy_to_free, operator_of_position},
+    naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
     prompts::{commander_prompt, operator_prompt, MissionBriefing, OperatorBriefing},
     session_arguments::{legion_tools_config, session_arguments, LaunchPlan},
+    team_changes::{read_team, team_fingerprint, Team},
     sessions::{spawn_session, Session, SpawnRequest},
     setup::{clear_at_percent, read_operator, read_pipeline, read_settings},
     terminal_key::TerminalKey,
 };
+
+/// What to start, and on what.
+pub struct StartRequest<'a> {
+    pub operator: &'a str,
+    pub mission: Option<u32>,
+    /// One part of a split mission: the session works in that part's
+    /// checkout and is told to do only that part.
+    pub part: Option<u32>,
+    /// The position to take when it's free, such as builder-2: a session
+    /// coming back after a restart keeps its name.
+    pub position: Option<&'a str>,
+    pub starter: &'a str,
+    /// Replaces the usual first prompt, as when Legion restarts a session.
+    pub first_prompt: Option<String>,
+}
 
 const COMMANDER_FIRST_PROMPT: &str = "Your deployment has started. Check its missions with the missions tool and start on any that are waiting.";
 
@@ -66,22 +82,20 @@ fn operator_first_prompt(mission: Option<u32>) -> String {
     }
 }
 
-fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment, first_prompt: Option<String>) -> Result<LaunchPlan, String> {
+/// The commander's launch, and the team it's told about, to notice changes later.
+fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment, first_prompt: Option<String>) -> Result<(LaunchPlan, String), String> {
     let folder = &state.folders[folder_index];
     if state.running_positions(&deployment.id).iter().any(|position| position == COMMANDER) {
         return Err("the commander is already running".into());
     }
-    let (pipeline, pipeline_text) = read_pipeline(&folder.path, &deployment.pipeline)?;
-    let copy_limits = pipeline
-        .operators
-        .iter()
-        .map(|operator| read_operator(&folder.path, operator).map(|read| (operator.clone(), read.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT))))
-        .collect::<Result<Vec<_>, _>>()?;
+    let team = read_team(&folder.path, &deployment.pipeline);
+    let fingerprint = team_fingerprint(&team);
+    let Team { pipeline_text, copy_limits } = team?;
     let settings = read_settings(&folder.path)?;
     let postmortem_filter = LogFilter { kinds: Some(vec![EntryKind::Postmortem]), ..Default::default() };
     let postmortems = folder.store.entries(&deployment.id, &postmortem_filter)?;
     let recent_postmortems = &postmortems[postmortems.len().saturating_sub(RECENT_POSTMORTEM_COUNT)..];
-    Ok(LaunchPlan {
+    let launch = LaunchPlan {
         position: COMMANDER.to_string(),
         system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, recent_postmortems),
         model: None,
@@ -90,19 +104,21 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
         disallowed_tools: Vec::new(),
         first_prompt: first_prompt.unwrap_or_else(|| COMMANDER_FIRST_PROMPT.into()),
         clear_at: clear_at_percent(None, settings.clear_at),
-    })
+    };
+    Ok((launch, fingerprint))
 }
 
 fn operator_launch(
     state: &State,
     folder_index: usize,
     deployment: &Deployment,
-    operator_name: &str,
-    mission: Option<u32>,
+    request: &StartRequest,
     first_prompt: Option<String>,
     max_busy_sessions: usize,
 ) -> Result<LaunchPlan, String> {
     let folder = &state.folders[folder_index];
+    let operator_name = request.operator;
+    let mission = request.mission;
     let busy_session_count = state.sessions.values().filter(|session| is_busy(session.activity)).count();
     if busy_session_count >= max_busy_sessions {
         return Err(format!("the machine is at its limit of {max_busy_sessions} busy sessions; start {operator_name} once one is free"));
@@ -114,7 +130,7 @@ fn operator_launch(
     let operator = read_operator(&folder.path, operator_name)?;
     let settings = read_settings(&folder.path)?;
     let copy_limit = operator.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
-    let position = first_free_position(&copy_positions(operator_name, copy_limit), &state.running_positions(&deployment.id))
+    let position = choose_position(&copy_positions(operator_name, copy_limit), &state.running_positions(&deployment.id), request.position)
         .ok_or_else(|| format!("{operator_name} is at its limit of {copy_limit} running at once"))?;
     let mission_with_history = mission
         .map(|number| {
@@ -221,35 +237,28 @@ impl Daemon {
         starter: &str,
         first_prompt: Option<String>,
     ) -> Result<Reply, String> {
-        self.start_session_on(deployment_key, operator, mission, None, starter, first_prompt)
+        self.start_session_on(deployment_key, StartRequest { operator, mission, part: None, position: None, starter, first_prompt })
     }
 
-    /// Starts a session, on one part of a split mission when `part` is given:
-    /// it then works in that part's checkout and is told to do only that part.
-    pub fn start_session_on(
-        self: &Arc<Self>,
-        deployment_key: &str,
-        operator: &str,
-        mission: Option<u32>,
-        part: Option<u32>,
-        starter: &str,
-        first_prompt: Option<String>,
-    ) -> Result<Reply, String> {
+    pub fn start_session_on(self: &Arc<Self>, deployment_key: &str, request: StartRequest) -> Result<Reply, String> {
+        let StartRequest { operator, mission, part, starter, .. } = request;
+        let max_busy_sessions = self.machine_settings()?.max_busy_sessions;
         if operator != COMMANDER {
             self.free_idle_copy(deployment_key, operator, mission, part)?;
         }
-        let spawn_request = {
+        let (spawn_request, commanders_team) = {
             let state = self.state.lock().unwrap();
             let (folder_index, deployment) = state.find_open_deployment(deployment_key)?;
             let part_checkout = part_checkout_for(&state, folder_index, mission, part)?;
             let first_prompt = match (&part_checkout, mission) {
-                (Some(checkout), Some(number)) => Some(first_prompt.unwrap_or_else(|| part_first_prompt(number, checkout.part.number))),
-                _ => first_prompt,
+                (Some(checkout), Some(number)) => Some(request.first_prompt.clone().unwrap_or_else(|| part_first_prompt(number, checkout.part.number))),
+                _ => request.first_prompt.clone(),
             };
-            let mut launch = if operator == COMMANDER {
-                commander_launch(&state, folder_index, &deployment, first_prompt)?
+            let (mut launch, commanders_team) = if operator == COMMANDER {
+                let (launch, fingerprint) = commander_launch(&state, folder_index, &deployment, first_prompt)?;
+                (launch, Some(fingerprint))
             } else {
-                operator_launch(&state, folder_index, &deployment, operator, mission, first_prompt, self.config.max_busy_sessions)?
+                (operator_launch(&state, folder_index, &deployment, &request, first_prompt, max_busy_sessions)?, None)
             };
             if let (Some(checkout), Some(number)) = (&part_checkout, mission) {
                 launch.system_prompt = format!("{}\n\n{}", launch.system_prompt, part_instructions(number, &checkout.part));
@@ -262,11 +271,15 @@ impl Daemon {
                 Some(checkout) => PathBuf::from(&checkout.path),
                 None => mission_working_folder(&state, folder_index, &deployment.id, mission)?,
             };
-            SpawnRequest { deployment: deployment.id, position: launch.position, mission, part, working_folder, arguments, clear_at: launch.clear_at }
+            let spawn_request = SpawnRequest { deployment: deployment.id, position: launch.position, mission, part, working_folder, arguments, clear_at: launch.clear_at };
+            (spawn_request, commanders_team)
         };
         let deployment_id = spawn_request.deployment.clone();
         let position = spawn_request.position.clone();
         let info = spawn_session(self, spawn_request)?;
+        if let Some(fingerprint) = commanders_team {
+            self.record_team_told_to_commander(&deployment_id, fingerprint);
+        }
         let started = NewEntry { kind: EntryKind::SessionStarted, mission, to: None, text: started_text(&position, mission, part, starter), answers: None };
         self.post_entry(&deployment_id, &position, started)?;
         Ok(Reply::Session { session: info })

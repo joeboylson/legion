@@ -27,7 +27,7 @@ import {
 } from '@/components/ui/sidebar'
 import type { Deployment } from '@/generated/Deployment'
 import type { Folder } from '@/generated/Folder'
-import type { DeploymentSnapshot, Escalation, EscalationKind } from '@/lib/escalations'
+import { DISMISSIBLE_KINDS, type DeploymentSnapshot, type Escalation, type EscalationKind } from '@/lib/escalations'
 import { INACTIVE_LABEL, pipelineTag, sessionStatus } from '@/lib/format'
 import { byOperatorOrder, type RosterEntry, rosterOf } from '@/lib/roster'
 import type { FolderTab } from '@/lib/selection'
@@ -39,6 +39,7 @@ const KIND_LABELS: Record<EscalationKind, string> = {
   question: 'question',
   blocked: 'blocked',
   limit: 'usage limit',
+  decision: 'decision',
   suggestion: 'suggestion',
 }
 
@@ -155,7 +156,7 @@ type EscalationRowProps = { escalation: Escalation; isSelected: boolean; onOpen:
 
 function EscalationRow({ escalation, isSelected, onOpen, onDismiss }: EscalationRowProps) {
   const dismiss =
-    escalation.kind === 'suggestion' ? (
+    DISMISSIBLE_KINDS.includes(escalation.kind) ? (
       <Button variant="ghost" size="icon-xs" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
         <X className="size-4" />
       </Button>

@@ -47,6 +47,7 @@ Found while running the `hello-legion2` test rounds. Newest at the bottom.
 - **legion2d doesn't start on its own after a reboot.** The plan says it
   starts when the machine starts and brings open deployments back; nothing
   sets that up yet (a launchd agent on macOS, a systemd user unit on Linux).
+  (Done for macOS: `legion2 service install`. Linux still needs a systemd unit.)
 - **A folder that isn't in git gets no protection.** Missions there work
   straight in the folder, so two at once can overwrite each other and nothing
   is committed. Legion should run them one at a time there, or offer to set
@@ -78,11 +79,14 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
 - **A restart loses operators.** After a legion2d restart, only the
   commander and each mission's holder came back. The other operators on
   those missions (3 bill-verifiers, a db-checker) lost their work and had to
-  be started by hand.
+  be started by hand. (Done: every operator on a mission comes back, as the
+  machine has room.)
 - **Copies get new names on a restart.** parser-tester-4 came back as
   parser-tester-3, which confused operators messaging each other by name.
+  (Done: they come back under the same names.)
 - **The machine limit is read only at start.** Raising `maxBusySessions`
   means a restart. The default of 6 held back a squad of 8+ operators.
+  (Done: settings.json is read each time.)
 - **A session lost at the limit isn't retried.** After an Esc, bill-creator
   ended (exit 129), couldn't be started again because 6 sessions were busy,
   and nothing tried again later.
@@ -91,7 +95,7 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
 - **Decisions don't reach the human.** An operator raised a real design
   choice as a message to the commander, so it never showed in questions or
   Escalations. Operators need a way to flag something for the human that
-  isn't blocking.
+  isn't blocking. (Done: the `flag_decision` tool.)
 - **Missions can't be edited.** When requirements changed mid-run, missions
   3-5 kept the old wording, and the fix went out as commander messages.
 - **Only the human creates missions.** The commander had to suggest each
@@ -120,7 +124,7 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
 - **No Legion tools in the human's own Claude session.** `legion2 mcp` only
   serves sessions legion2d started; the human gets just the command line.
 - **legion2d isn't a service.** No launchd agent and no default log file; it
-  needs a manual start after every reboot.
+  needs a manual start after every reboot. (Done: `legion2 service install`.)
 - **Pipelines can't express rounds.** Conditions had to say "round 1" and
   "round 2" in plain text. (Already installed: a step's `next` can be a
   list, such as `[security-reviewer, docs-writer]`; those operators work at
@@ -187,7 +191,7 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
   such operator". Its instructions hold the pipeline and copy limits as they
   were when it started. Legion could tell the commander when the pipelines
   or operators change, or the commander could read them fresh before each
-  routing decision.
+  routing decision. (Done: Legion tells the commander when they change.)
 - **`finish` refuses in a folder that isn't in git.** It says "no branch to
   finish", so a done mission's sessions stay open and the commander asks the
   human. There, finish could simply end the mission's sessions.

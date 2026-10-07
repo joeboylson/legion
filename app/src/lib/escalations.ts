@@ -7,7 +7,13 @@ import type { Mission } from '@/generated/Mission'
 import type { Deployment } from '@/generated/Deployment'
 import type { SessionInfo } from '@/generated/SessionInfo'
 
-export type EscalationKind = 'stuck' | 'question' | 'permission' | 'limit' | 'blocked' | 'suggestion'
+export type EscalationKind = 'stuck' | 'question' | 'permission' | 'limit' | 'blocked' | 'decision' | 'suggestion'
+
+// The kinds you can clear without acting on: nothing waits on them.
+export const DISMISSIBLE_KINDS: readonly EscalationKind[] = ['decision', 'suggestion']
+
+// The kinds answered on a page of their own.
+export const ANSWERABLE_KINDS: readonly EscalationKind[] = ['question', 'decision']
 
 export type Escalation = {
   key: string
@@ -66,17 +72,22 @@ const sessionItems = (snapshot: DeploymentSnapshot): ItemInDeployment[] =>
     ]
   })
 
+// Open questions, and decisions a session made and carried on with: both
+// take an answer, but only a question holds anyone up.
 const questionItems = (snapshot: DeploymentSnapshot): ItemInDeployment[] =>
-  snapshot.openQuestions.map(question => ({
-    key: `question:${question.id}`,
-    kind: 'question',
-    deploymentId: snapshot.deployment.id,
-    deploymentName: snapshot.deployment.name,
-    position: question.from,
-    mission: question.mission ?? undefined,
-    questionId: question.id,
-    text: question.text,
-  }))
+  snapshot.openQuestions.map(question => {
+    const kind: EscalationKind = question.kind === 'decision' ? 'decision' : 'question'
+    return {
+      key: `${kind}:${question.id}`,
+      kind,
+      deploymentId: snapshot.deployment.id,
+      deploymentName: snapshot.deployment.name,
+      position: question.from,
+      mission: question.mission ?? undefined,
+      questionId: question.id,
+      text: question.text,
+    }
+  })
 
 const blockedItems = (snapshot: DeploymentSnapshot): ItemInDeployment[] =>
   snapshot.missions
@@ -90,29 +101,26 @@ const blockedItems = (snapshot: DeploymentSnapshot): ItemInDeployment[] =>
       text: mission.title,
     }))
 
-const suggestionItems = (snapshot: DeploymentSnapshot, dismissedKeys: ReadonlySet<string>): ItemInDeployment[] =>
-  snapshot.suggestions
-    .map(
-      (suggestion): ItemInDeployment => ({
-        key: `suggestion:${suggestion.id}`,
-        kind: 'suggestion',
-        deploymentId: snapshot.deployment.id,
-        deploymentName: snapshot.deployment.name,
-        position: suggestion.from,
-        text: suggestion.text,
-      }),
-    )
-    .filter(item => !dismissedKeys.has(item.key))
+const suggestionItems = (snapshot: DeploymentSnapshot): ItemInDeployment[] =>
+  snapshot.suggestions.map(suggestion => ({
+    key: `suggestion:${suggestion.id}`,
+    kind: 'suggestion',
+    deploymentId: snapshot.deployment.id,
+    deploymentName: snapshot.deployment.name,
+    position: suggestion.from,
+    text: suggestion.text,
+  }))
 
 // What's most urgent first: a waiting session blocks work right now.
-const KIND_ORDER: readonly EscalationKind[] = ['stuck', 'permission', 'question', 'blocked', 'limit', 'suggestion']
+const KIND_ORDER: readonly EscalationKind[] = ['stuck', 'permission', 'question', 'blocked', 'limit', 'decision', 'suggestion']
 
 export const escalationsIn = (snapshots: readonly DeploymentSnapshot[], dismissedKeys: ReadonlySet<string>): Escalation[] =>
   snapshots
     .filter(snapshot => snapshot.deployment.closed_ms === null)
     .flatMap(snapshot =>
-      [...sessionItems(snapshot), ...questionItems(snapshot), ...blockedItems(snapshot), ...suggestionItems(snapshot, dismissedKeys)].map(
+      [...sessionItems(snapshot), ...questionItems(snapshot), ...blockedItems(snapshot), ...suggestionItems(snapshot)].map(
         (item): Escalation => ({ ...item, folderPath: snapshot.deployment.folder }),
       ),
     )
+    .filter(item => !dismissedKeys.has(item.key))
     .sort((first, second) => KIND_ORDER.indexOf(first.kind) - KIND_ORDER.indexOf(second.kind))

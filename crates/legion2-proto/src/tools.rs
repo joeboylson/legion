@@ -77,6 +77,12 @@ pub const TOOLS: &[Tool] = &[
         arguments: &[required("question", Text, "The question, with your recommendation."), ABOUT_MISSION],
     },
     Tool {
+        name: "flag_decision",
+        description: "Tell the human about a choice you made that they may want a say in, such as a design choice or a trade-off, without stopping. Carry on with your choice; if the human disagrees, their answer comes back as a message. Use ask instead only when you can't go on without an answer.",
+        audience: Everyone,
+        arguments: &[required("decision", Text, "What you chose, the other option, and why."), ABOUT_MISSION],
+    },
+    Tool {
         name: "share_tool",
         description: "Put a tool you made into the team's toolbox: a script, checker or setup step you or the next operator would otherwise do by hand again. Legion copies it to the shared tools folder, where every mission sees it at once, and tells everyone running.",
         audience: Everyone,
@@ -256,6 +262,7 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
         "send" => post(&deployment, EntryKind::Message, None, Some(text_argument(arguments, "to")?), text_argument(arguments, "text")?),
         "note" => post(&deployment, EntryKind::Note, mission_number(arguments, "mission")?, None, text_argument(arguments, "text")?),
         "ask" => post(&deployment, EntryKind::Question, mission_number(arguments, "mission")?, None, text_argument(arguments, "question")?),
+        "flag_decision" => post(&deployment, EntryKind::Decision, mission_number(arguments, "mission")?, None, text_argument(arguments, "decision")?),
         "share_tool" => Command::ToolShare { deployment, file: text_argument(arguments, "file")?, summary: text_argument(arguments, "summary")? },
         "suggest" => post(&deployment, EntryKind::Suggestion, None, None, text_argument(arguments, "text")?),
         "handoff" => {
@@ -310,7 +317,7 @@ mod tests {
         let full_arguments = json!({
             "mission": 1, "position": "builder", "to": "reviewer", "text": "t", "question": "q", "question_entry": 2, "next": "reviewer",
             "note": "n", "summary": "s", "reason": "r", "operator": "builder", "why": "w", "file": "/tools/t.sh",
-            "parts": "one\ntwo", "part": 1
+            "parts": "one\ntwo", "part": 1, "decision": "d"
         });
         for tool in TOOLS {
             let caller = if tool.audience == ToolAudience::OperatorsOnly { "builder" } else { COMMANDER };

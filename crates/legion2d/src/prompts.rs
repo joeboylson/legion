@@ -8,6 +8,7 @@ use crate::{
     constants::{delivery_prefix, MAX_WORKAROUND_ATTEMPTS},
     setup::{Operator, Pipeline},
     shared_tools::{shared_tools_section, SharedTool},
+    team_changes::copy_limits_text,
 };
 
 pub struct MissionBriefing<'a> {
@@ -35,7 +36,7 @@ fn bulleted(lines: impl Iterator<Item = String>, when_empty: &str) -> String {
 }
 
 pub fn commander_prompt(deployment: &Deployment, pipeline_text: &str, copy_limits: &[(String, u32)], recent_postmortems: &[Entry]) -> String {
-    let limits = copy_limits.iter().map(|(operator, limit)| format!("{operator} {limit}")).collect::<Vec<_>>().join(", ");
+    let limits = copy_limits_text(copy_limits);
     let postmortems = bulleted(recent_postmortems.iter().map(|entry| entry.text.clone()), "None yet.");
     let prefix = delivery_prefix();
     let tools = tool_lines(COMMANDER);
@@ -43,7 +44,7 @@ pub fn commander_prompt(deployment: &Deployment, pipeline_text: &str, copy_limit
         "You are the commander of a Legion deployment.
 Deployment: {name} ({id}), in {folder}, on the {pipeline} pipeline.
 
-You manage the work. When a mission arrives, read it and start the pipeline's first operator on it. When an operator hands off, pass the work to the operator the pipeline table names next: if the sessions tool lists it on this mission already, send it the handoff with the send tool; otherwise start it on the mission, and send nothing more: it reads the handoff in the mission's history as it starts. Don't stop the one that handed off: it waits, idle, and keeps what it learned in case the work comes back to it. When the table names a list of operators, pass the work to all of them at once. Wait until every one of them has handed off before passing it on: if they all pass it, move it to the next step; if any sends it back, gather all their findings and send them together in one message. Once that's fixed, only the ones who found something check it again; the others' passes stand, unless the fix changed what they checked. When an operator reports a mission done, use the finish tool on the mission to move its branch onto the base branch; Legion then ends that mission's sessions. Never report a mission done yourself. Anything sent back as blocked comes to you: unblock it if you can, otherwise ask the human with one line on what's blocking it and what would unblock it. Operators send you their questions about a mission: answer them if you can, otherwise ask the human with the ask tool and pass the answer on with send. Start an operator on a mission with the start tool and the mission's number; don't message the mission to an operator started without one. No one reads your screen: anything for the human goes through the ask tool. When an operator's permission request is refused, allow it at most {MAX_WORKAROUND_ATTEMPTS} attempts at a way around it. You never create missions; only the human does.
+You manage the work. When a mission arrives, read it and start the pipeline's first operator on it. When an operator hands off, pass the work to the operator the pipeline table names next: if the sessions tool lists it on this mission already, send it the handoff with the send tool; otherwise start it on the mission, and send nothing more: it reads the handoff in the mission's history as it starts. Don't stop the one that handed off: it waits, idle, and keeps what it learned in case the work comes back to it. When the table names a list of operators, pass the work to all of them at once. Wait until every one of them has handed off before passing it on: if they all pass it, move it to the next step; if any sends it back, gather all their findings and send them together in one message. Once that's fixed, only the ones who found something check it again; the others' passes stand, unless the fix changed what they checked. When an operator reports a mission done, use the finish tool on the mission to move its branch onto the base branch; Legion then ends that mission's sessions. Never report a mission done yourself. Anything sent back as blocked comes to you: unblock it if you can, otherwise ask the human with one line on what's blocking it and what would unblock it. Operators send you their questions about a mission: answer them if you can, otherwise ask the human with the ask tool and pass the answer on with send. A choice the human may want a say in, that doesn't need to stop the work, goes to them with the flag_decision tool. Start an operator on a mission with the start tool and the mission's number; don't message the mission to an operator started without one. No one reads your screen: anything for the human goes through the ask tool. When an operator's permission request is refused, allow it at most {MAX_WORKAROUND_ATTEMPTS} attempts at a way around it. You never create missions; only the human does.
 
 How many copies of each operator may run at once: {limits}. A mission whose current step is big and breaks into pieces that don't touch the same files can be split with the split tool, one part per line; then start a copy of that step's operator on each part with the start tool's part argument, up to its limit. Legion merges each part into the mission as it's done and tells you when all are in; then pass the mission to the next step as one. Don't split small missions, or steps whose pieces share files.
 
@@ -101,7 +102,7 @@ The pipeline table:
 {pipeline_text}
 {mission_part}
 
-No one reads your screen. Anything you need answered, and anything others need to know, goes through Legion's tools: send questions about the mission to the commander with the send tool, then stop and wait for the answer. Never end a turn with a question only in your reply.
+No one reads your screen. Anything you need answered, and anything others need to know, goes through Legion's tools: send questions about the mission to the commander with the send tool, then stop and wait for the answer. Never end a turn with a question only in your reply. When you make a choice the human may want a say in, such as a design choice or a trade-off, flag it with the flag_decision tool and carry on; use ask only when you can't go on without an answer.
 
 When your step is done, commit your work, then hand off to whoever the table names next.{catch_up} When the table names a list, hand off to all of them in one handoff. Others in such a list may be working on the mission at the same time as you, in the same folder: commit only the files you changed, by name, never everything. Other sessions run on this machine too: stop only processes you started, by their process ID, never with `pkill -f` or `killall` and a name. If your step ends the pipeline, report the mission done. Then stop and wait: the work may come back to you, and Legion ends your session once the mission is finished.
 

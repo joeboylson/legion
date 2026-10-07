@@ -24,31 +24,40 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
 
 ## What's running
 
-- **legion2d** is installed: `~/.local/bin/legion2d` and `legion2`, built
-  2026-10-06. It's started by hand: `legion2d --claude ~/.local/bin/claude`.
-  It isn't a service yet, so it doesn't come back after a reboot.
+- **legion2d** runs as a launchd service, installed 2026-10-07 from this
+  branch (`legion2 service install --claude ~/.local/bin/claude`). It starts
+  at login, comes back if it crashes, and writes to
+  `~/.local/share/legion2/legion2d.log`. To update it: rebuild
+  (`cargo build --release -p legion2 -p legion2d`), copy both to
+  `~/.local/bin` (copy to a new name, then `mv`, so the running file isn't
+  overwritten in place), then `legion2 service install` again. That restarts
+  it, so ask first.
 - **The add-on** loads from this repo's `addon/` folder, so changes to it
   reach every session started after the change, without a reinstall.
 - **The app** in development: `cd app && npm run app` (Tauri, reloading on
   change). Debug builds can save snapshots of the screen
-  (`LEGION2_SNAPSHOT_DIR`); this session's helper for that was
-  `scratchpad/snapshot-app.sh`, which won't exist in a new session.
+  (`LEGION2_SNAPSHOT_DIR`).
 - Folders registered: `hello-legion2` (the test app, in a scratchpad that
-  goes away) and `temp_plus_platform` (not in git).
+  goes away) and `temp_plus_platform` (not in git). The `rogers-demo`
+  deployment is open there, with only its commander running.
 
-## Built but not installed
+## Added 2026-10-07 (installed)
 
-Committed with this handoff, tested, but not in the installed copy. To use
-them, rebuild (`cargo build --release -p legion2 -p legion2d`), copy both to
-`~/.local/bin`, and restart legion2d when no mission is running.
-
-- **`share_tool`:** an operator puts a tool into `.legion2/tools/`. Legion
-  copies it there, commits that one file and tells everyone running.
-  Operators' instructions push them to build the toolbox.
-- **Parts:** the commander `split`s a mission's step into parts, each in its
-  own checkout; copies work on them at once and report with `part_done`;
-  Legion merges each one and tells the commander when all are in. The app's
-  mission dialog lists parts, and cards show `m12 · part 2`.
+- `share_tool` and parts, from the last handoff.
+- **The service** (`legion2 service install` / `remove`). legion2d now stops
+  cleanly on SIGTERM too.
+- **Restarts keep operators.** Legion records each running session in the
+  folder's database; after a restart every operator that was on a mission
+  comes back under the same name, as the machine has room
+  (`session_restore.rs`). A fresh start after a full conversation keeps the
+  name and part too.
+- **No restart for settings.** `settings.json` is read each time; a running
+  commander is told when its pipeline or an operator's copy limit changes
+  (`team_changes.rs`).
+- **`flag_decision`.** A non-blocking decision for the human: it shows with
+  the escalations, and can be answered (the answer goes back to the
+  operator) or dismissed. New entry kind `decision`; `legion2 flag` on the
+  command line.
 
 ## Where things stand
 
@@ -64,16 +73,14 @@ them, rebuild (`cargo build --release -p legion2 -p legion2d`), copy both to
 
 ## Good next steps
 
-In rough order of how much they'd help, all from IMPROVEMENTS.md:
-
-1. Run legion2d as a service (a launchd agent), with a log file.
-2. Give folders that aren't in git their own git history in Legion's data
-   folder (the proposed fix is written up), so missions there get their
-   own copies.
-3. After a restart, bring back every operator that was on a mission, under
-   the same names.
-4. A speed role, or a regular speed check by the commander: parallel work,
-   repeated checks, polling, long turns.
-5. Re-read the machine settings and pipelines without a restart; tell the
-   commander when the pipelines or operators change.
-6. A way for operators to flag a decision for the human that isn't blocking.
+1. **Folders that aren't in git** (IMPROVEMENTS.md has the proposed fix).
+   On hold to talk through: `temp_plus_platform` is 7.1 GB, with a 175 MB
+   zip, an API key file, nested repos and a `worktrees/` folder, so a
+   straight snapshot would copy all of that into history and every
+   mission's checkout. Options so far: filter (.gitignore, a
+   `.legion2/ignore`, a size cap, skip nested repos); or run missions there
+   one at a time.
+2. **A speed role**, or a regular speed check by the commander: to talk
+   through.
+3. Then: how missions work (to talk through).
+4. A systemd unit for the service on Linux.

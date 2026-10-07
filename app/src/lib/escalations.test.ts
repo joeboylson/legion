@@ -82,6 +82,19 @@ describe('escalationsIn', () => {
     expect(items).toEqual([])
   })
 
+  it('lists a flagged decision after what holds work up, answerable by its entry', () => {
+    const items = escalationsIn(
+      [snapshot({ openQuestions: [entry(9, 'decision', 'Used SQLite, not Postgres'), entry(5, 'question', 'Which port?')], suggestions: [entry(7, 'suggestion', 'Add tests')] })],
+      new Set(),
+    )
+    expect(items.map(item => item.kind)).toEqual(['question', 'decision', 'suggestion'])
+    expect(items[1]).toMatchObject({ key: 'decision:9', questionId: 9, text: 'Used SQLite, not Postgres' })
+  })
+
+  it('leaves out dismissed decisions', () => {
+    expect(escalationsIn([snapshot({ openQuestions: [entry(9, 'decision', 'Used SQLite')] })], new Set(['decision:9']))).toEqual([])
+  })
+
   it('leaves out closed deployments', () => {
     const closedDeployment = { ...deployment, closed_ms: 1 }
     expect(escalationsIn([snapshot({ deployment: closedDeployment, sessions: [session('builder', 'permission')] })], new Set())).toEqual([])

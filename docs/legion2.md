@@ -20,12 +20,12 @@ the Legion app. No tmux. The design and its reasons are in
 - **Part:** a piece of a mission's current step, split off by the commander
   so copies of an operator can work on it at the same time.
 - **Escalation:** anything waiting on you: a question, a permission, a
-  blocked mission, a suggestion.
+  blocked mission, a decision an operator flagged, a suggestion.
 
 ## Run it
 
 ```sh
-legion2d --claude ~/.local/bin/claude      # the background program
+legion2 service install --claude ~/.local/bin/claude   # runs legion2d now and at every login
 legion2 add ~/code/myapp                   # sets up .legion2/ if it has none
 legion2 deploy myapp feature --name first  # starts a commander
 legion2 new --deployment first "Add a login page" --body "…"
@@ -35,7 +35,11 @@ The app (`app/`, `npm run app` for development) shows every folder,
 deployment, mission and operator, and the log. Open an operator for its live
 terminal.
 
-legion2d doesn't start by itself after a reboot yet; start it again by hand.
+`legion2 service install` sets legion2d up as a launchd service (macOS): it
+starts at login, comes back if it crashes, and writes its output to
+`~/.local/share/legion2/legion2d.log`. Installing again replaces the service,
+which restarts legion2d; `legion2 service remove` stops it for good. To run
+it by hand instead: `legion2d --claude ~/.local/bin/claude`.
 
 ## A folder's setup: `.legion2/`
 
@@ -78,8 +82,13 @@ it's done and tells the commander once every part is in.
 ## Legion's tools inside each session
 
 - **Everyone:** `missions`, `mission_read`, `sessions`, `log`, `send`,
-  `note`, `ask` (the human), `share_tool`, `suggest` (a mission, to the
-  human).
+  `note`, `ask` (the human), `flag_decision`, `share_tool`, `suggest` (a
+  mission, to the human).
+
+`ask` stops the work until you answer. `flag_decision` doesn't: the operator
+says what it chose and why, and carries on. The decision shows with your
+escalations; answer it to change course (the answer goes back to the
+operator), or dismiss it.
 - **Operators:** `handoff`, `part_done`, `done`, `blocked`.
 - **Commander:** `start` (optionally on a part), `split`, `stop`, `screen`,
   `finish`, `pause`, `resume`, `answer`, `postmortem`.
@@ -110,10 +119,17 @@ tool's first comment line.
 - **Limits and timeouts.** At most `maxBusySessions` busy sessions on the
   machine (default 6); an unanswered permission request is refused after
   `permissionTimeoutMinutes` (default 30). Both are in
-  `~/.local/share/legion2/settings.json`.
+  `~/.local/share/legion2/settings.json`, read each time they're needed, so a
+  change needs no restart.
+- **Tells the commander when the team changes.** A commander is told its
+  pipeline and copy limits when it starts. If the pipeline or an operator's
+  `operator.json` changes while it runs, Legion sends it the new ones.
 - **Restarts.** A commander that ends by itself is started again, at most
   once per 10 minutes. After legion2d restarts, each open deployment's
-  commander and each mission's holder come back.
+  commander comes back, then every operator that was on a mission, under the
+  same name (`builder-3` stays `builder-3`). Those the machine has no room
+  for yet start as room opens up. Operators that were only waiting, with no
+  mission, aren't brought back; the commander starts them when there's work.
 - **Usage limits.** A session at its limit carries on once it resets.
 - **Reports sessions stuck before they start** (likely a "trust this
   folder?" question), and passes on what an operator wrote on screen when
@@ -127,6 +143,9 @@ tool's first comment line.
   log (`legion.db`, only ever added to), mission files and worktrees.
 - `~/.local/share/legion2/prompts/`: each session's instructions, as Claude
   reads them.
+- `~/.local/share/legion2/legion2d.log`: legion2d's output, when it runs as
+  a service.
+- `~/Library/LaunchAgents/com.legion2.legion2d.plist`: the service.
 
 ## Building
 
@@ -135,7 +154,8 @@ cargo test --workspace            # Rust
 (cd app && npm test && npm run doctor)
 claude plugin test addon          # the add-on inside each session
 cargo build --release -p legion2 -p legion2d   # then copy both to ~/.local/bin
+legion2 service install --claude ~/.local/bin/claude   # restarts legion2d on the new build
 ```
 
-Only restart legion2d when no mission is running: a restart cuts every
-session off.
+A restart cuts every session off. Operators on missions come back, but they
+lose what was in their conversation, so restart when little is running.

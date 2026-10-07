@@ -17,7 +17,7 @@ impl Daemon {
             let question = match entry.answers {
                 Some(question_id) => store
                     .entry(&deployment.id, question_id)?
-                    .filter(|asked| asked.kind == EntryKind::Question)
+                    .filter(|asked| matches!(asked.kind, EntryKind::Question | EntryKind::Decision))
                     .map(|asked| (asked.from, asked.mission)),
                 None => None,
             };

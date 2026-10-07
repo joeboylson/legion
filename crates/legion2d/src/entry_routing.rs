@@ -7,7 +7,7 @@ use crate::constants::delivery_prefix;
 /// What routing needs to know from the deployment log. The caller looks it up.
 #[derive(Default)]
 pub struct RoutingFacts {
-    /// For an answer: who asked the question it answers, and on which mission.
+    /// For an answer: who sent the question or decision it answers, and on which mission.
     pub question: Option<(String, Option<u32>)>,
     /// For a pause: who holds the mission now.
     pub mission_holder: Option<String>,
@@ -28,14 +28,14 @@ pub fn route_entry(entry: NewEntry, facts: RoutingFacts) -> Result<NewEntry, Str
         EntryKind::Answer => {
             let question_number = entry.answers.ok_or("an answer needs the question it answers")?;
             let (asker, question_mission) =
-                facts.question.ok_or_else(|| format!("entry {question_number} isn't a question in this deployment"))?;
+                facts.question.ok_or_else(|| format!("entry {question_number} isn't a question or decision in this deployment"))?;
             Ok(NewEntry { to: Some(asker), mission: entry.mission.or(question_mission), ..entry })
         }
         EntryKind::Handoff | EntryKind::Done | EntryKind::Blocked | EntryKind::Resumed => {
             Ok(NewEntry { to: Some(COMMANDER.into()), ..entry })
         }
         EntryKind::Paused => Ok(NewEntry { to: Some(facts.mission_holder.unwrap_or_else(|| COMMANDER.into())), ..entry }),
-        EntryKind::Question | EntryKind::Suggestion => Ok(NewEntry { to: Some(HUMAN.into()), ..entry }),
+        EntryKind::Question | EntryKind::Suggestion | EntryKind::Decision => Ok(NewEntry { to: Some(HUMAN.into()), ..entry }),
         EntryKind::Note | EntryKind::Postmortem => Ok(NewEntry { to: None, ..entry }),
         legion_only_kind => Err(format!("{NAME} writes {} entries itself", legion_only_kind.as_str())),
     }
@@ -52,7 +52,7 @@ pub fn delivery_text(entry: &Entry) -> String {
             let number = entry.mission.unwrap_or_default();
             format!("New mission {number}: {text}. Read it with the mission_read tool.")
         }
-        EntryKind::Answer => format!("The human answered your question #{}: {text}", entry.answers.unwrap_or_default()),
+        EntryKind::Answer => format!("The human answered your #{}: {text}", entry.answers.unwrap_or_default()),
         EntryKind::Handoff => format!("{author} handed off{on_mission}: {text}"),
         EntryKind::Done => format!("{author} reports{on_mission} done: {text}"),
         EntryKind::Blocked => format!("{author} reports{on_mission} blocked: {text}"),
@@ -121,6 +121,8 @@ mod tests {
     fn questions_go_to_the_human_and_notes_to_no_one() {
         let question = NewEntry { to: Some("x".into()), ..new_entry(EntryKind::Question) };
         assert_eq!(route_entry(question, RoutingFacts::default()).unwrap().to.as_deref(), Some(HUMAN));
+        let decision = NewEntry { to: Some("commander".into()), ..new_entry(EntryKind::Decision) };
+        assert_eq!(route_entry(decision, RoutingFacts::default()).unwrap().to.as_deref(), Some(HUMAN));
         let note = NewEntry { to: Some("x".into()), ..new_entry(EntryKind::Note) };
         assert_eq!(route_entry(note, RoutingFacts::default()).unwrap().to, None);
     }
@@ -142,6 +144,6 @@ mod tests {
         assert_eq!(delivery_text(&entry(EntryKind::Handoff, Some(2))), "[legion2] builder handed off mission 2: ok");
         assert_eq!(delivery_text(&entry(EntryKind::Message, None)), "[legion2] Message from builder: ok");
         assert_eq!(delivery_text(&entry(EntryKind::Message, Some(2))), "[legion2] Message from builder (mission 2): ok");
-        assert_eq!(delivery_text(&entry(EntryKind::Answer, None)), "[legion2] The human answered your question #7: ok");
+        assert_eq!(delivery_text(&entry(EntryKind::Answer, None)), "[legion2] The human answered your #7: ok");
     }
 }
