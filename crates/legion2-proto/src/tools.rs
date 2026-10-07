@@ -4,16 +4,27 @@
 //! command against the caller's role; the lists here only keep each session
 //! from seeing tools it can't use.
 
-use crate::{Command, EntryKind, LogFilter, NewEntry, COMMANDER};
+use crate::{role_of_position, Command, EntryKind, LogFilter, NewEntry, Role, COMMANDER};
 use serde_json::{json, Map, Value};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolAudience {
-    Everyone,
-    CommanderOnly,
-    /// Reporting on a pipeline step: only the operators doing the steps.
-    OperatorsOnly,
-}
+/// Who gets a tool, by role.
+pub type ToolAudience = &'static [Role];
+
+/// Reading the deployment: everyone, the strategist too.
+const READERS: ToolAudience = &[Role::Commander, Role::Operator, Role::Strategist];
+/// The commander and operators, who do and route the work.
+const CREW: ToolAudience = &[Role::Commander, Role::Operator];
+const COMMANDER_ONLY: ToolAudience = &[Role::Commander];
+/// Reporting on a pipeline step: only the operators doing the steps.
+const OPERATORS_ONLY: ToolAudience = &[Role::Operator];
+/// Looking at screens: the commander, and the strategist looking for slow work.
+const WATCHERS: ToolAudience = &[Role::Commander, Role::Strategist];
+/// Writing down what to do differently next run.
+const POSTMORTEM_WRITERS: ToolAudience = &[Role::Commander, Role::Strategist];
+const STRATEGIST_ONLY: ToolAudience = &[Role::Strategist];
+
+/// Every speed-up suggestion ends with this.
+pub const COMMANDER_DECIDES: &str = "This is only a suggestion: the commander has the final say.";
 
 pub struct Tool {
     pub name: &'static str,
@@ -45,83 +56,100 @@ const fn optional(name: &'static str, kind: ArgumentKind, description: &'static 
 }
 
 use ArgumentKind::{Number, Text};
-use ToolAudience::{CommanderOnly, Everyone, OperatorsOnly};
 
 const MISSION: ToolArgument = required("mission", Number, "The mission's number.");
 const ABOUT_MISSION: ToolArgument = optional("mission", Number, "The mission it's about, if any.");
 
 pub const TOOLS: &[Tool] = &[
-    Tool { name: "missions", description: "List the deployment's missions and where each stands.", audience: Everyone, arguments: &[] },
-    Tool { name: "mission_read", description: "Read a mission.", audience: Everyone, arguments: &[MISSION] },
-    Tool { name: "sessions", description: "List who's running in the deployment, and what each is doing.", audience: Everyone, arguments: &[] },
+    Tool { name: "missions", description: "List the deployment's missions and where each stands.", audience: READERS, arguments: &[] },
+    Tool { name: "mission_read", description: "Read a mission.", audience: READERS, arguments: &[MISSION] },
+    Tool { name: "sessions", description: "List who's running in the deployment, and what each is doing.", audience: READERS, arguments: &[] },
     Tool {
         name: "log",
         description: "Read the deployment log, or part of it.",
-        audience: Everyone,
+        audience: READERS,
         arguments: &[
             optional("mission", Number, "Only this mission's entries."),
             optional("position", Text, "Only entries from or to this position."),
         ],
     },
     Tool {
+        name: "callouts",
+        description: "Read every callout the team has made in this folder, oldest first.",
+        audience: READERS,
+        arguments: &[],
+    },
+    Tool {
+        name: "callout",
+        description: "Call out a one-line heads-up for everyone working here, like a kitchen calling \"behind\": a gotcha, a slow or flaky command, a file not to touch. Legion records it in the folder's callouts and tells everyone running.",
+        audience: READERS,
+        arguments: &[required("text", Text, "The heads-up, in one short line.")],
+    },
+    Tool {
+        name: "toolbox",
+        description: "List the team's shared tools, or read one tool's text by its file name.",
+        audience: READERS,
+        arguments: &[optional("tool", Text, "A tool's file name, to read it.")],
+    },
+    Tool {
         name: "send",
         description: "Message another position in the deployment (commander, planner, builder-2 …).",
-        audience: Everyone,
+        audience: CREW,
         arguments: &[required("to", Text, "The position."), required("text", Text, "The message.")],
     },
-    Tool { name: "note", description: "Add a note to the deployment log.", audience: Everyone, arguments: &[required("text", Text, "The note."), ABOUT_MISSION] },
+    Tool { name: "note", description: "Add a note to the deployment log.", audience: CREW, arguments: &[required("text", Text, "The note."), ABOUT_MISSION] },
     Tool {
         name: "ask",
         description: "Ask the human a question you can't settle yourself. The answer comes back as a message.",
-        audience: Everyone,
+        audience: CREW,
         arguments: &[required("question", Text, "The question, with your recommendation."), ABOUT_MISSION],
     },
     Tool {
         name: "flag_decision",
         description: "Tell the human about a choice you made that they may want a say in, such as a design choice or a trade-off, without stopping. Carry on with your choice; if the human disagrees, their answer comes back as a message. Use ask instead only when you can't go on without an answer.",
-        audience: Everyone,
+        audience: CREW,
         arguments: &[required("decision", Text, "What you chose, the other option, and why."), ABOUT_MISSION],
     },
     Tool {
         name: "share_tool",
         description: "Put a tool you made into the team's toolbox: a script, checker or setup step you or the next operator would otherwise do by hand again. Legion copies it to the shared tools folder, where every mission sees it at once, and tells everyone running.",
-        audience: Everyone,
+        audience: CREW,
         arguments: &[required("file", Text, "The tool's full path."), required("summary", Text, "What it does and how to run it, in one line.")],
     },
     Tool {
         name: "suggest",
         description: "Suggest a mission to the human. Only the human creates missions.",
-        audience: Everyone,
+        audience: CREW,
         arguments: &[required("text", Text, "What the mission would do, and why.")],
     },
     Tool {
         name: "handoff",
         description: "Your step is done: hand the mission to whoever the pipeline table names next. Tells the commander.",
-        audience: OperatorsOnly,
+        audience: OPERATORS_ONLY,
         arguments: &[MISSION, required("next", Text, "The operator for the next step, or several, comma-separated, when the table names a list."), required("note", Text, "What you did.")],
     },
     Tool {
         name: "part_done",
         description: "Your part of a split mission is built and committed. Legion merges it into the mission and tells the commander. Use this instead of handoff when you're on a part.",
-        audience: OperatorsOnly,
+        audience: OPERATORS_ONLY,
         arguments: &[MISSION, required("part", Number, "Your part's number."), required("note", Text, "What you did.")],
     },
     Tool {
         name: "done",
         description: "The mission has reached the end of the pipeline. Tells the commander.",
-        audience: OperatorsOnly,
+        audience: OPERATORS_ONLY,
         arguments: &[MISSION, required("summary", Text, "What happened, and anything left open.")],
     },
     Tool {
         name: "blocked",
         description: "The mission can't go on. Tells the commander.",
-        audience: OperatorsOnly,
+        audience: OPERATORS_ONLY,
         arguments: &[MISSION, required("reason", Text, "What's blocking it, and what would unblock it.")],
     },
     Tool {
         name: "start",
         description: "Start an operator, on a mission if given. Legion refuses more copies than the operator's limit.",
-        audience: CommanderOnly,
+        audience: COMMANDER_ONLY,
         arguments: &[
             required("operator", Text, "The operator, as named in the pipeline."),
             optional("mission", Number, "The mission to start it on."),
@@ -131,54 +159,62 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "split",
         description: "Split a mission's current step into parts that copies of one operator can work at the same time, each in its own checkout. Only for parts that don't touch the same files. Legion merges each part back into the mission as it's done, and tells you when all are in.",
-        audience: CommanderOnly,
+        audience: COMMANDER_ONLY,
         arguments: &[MISSION, required("parts", Text, "One part per line: what that part does, in a sentence.")],
     },
     Tool {
         name: "stop",
         description: "End a position's session. Takes the position, as the sessions tool lists it, not an operator name.",
-        audience: CommanderOnly,
+        audience: COMMANDER_ONLY,
         arguments: &[required("position", Text, "The position to end, e.g. planner or builder-2.")],
     },
-    Tool { name: "screen", description: "Read a position's screen.", audience: CommanderOnly, arguments: &[required("position", Text, "The position.")] },
+    Tool { name: "screen", description: "Read a position's screen.", audience: WATCHERS, arguments: &[required("position", Text, "The position.")] },
     Tool {
         name: "finish",
         description: "Move the base branch up to a done mission's branch. Anything that doesn't go cleanly goes to the human.",
-        audience: CommanderOnly,
+        audience: COMMANDER_ONLY,
         arguments: &[MISSION],
     },
     Tool {
         name: "pause",
         description: "Pause a mission. Tells whoever holds it to stop at the next good point.",
-        audience: CommanderOnly,
+        audience: COMMANDER_ONLY,
         arguments: &[MISSION, required("why", Text, "Why it's paused.")],
     },
-    Tool { name: "resume", description: "Resume a paused mission.", audience: CommanderOnly, arguments: &[MISSION, required("note", Text, "What changed.")] },
+    Tool { name: "resume", description: "Resume a paused mission.", audience: COMMANDER_ONLY, arguments: &[MISSION, required("note", Text, "What changed.")] },
     Tool {
         name: "answer",
         description: "Pass the human's answer back to whoever asked, by the question's entry number.",
-        audience: CommanderOnly,
+        audience: COMMANDER_ONLY,
         arguments: &[required("question_entry", Number, "The question's entry number."), required("text", Text, "The human's answer.")],
     },
     Tool {
         name: "postmortem",
-        description: "Record gotchas and learnings for the next commander, once the work runs out.",
-        audience: CommanderOnly,
-        arguments: &[required("text", Text, "The postmortem.")],
+        description: "Record what to do differently next run: gotchas and learnings, in a few short lines. The next commander and strategist read it.",
+        audience: POSTMORTEM_WRITERS,
+        arguments: &[required("text", Text, "The postmortem."), ABOUT_MISSION],
+    },
+    Tool {
+        name: "suggest_speedup",
+        description: "Suggest one change to the commander that would get the work done sooner, with its pros and cons. The commander decides whether to take it.",
+        audience: STRATEGIST_ONLY,
+        arguments: &[
+            required("suggestion", Text, "The change: what to do, to which mission or operator."),
+            required("pros", Text, "What it gains, such as minutes saved or work no longer done twice."),
+            required("cons", Text, "What it costs or risks."),
+            ABOUT_MISSION,
+        ],
     },
 ];
 
-pub fn is_offered_to(audience: ToolAudience, is_commander: bool) -> bool {
-    match audience {
-        ToolAudience::Everyone => true,
-        ToolAudience::CommanderOnly => is_commander,
-        ToolAudience::OperatorsOnly => !is_commander,
-    }
+pub fn tools_for_position(position: &str) -> Vec<&'static Tool> {
+    let role = role_of_position(position);
+    TOOLS.iter().filter(|tool| tool.audience.contains(&role)).collect()
 }
 
-pub fn tools_for_position(position: &str) -> Vec<&'static Tool> {
-    let is_commander = position == COMMANDER;
-    TOOLS.iter().filter(|tool| is_offered_to(tool.audience, is_commander)).collect()
+/// How a speed-up suggestion reads when it reaches the commander.
+pub fn speedup_text(suggestion: &str, pros: &str, cons: &str) -> String {
+    format!("Speed-up suggestion: {suggestion}\nPros: {pros}\nCons: {cons}\n{COMMANDER_DECIDES}")
 }
 
 /// The JSON Schema Claude reads for a tool's arguments.
@@ -294,7 +330,14 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
             let entry = NewEntry { kind: EntryKind::Answer, mission: None, to: None, text: text_argument(arguments, "text")?, answers: Some(question) };
             Command::Post { deployment, entry }
         }
-        "postmortem" => post(&deployment, EntryKind::Postmortem, None, None, text_argument(arguments, "text")?),
+        "postmortem" => post(&deployment, EntryKind::Postmortem, mission_number(arguments, "mission")?, None, text_argument(arguments, "text")?),
+        "callout" => Command::Callout { deployment, text: text_argument(arguments, "text")? },
+        "callouts" => Command::CalloutList { deployment },
+        "toolbox" => Command::ToolboxRead { deployment, tool: arguments.get("tool").and_then(Value::as_str).map(str::to_string) },
+        "suggest_speedup" => {
+            let text = speedup_text(&text_argument(arguments, "suggestion")?, &text_argument(arguments, "pros")?, &text_argument(arguments, "cons")?);
+            post(&deployment, EntryKind::Message, mission_number(arguments, "mission")?, Some(COMMANDER.into()), text)
+        }
         unknown => return Err(format!("no tool {unknown:?}")),
     };
     Ok(command)
@@ -317,10 +360,14 @@ mod tests {
         let full_arguments = json!({
             "mission": 1, "position": "builder", "to": "reviewer", "text": "t", "question": "q", "question_entry": 2, "next": "reviewer",
             "note": "n", "summary": "s", "reason": "r", "operator": "builder", "why": "w", "file": "/tools/t.sh",
-            "parts": "one\ntwo", "part": 1, "decision": "d"
+            "parts": "one\ntwo", "part": 1, "decision": "d", "suggestion": "s", "pros": "p", "cons": "c"
         });
         for tool in TOOLS {
-            let caller = if tool.audience == ToolAudience::OperatorsOnly { "builder" } else { COMMANDER };
+            let caller = match tool.audience[0] {
+                Role::Commander => COMMANDER,
+                Role::Strategist => crate::STRATEGIST,
+                Role::Operator => "builder",
+            };
             assert!(command_for_tool_call(tool.name, &full_arguments, "deployment", caller).is_ok(), "{}", tool.name);
         }
     }
@@ -333,6 +380,29 @@ mod tests {
         let commander_tools = names(&tools_for_position(COMMANDER));
         assert!(commander_tools.contains(&"finish"));
         assert!(!commander_tools.contains(&"done") && !commander_tools.contains(&"handoff"));
+    }
+
+    #[test]
+    fn the_strategist_only_reads_and_suggests() {
+        let strategist_tools = names(&tools_for_position(crate::STRATEGIST));
+        assert_eq!(strategist_tools, ["missions", "mission_read", "sessions", "log", "callouts", "callout", "toolbox", "screen", "postmortem", "suggest_speedup"]);
+        assert!(!names(&tools_for_position("builder")).contains(&"suggest_speedup"));
+    }
+
+    #[test]
+    fn a_speedup_goes_to_the_commander_with_pros_cons_and_who_decides() {
+        let arguments = json!({ "suggestion": "run the checks at once", "pros": "saves 5 minutes", "cons": "two sessions busy", "mission": 3 });
+        let Command::Post { entry, .. } = command_for_tool_call("suggest_speedup", &arguments, "deployment", crate::STRATEGIST).unwrap() else { panic!() };
+        assert_eq!((entry.kind, entry.to.as_deref(), entry.mission), (EntryKind::Message, Some(COMMANDER), Some(3)));
+        assert_eq!(entry.text, format!("Speed-up suggestion: run the checks at once\nPros: saves 5 minutes\nCons: two sessions busy\n{COMMANDER_DECIDES}"));
+    }
+
+    #[test]
+    fn everyone_reads_the_toolbox_and_reads_and_writes_callouts() {
+        for position in ["builder", COMMANDER, crate::STRATEGIST] {
+            let offered = names(&tools_for_position(position));
+            assert!(["toolbox", "callouts", "callout"].iter().all(|tool| offered.contains(tool)), "{position}");
+        }
     }
 
     #[test]

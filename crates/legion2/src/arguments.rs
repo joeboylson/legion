@@ -129,6 +129,13 @@ pub enum Action {
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
     },
+    /// Call out a one-line heads-up for everyone working in the deployment's folder.
+    Callout {
+        #[arg(required = true, trailing_var_arg = true)]
+        text: Vec<String>,
+    },
+    /// List the folder's callouts, oldest first.
+    Callouts,
     /// Suggest a mission to the human.
     Suggest {
         #[arg(required = true, trailing_var_arg = true)]

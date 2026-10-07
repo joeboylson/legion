@@ -58,6 +58,7 @@ pub fn delivery_text(entry: &Entry) -> String {
         EntryKind::Blocked => format!("{author} reports{on_mission} blocked: {text}"),
         EntryKind::Paused => format!("{author} paused{on_mission}: {text}"),
         EntryKind::Resumed => format!("{author} resumed{on_mission}: {text}"),
+        EntryKind::Announcement => format!("Heads-up, no reply needed: {text}"),
         _ => {
             let about = mission_label.map(|label| format!(" ({label})")).unwrap_or_default();
             format!("Message from {author}{about}: {text}")
@@ -145,5 +146,6 @@ mod tests {
         assert_eq!(delivery_text(&entry(EntryKind::Message, None)), "[legion2] Message from builder: ok");
         assert_eq!(delivery_text(&entry(EntryKind::Message, Some(2))), "[legion2] Message from builder (mission 2): ok");
         assert_eq!(delivery_text(&entry(EntryKind::Answer, None)), "[legion2] The human answered your #7: ok");
+        assert_eq!(delivery_text(&entry(EntryKind::Announcement, None)), "[legion2] Heads-up, no reply needed: ok");
     }
 }

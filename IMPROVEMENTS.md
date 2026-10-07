@@ -146,7 +146,8 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
   speed-ups. That covers work that could run in parallel, waits on steps
   already done, checks done twice, long turns, idle operators, and polling
   that should be a message. It could be a built-in position, or part of the
-  commander's instructions with a regular check-in.
+  commander's instructions with a regular check-in. (Done: the strategist,
+  a built-in position that only suggests.)
 - **Operators poll instead of waiting.** Parser-testers ran shell loops
   checking the database for the last bill's upload, though a peer was due to
   message them. The loops set off permission prompts (unsetopt, sh -c,

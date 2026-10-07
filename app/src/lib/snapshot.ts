@@ -4,6 +4,8 @@
 
 import { invoke } from '@tauri-apps/api/core'
 
+import { isInAppWindow } from './legion-connection'
+
 const SETTLE_DELAY_MS = 610
 const TEXT_PREVIEW_LENGTH = 55
 
@@ -81,11 +83,12 @@ const saveSnapshot = async (): Promise<void> => {
 export type StartingView = { deployment: string; position: string | null }
 
 // Debug builds: the deployment (and position) LEGION2_OPEN names, to open at start.
+// Only the app's window has a back end to ask; a browser tab opens as usual.
 export const readStartingView = async (): Promise<StartingView | undefined> =>
-  (await invoke<StartingView | null>('starting_view')) ?? undefined
+  isInAppWindow() ? ((await invoke<StartingView | null>('starting_view')) ?? undefined) : undefined
 
 export const startSnapshots = async (): Promise<void> => {
-  const isSnapshotting = await invoke<boolean>('is_snapshotting')
+  const isSnapshotting = isInAppWindow() && (await invoke<boolean>('is_snapshotting'))
   if (!isSnapshotting) return
   let pending: number | undefined
   const saveSoon = () => {

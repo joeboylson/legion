@@ -41,6 +41,12 @@ export const workLabel = (session: SessionInfo): string | undefined => {
 // A pipeline operator with no session running.
 export const INACTIVE_LABEL = 'inactive'
 
+// Something is happening: at least one session is at work.
+export const isWorking = (sessions: readonly SessionInfo[]): boolean => sessions.some(session => session.activity === 'busy')
+
+// The dot a folder or deployment shows: green while anything in it works.
+export const workingDotColor = (isActive: boolean): string => (isActive ? 'var(--success)' : 'var(--fg-muted)')
+
 // The dot's color says whether it needs a look.
 export const ACTIVITY_COLORS: Record<Activity, string> = {
   starting: 'var(--fg-muted)',

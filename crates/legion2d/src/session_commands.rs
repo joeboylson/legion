@@ -5,21 +5,22 @@ use std::{
     sync::Arc,
 };
 
-use legion2_proto::{Activity, EntryKind, LogFilter, NewEntry, Reply, Deployment, SessionInfo, COMMANDER};
+use legion2_proto::{role_of_position, Activity, Deployment, EntryKind, LogFilter, NewEntry, Reply, Role, SessionInfo, COMMANDER, STRATEGIST};
 
 use crate::{
     shared_tools::{shared_tools, shared_tools_folder},
     mission_parts::{part_first_prompt, part_instructions},
     store::PartCheckout,
-    constants::{DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
+    constants::{STRATEGIST_DISALLOWED_TOOLS, DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
     daemon::{Daemon, State},
     git::{create_worktree, current_branch, is_git_repo},
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
-    prompts::{commander_prompt, operator_prompt, MissionBriefing, OperatorBriefing},
+    callouts::read_callouts,
+    prompts::{commander_prompt, operator_prompt, strategist_prompt, MissionBriefing, OperatorBriefing, StrategistBriefing},
     session_arguments::{legion_tools_config, session_arguments, LaunchPlan},
     team_changes::{read_team, team_fingerprint, Team},
     sessions::{spawn_session, Session, SpawnRequest},
-    setup::{clear_at_percent, read_operator, read_pipeline, read_settings},
+    setup::{clear_at_percent, read_operator, read_pipeline, read_settings, strategist_check_minutes},
     terminal_key::TerminalKey,
 };
 
@@ -38,6 +39,7 @@ pub struct StartRequest<'a> {
     pub first_prompt: Option<String>,
 }
 
+const STRATEGIST_FIRST_PROMPT: &str = "Wait for Legion's first speed check.";
 const COMMANDER_FIRST_PROMPT: &str = "Your deployment has started. Check its missions with the missions tool and start on any that are waiting.";
 
 fn write_prompt_file(path: &Path, prompt: &str) -> Result<(), String> {
@@ -92,12 +94,10 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
     let fingerprint = team_fingerprint(&team);
     let Team { pipeline_text, copy_limits } = team?;
     let settings = read_settings(&folder.path)?;
-    let postmortem_filter = LogFilter { kinds: Some(vec![EntryKind::Postmortem]), ..Default::default() };
-    let postmortems = folder.store.entries(&deployment.id, &postmortem_filter)?;
-    let recent_postmortems = &postmortems[postmortems.len().saturating_sub(RECENT_POSTMORTEM_COUNT)..];
+    let recent_postmortems = folder.store.recent_entries_of_kind(EntryKind::Postmortem, RECENT_POSTMORTEM_COUNT)?;
     let launch = LaunchPlan {
         position: COMMANDER.to_string(),
-        system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, recent_postmortems),
+        system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, &recent_postmortems, &read_callouts(&folder.path)),
         model: None,
         permission_mode: settings.permission_mode,
         allowed_tools: Vec::new(),
@@ -106,6 +106,30 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
         clear_at: clear_at_percent(None, settings.clear_at),
     };
     Ok((launch, fingerprint))
+}
+
+/// The strategist works in the folder itself, reading only; like the
+/// commander, it doesn't count against the machine's limit when it starts.
+fn strategist_launch(state: &State, folder_index: usize, deployment: &Deployment) -> Result<LaunchPlan, String> {
+    let folder = &state.folders[folder_index];
+    if state.running_positions(&deployment.id).iter().any(|position| position == STRATEGIST) {
+        return Err("the strategist is already running".into());
+    }
+    let settings = read_settings(&folder.path)?;
+    let every_minutes = strategist_check_minutes(&settings).ok_or("the strategist isn't enabled in legion.json")?;
+    let team = read_team(&folder.path, &deployment.pipeline)?;
+    let recent_postmortems = folder.store.recent_entries_of_kind(EntryKind::Postmortem, RECENT_POSTMORTEM_COUNT)?;
+    let briefing = StrategistBriefing { team: &team, every_minutes, recent_postmortems: &recent_postmortems, callouts: &read_callouts(&folder.path) };
+    Ok(LaunchPlan {
+        position: STRATEGIST.to_string(),
+        system_prompt: strategist_prompt(deployment, briefing),
+        model: None,
+        permission_mode: settings.permission_mode,
+        allowed_tools: Vec::new(),
+        disallowed_tools: STRATEGIST_DISALLOWED_TOOLS.iter().map(|tool| tool.to_string()).collect(),
+        first_prompt: STRATEGIST_FIRST_PROMPT.into(),
+        clear_at: clear_at_percent(None, settings.clear_at),
+    })
 }
 
 fn operator_launch(
@@ -143,8 +167,16 @@ fn operator_launch(
     let tools = shared_tools(&folder.path);
     let tools_folder = shared_tools_folder(&folder.path);
     let base_branch = current_branch(&folder.path);
-    let operator_briefing =
-        OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: &pipeline_text, shared_tools: &tools, shared_tools_folder: &tools_folder, base_branch: base_branch.as_deref() };
+    let callouts = read_callouts(&folder.path);
+    let operator_briefing = OperatorBriefing {
+        operator: &operator,
+        pipeline: &pipeline,
+        pipeline_text: &pipeline_text,
+        shared_tools: &tools,
+        shared_tools_folder: &tools_folder,
+        base_branch: base_branch.as_deref(),
+        callouts: &callouts,
+    };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
     Ok(LaunchPlan {
         position,
@@ -243,7 +275,8 @@ impl Daemon {
     pub fn start_session_on(self: &Arc<Self>, deployment_key: &str, request: StartRequest) -> Result<Reply, String> {
         let StartRequest { operator, mission, part, starter, .. } = request;
         let max_busy_sessions = self.machine_settings()?.max_busy_sessions;
-        if operator != COMMANDER {
+        let role = role_of_position(operator);
+        if role == Role::Operator {
             self.free_idle_copy(deployment_key, operator, mission, part)?;
         }
         let (spawn_request, commanders_team) = {
@@ -254,11 +287,13 @@ impl Daemon {
                 (Some(checkout), Some(number)) => Some(request.first_prompt.clone().unwrap_or_else(|| part_first_prompt(number, checkout.part.number))),
                 _ => request.first_prompt.clone(),
             };
-            let (mut launch, commanders_team) = if operator == COMMANDER {
-                let (launch, fingerprint) = commander_launch(&state, folder_index, &deployment, first_prompt)?;
-                (launch, Some(fingerprint))
-            } else {
-                (operator_launch(&state, folder_index, &deployment, &request, first_prompt, max_busy_sessions)?, None)
+            let (mut launch, commanders_team) = match role {
+                Role::Commander => {
+                    let (launch, fingerprint) = commander_launch(&state, folder_index, &deployment, first_prompt)?;
+                    (launch, Some(fingerprint))
+                }
+                Role::Strategist => (strategist_launch(&state, folder_index, &deployment)?, None),
+                Role::Operator => (operator_launch(&state, folder_index, &deployment, &request, first_prompt, max_busy_sessions)?, None),
             };
             if let (Some(checkout), Some(number)) = (&part_checkout, mission) {
                 launch.system_prompt = format!("{}\n\n{}", launch.system_prompt, part_instructions(number, &checkout.part));

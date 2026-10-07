@@ -38,6 +38,8 @@ pub const TERMINAL_READ_BUFFER_BYTES: usize = 8192;
 
 pub const DEFAULT_MAX_BUSY_SESSIONS: usize = 6;
 pub const DEFAULT_PERMISSION_TIMEOUT_MINUTES: u64 = 30;
+/// Where a browser opens the app: http://127.0.0.1:<port>. 0 turns it off.
+pub const DEFAULT_WEB_PORT: u16 = 4610;
 pub const SECONDS_PER_MINUTE: u64 = 60;
 pub const WAITING_SESSIONS_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// A session whose add-on hasn't reported by now is likely stuck on a
@@ -65,7 +67,15 @@ pub const AUTOCOMPACT_PERCENT_CAP: u8 = 95;
 pub const AUTOCOMPACT_PERCENT_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 /// A commander that ends by itself again this soon after a restart is left down.
 pub const COMMANDER_RESTART_GAP_MS: i64 = 10 * 60 * 1000;
-pub const RECENT_POSTMORTEM_COUNT: usize = 3;
+/// How often the strategist checks, unless legion.json says otherwise.
+pub const DEFAULT_STRATEGIST_CHECK_MINUTES: u32 = 10;
+/// The strategist isn't started again sooner than this after it last
+/// started, so one that keeps ending doesn't start over and over.
+pub const STRATEGIST_RESTART_GAP_MS: i64 = 10 * 60 * 1000;
+/// It looks and suggests; it never changes files.
+pub const STRATEGIST_DISALLOWED_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
+/// The strategist writes one per finished mission, so keep a few more than one run's worth.
+pub const RECENT_POSTMORTEM_COUNT: usize = 6;
 pub const EVENT_BUFFER_SIZE: usize = 1024;
 
 pub const MISSION_SLUG_MAX_LENGTH: usize = 40;

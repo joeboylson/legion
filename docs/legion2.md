@@ -17,6 +17,9 @@ the Legion app. No tmux. The design and its reasons are in
   on one pipeline.
 - **Mission:** one task, written in a file that never changes. Only you
   create missions.
+- **Strategist:** an optional session beside the commander whose one job is
+  speed. It looks at the deployment on a timer and suggests speed-ups to the
+  commander. It never commands.
 - **Part:** a piece of a mission's current step, split off by the commander
   so copies of an operator can work on it at the same time.
 - **Escalation:** anything waiting on you: a question, a permission, a
@@ -31,9 +34,18 @@ legion2 deploy myapp feature --name first  # starts a commander
 legion2 new --deployment first "Add a login page" --body "…"
 ```
 
-The app (`app/`, `npm run app` for development) shows every folder,
-deployment, mission and operator, and the log. Open an operator for its live
-terminal.
+The app (`app/`) shows every folder, deployment, mission and operator, and
+the log. Open an operator for its live terminal. It runs two ways, from the
+same screens:
+
+- **In a browser:** legion2d serves the built app (`app/dist`) at
+  http://127.0.0.1:4610. The tab stays open through restarts: when legion2d
+  restarts, it reconnects by itself; after rebuilding the app
+  (`npm run build`, or `npm run watch` to rebuild on every change), reload
+  the tab. Only this machine can reach it, and legion2d refuses requests from
+  any page it didn't serve. Set `webPort` in the machine settings to move it,
+  or `0` to turn it off (read when legion2d starts).
+- **In its own window:** `npm run app` (Tauri) for development.
 
 `legion2 service install` sets legion2d up as a launchd service (macOS): it
 starts at login, comes back if it crashes, and writes its output to
@@ -41,13 +53,29 @@ starts at login, comes back if it crashes, and writes its output to
 which restarts legion2d; `legion2 service remove` stops it for good. To run
 it by hand instead: `legion2d --claude ~/.local/bin/claude`.
 
+## Callouts
+
+One-line heads-ups for everyone, like a kitchen calling "behind": a gotcha, a
+slow or flaky command, a file not to touch. Anyone calls one out with the
+`callout` tool (or `legion2 callout <text>`), at most 200 characters, one
+line. Legion adds it to `.legion2/callouts.md` with the date and who said it,
+commits that file, and tells everyone running as a heads-up that wants no
+reply (a shared tool is announced the same way). Every session's instructions
+list the newest 20. `callouts` (the tool, or `legion2 callouts`) reads them
+all.
+
+The toolbox and callouts go through Legion's own tools, so every session can
+always read the toolbox and read and write callouts, whatever its
+`operator.json` or permission mode allows.
+
 ## A folder's setup: `.legion2/`
 
 Kept in git, so everyone working on the folder shares it.
 
 - `legion.json`: `name`; `check`, a command run on a mission's work when its
   branch is replayed onto a moved base branch (such as `npm test`);
-  `permissionMode` for every session; `clearAt` (see below).
+  `permissionMode` for every session; `clearAt` (see below); `strategist`
+  (below).
 - `operators/<name>/definition.md`: the operator's job, in plain words.
 - `operators/<name>/operator.json` (all optional): `model`,
   `permissionMode`, `limit` (copies at once, default 1), `allowedTools`,
@@ -57,6 +85,37 @@ Kept in git, so everyone working on the folder shares it.
   `commander`, or a list of operators who work at the same time (the
   commander waits for all of them).
 - `tools/`: the team's toolbox (below).
+- `callouts.md`: the team's callouts (below). Legion writes it.
+
+## The strategist
+
+Off unless `legion.json` turns it on:
+
+```json
+"strategist": { "enabled": true, "everyMinutes": 10 }
+```
+
+Legion starts it with the commander and wakes it every `everyMinutes`
+(default 10) on its own; no one has to ask. It isn't woken while nothing is
+going on: no one else busy, and no mission waiting, started or handed off. Each time, it reads the
+missions, the log and the screens, looking for work that could run at the
+same time, checks done twice, idle operators while missions wait, polling
+and long turns. For each speed-up worth making, it sends the commander one
+suggestion with its pros and cons, ending "the commander has the final
+say". The commander takes or turns down each one and notes why, so it isn't
+suggested again.
+
+After each mission is finished, Legion asks it for a postmortem: what slowed
+the mission down, what sped it up, what to do differently next run. The
+newest postmortems, the commander's and the strategist's, from this run and
+earlier ones in the folder, go into the next commander's and strategist's
+instructions.
+
+legion2d holds it to that: it can read the deployment, look at screens,
+write postmortems and callouts, and send messages only to the commander. It can't start, stop, split,
+finish, hand off or edit files. Turning it off in `legion.json` stops it
+within 15 seconds; if it ends by itself, Legion starts it again (at most
+once per 10 minutes).
 
 ## How a mission moves
 
@@ -81,9 +140,11 @@ it's done and tells the commander once every part is in.
 
 ## Legion's tools inside each session
 
-- **Everyone:** `missions`, `mission_read`, `sessions`, `log`, `send`,
-  `note`, `ask` (the human), `flag_decision`, `share_tool`, `suggest` (a
-  mission, to the human).
+- **Everyone, the strategist too:** `missions`, `mission_read`, `sessions`,
+  `log`, `toolbox` (list the shared tools, or read one), `callouts`,
+  `callout`.
+- **The commander and operators:** `send`, `note`, `ask` (the human),
+  `flag_decision`, `share_tool`, `suggest` (a mission, to the human).
 
 `ask` stops the work until you answer. `flag_decision` doesn't: the operator
 says what it chose and why, and carries on. The decision shows with your
@@ -92,6 +153,7 @@ operator), or dismiss it.
 - **Operators:** `handoff`, `part_done`, `done`, `blocked`.
 - **Commander:** `start` (optionally on a part), `split`, `stop`, `screen`,
   `finish`, `pause`, `resume`, `answer`, `postmortem`.
+- **Strategist:** `screen`, `suggest_speedup`, `postmortem`.
 
 legion2d checks every call against the caller's role, whatever it sees.
 
@@ -120,7 +182,8 @@ tool's first comment line.
   machine (default 6); an unanswered permission request is refused after
   `permissionTimeoutMinutes` (default 30). Both are in
   `~/.local/share/legion2/settings.json`, read each time they're needed, so a
-  change needs no restart.
+  change needs no restart. (`webPort`, the app's browser address, is the
+  one setting read only at start.)
 - **Tells the commander when the team changes.** A commander is told its
   pipeline and copy limits when it starts. If the pipeline or an operator's
   `operator.json` changes while it runs, Legion sends it the new ones.

@@ -4,18 +4,21 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::constants::{DEFAULT_MAX_BUSY_SESSIONS, DEFAULT_PERMISSION_TIMEOUT_MINUTES, MACHINE_SETTINGS_FILE_NAME};
+use crate::constants::{DEFAULT_MAX_BUSY_SESSIONS, DEFAULT_PERMISSION_TIMEOUT_MINUTES, DEFAULT_WEB_PORT, MACHINE_SETTINGS_FILE_NAME};
 
 #[derive(Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct MachineSettings {
     pub max_busy_sessions: usize,
     pub permission_timeout_minutes: u64,
+    /// The local port the app is served on for a browser; 0 for none. Read
+    /// only when legion2d starts.
+    pub web_port: u16,
 }
 
 impl Default for MachineSettings {
     fn default() -> Self {
-        MachineSettings { max_busy_sessions: DEFAULT_MAX_BUSY_SESSIONS, permission_timeout_minutes: DEFAULT_PERMISSION_TIMEOUT_MINUTES }
+        MachineSettings { max_busy_sessions: DEFAULT_MAX_BUSY_SESSIONS, permission_timeout_minutes: DEFAULT_PERMISSION_TIMEOUT_MINUTES, web_port: DEFAULT_WEB_PORT }
     }
 }
 

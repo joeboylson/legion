@@ -86,6 +86,7 @@ pub fn reply_text(reply: &Reply) -> String {
         Reply::Screen { text, .. } => text.clone(),
         Reply::Entry { entry } => entry_line(entry),
         Reply::Entries { entries } => lines(entries, entry_line),
+        Reply::Text { text } => text.clone(),
     }
 }
 

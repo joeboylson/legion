@@ -252,6 +252,17 @@ impl Store {
             .map_err(database_error)
     }
 
+    /// The newest entries of a kind across every deployment in the folder,
+    /// oldest first: what earlier runs left for later ones.
+    pub fn recent_entries_of_kind(&self, kind: EntryKind, count: usize) -> Result<Vec<Entry>, String> {
+        let newest_first = self.query_all(
+            &format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE kind = ?1 ORDER BY id DESC LIMIT ?2"),
+            params![kind.as_str(), count as i64],
+            entry_from_row,
+        )?;
+        Ok(newest_first.into_iter().rev().collect())
+    }
+
     fn all_entries(&self, deployment_id: &str) -> Result<Vec<Entry>, String> {
         self.query_all(&format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE deployment = ?1 ORDER BY id"), [deployment_id], entry_from_row)
     }
@@ -444,6 +455,20 @@ mod tests {
         // The old session's end comes later and must not forget the new one.
         store.forget_running_session("old").unwrap();
         assert_eq!(store.running_sessions("r").unwrap(), [running("builder", "new")]);
+    }
+
+    #[test]
+    fn recent_postmortems_come_from_every_deployment_in_the_folder() {
+        let store = store_with_deployment();
+        let later = Deployment { id: "s".into(), name: "next".into(), folder: String::new(), pipeline: "feature".into(), started_ms: 2, closed_ms: None };
+        store.add_deployment(&later).unwrap();
+        let postmortem = |text: &str| NewEntry { kind: EntryKind::Postmortem, ..note(text) };
+        store.add_entry("r", "commander", &postmortem("one")).unwrap();
+        store.add_entry("s", "strategist", &postmortem("two")).unwrap();
+        store.add_entry("s", "builder", &note("not a postmortem")).unwrap();
+        store.add_entry("s", "commander", &postmortem("three")).unwrap();
+        let texts: Vec<String> = store.recent_entries_of_kind(EntryKind::Postmortem, 2).unwrap().into_iter().map(|entry| entry.text).collect();
+        assert_eq!(texts, ["two", "three"]);
     }
 
     #[test]

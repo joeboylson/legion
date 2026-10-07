@@ -8,14 +8,14 @@ use std::{
     time::Instant,
 };
 
-use legion2_proto::{Activity, Caller, Command, Entry, Event, NewEntry, Reply, SessionInfo, HUMAN, LEGION};
+use legion2_proto::{role_of_position, Activity, Caller, Command, Entry, Event, NewEntry, Reply, SessionInfo, HUMAN, LEGION};
 use tokio::sync::broadcast;
 
 use crate::context_handover::{note_request, on_turn_end, HandoverAction};
 use crate::{
-    access::{role_of_position, run_a_session_command_targets},
+    access::run_a_session_command_targets,
     activity_entries::entry_for_activity_change,
-    unreported_turns::unreported_turn_message,
+    unreported_turns::{is_announcements_only, unreported_turn_message},
     constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS},
     entry_routing::delivery_text,
     folder_state::{read_folder_registry, FolderState},
@@ -54,6 +54,9 @@ pub struct State {
     pub team_told_to_commander: HashMap<String, String>,
     /// Sessions to bring back after a restart once the machine has room.
     pub pending_restores: Vec<PendingRestore>,
+    /// When each deployment's strategist last started, and was last asked for a check.
+    pub strategist_started_at: HashMap<String, i64>,
+    pub strategist_checked_at: HashMap<String, i64>,
 }
 
 /// A session that was running when legion2d stopped, waiting for room to start again.
@@ -94,6 +97,8 @@ impl Daemon {
             stalls_pointed_out: Default::default(),
             team_told_to_commander: HashMap::new(),
             pending_restores: Vec::new(),
+            strategist_started_at: HashMap::new(),
+            strategist_checked_at: HashMap::new(),
         };
         Arc::new(Daemon { config, state: Mutex::new(state), events, is_shutting_down: AtomicBool::new(false) })
     }
@@ -149,9 +154,13 @@ impl Daemon {
             let logged = entry_for_activity_change(&session.position, session.activity, report.activity, report.detail.as_deref());
             let is_turn_starting = report.activity == Activity::Busy && session.activity != Activity::Busy;
             let finished_turn = match report.activity {
+                Activity::Idle if session.is_answering_announcements => None,
                 Activity::Idle => session.turn_started_ms.zip(report.final_answer.clone()),
                 _ => None,
             };
+            if report.activity == Activity::Idle {
+                session.is_answering_announcements = false;
+            }
             session.turn_started_ms = if is_turn_starting { Some(crate::store::now_ms()) } else { session.turn_started_ms };
             let is_new_permission_question = matches!(logged, Some((legion2_proto::EntryKind::Permission, _)));
             session.permission_asked_at = match report.activity {
@@ -239,13 +248,17 @@ impl Daemon {
     /// What the add-on hands its session: entries addressed to its position
     /// that no session has had yet. None when legion2d doesn't know the session.
     pub fn take_deliveries(&self, session_id: &str) -> Result<Option<Vec<String>>, String> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
         let Some(session) = state.sessions.get(session_id) else { return Ok(None) };
         let (folder_index, _) = state.find_deployment(&session.deployment)?;
         let store = &state.folders[folder_index].store;
         let entries = store.undelivered_entries(&session.deployment, &session.position)?;
         let entry_ids: Vec<i64> = entries.iter().map(|entry| entry.id).collect();
         store.mark_delivered(&entry_ids)?;
+        let handed_kinds: Vec<legion2_proto::EntryKind> = entries.iter().map(|entry| entry.kind).collect();
+        if let (Some(only_announcements), Some(session)) = (is_announcements_only(&handed_kinds), state.sessions.get_mut(session_id)) {
+            session.is_answering_announcements = only_announcements;
+        }
         Ok(Some(entries.iter().map(delivery_text).collect()))
     }
 
@@ -293,6 +306,9 @@ impl Daemon {
             Command::ToolShare { deployment, file, summary } => self.share_tool(&deployment, &author, &file, &summary),
             Command::MissionSplit { deployment, mission, parts } => self.split_mission(&deployment, mission, &parts),
             Command::PartFinish { deployment, mission, part, note } => self.finish_part(&deployment, &author, mission, part, &note),
+            Command::Callout { deployment, text } => self.call_out(&deployment, &author, &text),
+            Command::CalloutList { deployment } => self.list_callouts(&deployment),
+            Command::ToolboxRead { deployment, tool } => self.read_toolbox(&deployment, tool.as_deref()),
         }
     }
 }

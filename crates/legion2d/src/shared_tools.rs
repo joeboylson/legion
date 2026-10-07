@@ -67,7 +67,7 @@ pub fn shared_tools_section(tools: &[SharedTool], tools_folder: &Path) -> String
         "The team's toolbox, in {folder}:
 {listed}
 
-Use these before doing anything by hand. Building the toolbox is part of your job: the second time you do something by hand (a browser test, a check, a setup step, a long command), or when the next operator will need it too, stop and make it a tool. Start it with a comment line saying what it does and how to run it, then share it with the share_tool tool right away; Legion tells everyone running. Improve a tool rather than copying it, and share it again after."
+Use these before doing anything by hand; read any of them with the toolbox tool. Building the toolbox is part of your job: the second time you do something by hand (a browser test, a check, a setup step, a long command), or when the next operator will need it too, stop and make it a tool. Start it with a comment line saying what it does and how to run it, then share it with the share_tool tool right away; Legion tells everyone running. Improve a tool rather than copying it, and share it again after."
     )
 }
 

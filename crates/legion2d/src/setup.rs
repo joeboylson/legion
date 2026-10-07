@@ -4,6 +4,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    num::NonZeroU32,
     path::{Path, PathBuf},
 };
 
@@ -119,6 +120,29 @@ pub struct Settings {
     /// unless its operator sets its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clear_at: Option<ClearAt>,
+    /// The strategist, which suggests speed-ups to the commander. Off
+    /// unless enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategist: Option<StrategistSettings>,
+}
+
+/// `"strategist": { "enabled": true, "everyMinutes": 10 }` in legion.json.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StrategistSettings {
+    pub enabled: bool,
+    /// How often it looks for speed-ups.
+    #[serde(default = "default_strategist_check_minutes")]
+    pub every_minutes: NonZeroU32,
+}
+
+fn default_strategist_check_minutes() -> NonZeroU32 {
+    NonZeroU32::new(crate::constants::DEFAULT_STRATEGIST_CHECK_MINUTES).unwrap_or(NonZeroU32::MIN)
+}
+
+/// How often the strategist checks, or None when it's off.
+pub fn strategist_check_minutes(settings: &Settings) -> Option<u32> {
+    settings.strategist.filter(|strategist| strategist.enabled).map(|strategist| strategist.every_minutes.get())
 }
 
 /// `.<NAME>/operators/<name>/operator.json`. Everything is optional.
@@ -425,6 +449,16 @@ mod tests {
         let config: OperatorConfig = serde_json::from_str(r#"{"permissionMode": "acceptEdits"}"#).unwrap();
         assert_eq!(config.permission_mode.map(PermissionMode::flag_value), Some("acceptEdits"));
         assert!(serde_json::from_str::<Settings>(r#"{"name": "app", "permissionMode": "yolo"}"#).is_err());
+    }
+
+    #[test]
+    fn the_strategist_is_off_unless_enabled() {
+        let read = |json: &str| strategist_check_minutes(&serde_json::from_str::<Settings>(json).unwrap());
+        assert_eq!(read(r#"{"name": "app"}"#), None);
+        assert_eq!(read(r#"{"name": "app", "strategist": {"enabled": false, "everyMinutes": 1}}"#), None);
+        assert_eq!(read(r#"{"name": "app", "strategist": {"enabled": true}}"#), Some(crate::constants::DEFAULT_STRATEGIST_CHECK_MINUTES));
+        assert_eq!(read(r#"{"name": "app", "strategist": {"enabled": true, "everyMinutes": 1}}"#), Some(1));
+        assert!(serde_json::from_str::<Settings>(r#"{"name": "app", "strategist": {"enabled": true, "everyMinutes": 0}}"#).is_err());
     }
 
     #[test]

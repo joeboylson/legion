@@ -9,14 +9,45 @@ use legion2_proto::{EntryKind, NewEntry, Reply};
 use crate::{
     daemon::Daemon,
     git::{commit_paths, is_git_repo},
-    shared_tools::shared_tools_folder,
+    shared_tools::{shared_tools, shared_tools_folder},
 };
+
+/// A tool is named by its file name alone, so a read can't leave the toolbox.
+pub fn is_plain_file_name(name: &str) -> bool {
+    let has_separator = name.contains('/') || name.contains('\\');
+    !name.is_empty() && !has_separator && name != "." && name != ".."
+}
 
 pub fn tool_announcement(sharer: &str, tool_path: &Path, summary: &str) -> String {
     format!("{sharer} shared a tool: {} ({summary}). Use it instead of doing this by hand.", tool_path.display())
 }
 
 impl Daemon {
+    /// Every session can read the toolbox this way, whatever its own
+    /// permissions allow, even if it may not run the tools.
+    pub fn read_toolbox(&self, deployment_key: &str, tool: Option<&str>) -> Result<Reply, String> {
+        let folder_path = {
+            let state = self.state.lock().unwrap();
+            let (folder_index, _) = state.find_deployment(deployment_key)?;
+            state.folders[folder_index].path.clone()
+        };
+        let tools_folder = shared_tools_folder(&folder_path);
+        let Some(name) = tool else {
+            let tools = shared_tools(&folder_path);
+            let text = match tools.as_slice() {
+                [] => format!("The toolbox ({}) is empty.", tools_folder.display()),
+                _ => tools.iter().map(|shared| format!("{}/{}: {}", tools_folder.display(), shared.name, shared.summary)).collect::<Vec<_>>().join("\n"),
+            };
+            return Ok(Reply::Text { text });
+        };
+        if !is_plain_file_name(name) {
+            return Err(format!("{name:?} isn't a tool's file name"));
+        }
+        let path = tools_folder.join(name);
+        let text = fs::read_to_string(&path).map_err(|error| format!("can't read {}: {error}", path.display()))?;
+        Ok(Reply::Text { text })
+    }
+
     pub fn share_tool(&self, deployment_key: &str, sharer: &str, file: &str, summary: &str) -> Result<Reply, String> {
         let source = Path::new(file);
         if !source.is_absolute() || !source.is_file() {
@@ -41,7 +72,7 @@ impl Daemon {
         }
         let text = tool_announcement(sharer, &shared_path, summary);
         others.into_iter().try_for_each(|position| {
-            let entry = NewEntry { kind: EntryKind::Message, mission: None, to: Some(position), text: text.clone(), answers: None };
+            let entry = NewEntry { kind: EntryKind::Announcement, mission: None, to: Some(position), text: text.clone(), answers: None };
             self.post_entry(&deployment_id, sharer, entry).map(|_| ())
         })?;
         Ok(Reply::Done)
@@ -51,6 +82,12 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_is_read_only_by_its_file_name() {
+        assert!(is_plain_file_name("browser-test.sh"));
+        assert!(!is_plain_file_name("../legion.json") && !is_plain_file_name("a/b") && !is_plain_file_name("..") && !is_plain_file_name(""));
+    }
 
     #[test]
     fn the_announcement_says_who_where_and_what() {

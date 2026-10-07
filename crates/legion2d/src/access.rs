@@ -1,19 +1,23 @@
 //! What a session may ask legion2d to do. The human (a caller that isn't a
 //! session) may do everything; sessions only act in their own deployment.
 
-use legion2_proto::{Command, EntryKind, COMMANDER};
+use legion2_proto::{Command, EntryKind, Role, COMMANDER};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Role {
-    Commander,
-    Operator,
-}
+const STRATEGIST_REFUSAL: &str = "the strategist only suggests: it reads the deployment and sends the commander suggestions with suggest_speedup";
 
-pub fn role_of_position(position: &str) -> Role {
-    if position == COMMANDER {
-        Role::Commander
-    } else {
-        Role::Operator
+/// The strategist reads, looks at screens, messages the commander, and
+/// writes postmortems and callouts: nothing else.
+fn strategist_command_targets(command: &Command) -> Result<Option<&str>, String> {
+    match command {
+        Command::Ping => Ok(None),
+        Command::MissionList { deployment } | Command::MissionRead { deployment, .. } | Command::Log { deployment, .. } | Command::Screen { deployment, .. } => {
+            Ok(Some(deployment))
+        }
+        Command::SessionList { deployment } => deployment.as_deref().map(Some).ok_or_else(|| "say which deployment".to_string()),
+        Command::Post { deployment, entry } if entry.kind == EntryKind::Message && entry.to.as_deref() == Some(COMMANDER) => Ok(Some(deployment)),
+        Command::Post { deployment, entry } if entry.kind == EntryKind::Postmortem => Ok(Some(deployment)),
+        Command::Callout { deployment, .. } | Command::CalloutList { deployment } | Command::ToolboxRead { deployment, .. } => Ok(Some(deployment)),
+        _ => Err(STRATEGIST_REFUSAL.into()),
     }
 }
 
@@ -69,13 +73,20 @@ fn allowed_to_add(kind: EntryKind) -> AllowedTo {
 /// The deployment a session's command acts in (None when it acts in none), or why
 /// its role can't send it.
 pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Option<&str>, String> {
+    if role == Role::Strategist {
+        return strategist_command_targets(command);
+    }
     let is_commander = role == Role::Commander;
     match command {
         Command::Ping => Ok(None),
         Command::MissionList { deployment } | Command::MissionRead { deployment, .. } | Command::Log { deployment, .. } => Ok(Some(deployment)),
         Command::SessionList { deployment } => deployment.as_deref().map(Some).ok_or_else(|| "say which deployment".to_string()),
         Command::Post { deployment, entry } if can_add_entry(role, entry.kind) => Ok(Some(deployment)),
-        Command::ToolShare { deployment, .. } | Command::PartFinish { deployment, .. } => Ok(Some(deployment)),
+        Command::ToolShare { deployment, .. }
+        | Command::PartFinish { deployment, .. }
+        | Command::Callout { deployment, .. }
+        | Command::CalloutList { deployment }
+        | Command::ToolboxRead { deployment, .. } => Ok(Some(deployment)),
         Command::Post { entry, .. } => Err(refusal(allowed_to_add(entry.kind), &format!("add {} entries", entry.kind.as_str()))),
         Command::SessionStart { deployment, .. }
         | Command::SessionStop { deployment, .. }
@@ -100,7 +111,7 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
 
 #[cfg(test)]
 mod tests {
-    use legion2_proto::{LogFilter, NewEntry};
+    use legion2_proto::{role_of_position, LogFilter, NewEntry};
 
     use super::*;
 
@@ -115,7 +126,29 @@ mod tests {
     #[test]
     fn roles_come_from_the_position() {
         assert_eq!(role_of_position("commander"), Role::Commander);
+        assert_eq!(role_of_position("strategist"), Role::Strategist);
         assert_eq!(role_of_position("builder-2"), Role::Operator);
+    }
+
+    fn message_to(to: &str) -> Command {
+        Command::Post { deployment: "r".into(), entry: NewEntry { kind: EntryKind::Message, mission: None, to: Some(to.into()), text: String::new(), answers: None } }
+    }
+
+    #[test]
+    fn the_strategist_reads_watches_and_messages_only_the_commander() {
+        let screen = Command::Screen { deployment: "r".into(), position: "builder".into() };
+        assert_eq!(run_a_session_command_targets(Role::Strategist, &screen), Ok(Some("r")));
+        assert_eq!(run_a_session_command_targets(Role::Strategist, &message_to("commander")), Ok(Some("r")));
+        assert!(run_a_session_command_targets(Role::Strategist, &message_to("builder")).is_err());
+    }
+
+    #[test]
+    fn the_strategist_never_commands() {
+        let stop = Command::SessionStop { deployment: "r".into(), position: "builder".into() };
+        let finish = Command::MissionFinish { deployment: "r".into(), mission: 1 };
+        for command in [start(), stop, finish, post(EntryKind::Note), post(EntryKind::Handoff)] {
+            assert!(run_a_session_command_targets(Role::Strategist, &command).unwrap_err().contains("only suggests"));
+        }
     }
 
     #[test]

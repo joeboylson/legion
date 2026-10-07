@@ -74,7 +74,7 @@ async fn hand_out_deliveries(State(daemon): State<Arc<Daemon>>, UrlPath(session_
     }
 }
 
-async fn upgrade_to_websocket(State(daemon): State<Arc<Daemon>>, websocket: WebSocketUpgrade) -> Response {
+pub async fn upgrade_to_websocket(State(daemon): State<Arc<Daemon>>, websocket: WebSocketUpgrade) -> Response {
     websocket.on_upgrade(move |socket| serve_client(daemon, socket))
 }
 

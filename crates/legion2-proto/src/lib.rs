@@ -37,6 +37,25 @@ pub const HUMAN: &str = "human";
 /// Entries Legion writes itself come from this.
 pub const LEGION: &str = NAME;
 pub const COMMANDER: &str = "commander";
+/// The position that watches a deployment for ways to go faster and
+/// suggests them to the commander. It never commands.
+pub const STRATEGIST: &str = "strategist";
+
+/// What a position may do, from its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Commander,
+    Strategist,
+    Operator,
+}
+
+pub fn role_of_position(position: &str) -> Role {
+    match position {
+        COMMANDER => Role::Commander,
+        STRATEGIST => Role::Strategist,
+        _ => Role::Operator,
+    }
+}
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -96,6 +115,13 @@ pub enum Command {
     MissionSplit { deployment: String, mission: u32, parts: Vec<String> },
     /// A part is done: Legion merges it into the mission's branch.
     PartFinish { deployment: String, mission: u32, part: u32, note: String },
+    /// A one-line heads-up for everyone: kept in the folder's callouts and
+    /// told to everyone running.
+    Callout { deployment: String, text: String },
+    /// The folder's callouts, oldest first.
+    CalloutList { deployment: String },
+    /// The folder's shared tools, or one tool's text when `tool` names it.
+    ToolboxRead { deployment: String, tool: Option<String> },
     /// Sends events from now on, for as long as the connection stays open.
     Watch,
 }
@@ -171,6 +197,8 @@ pub enum Reply {
     Screen { text: String, ansi: String },
     Entry { entry: Entry },
     Entries { entries: Vec<Entry> },
+    /// Plain text to show as it is.
+    Text { text: String },
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
@@ -377,6 +405,9 @@ pub enum EntryKind {
     /// A choice a session made and carried on with, for the human to
     /// overrule with an answer if they want.
     Decision,
+    /// A heads-up handed to everyone running, such as a callout or a shared
+    /// tool. No reply is wanted.
+    Announcement,
 }
 
 impl EntryKind {
@@ -401,6 +432,7 @@ impl EntryKind {
             EntryKind::Suggestion => "suggestion",
             EntryKind::Finished => "finished",
             EntryKind::Decision => "decision",
+            EntryKind::Announcement => "announcement",
         }
     }
 
@@ -420,6 +452,7 @@ impl EntryKind {
                 | EntryKind::Blocked
                 | EntryKind::Paused
                 | EntryKind::Resumed
+                | EntryKind::Announcement
         )
     }
 }
@@ -478,6 +511,7 @@ mod tests {
             EntryKind::Suggestion,
             EntryKind::Finished,
             EntryKind::Decision,
+            EntryKind::Announcement,
         ];
         for kind in kinds {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());

@@ -1,17 +1,17 @@
-// Talking to legion2d through the app's back end.
-
-import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+// Talking to legion2d, the same way from every screen whether the app runs
+// in its own window or in a browser tab.
 
 import type { Command } from '@/generated/Command'
 import type { Event } from '@/generated/Event'
 import type { Reply } from '@/generated/Reply'
 
-// Owned by the app's back end (src-tauri/src/main.rs).
-const EVENT_CHANNEL = 'legion-event'
-const CONNECTION_CHANNEL = 'legion-connection'
+import { browserConnection } from './legion-browser'
+import { isInAppWindow, type StopListening } from './legion-connection'
+import { windowConnection } from './legion-window'
 
-export const askLegion = (command: Command): Promise<Reply> => invoke<Reply>('legion_request', { command })
+const connection = isInAppWindow() ? windowConnection : browserConnection
+
+export const askLegion = (command: Command): Promise<Reply> => connection.ask(command)
 
 type ReplyOf<Kind extends Reply['type']> = Extract<Reply, { type: Kind }>
 
@@ -22,8 +22,6 @@ export const askFor = async <Kind extends Reply['type']>(kind: Kind, command: Co
   return reply as ReplyOf<Kind>
 }
 
-export const onLegionEvent = (handle: (event: Event) => void): Promise<UnlistenFn> =>
-  listen<Event>(EVENT_CHANNEL, message => handle(message.payload))
+export const onLegionEvent = (handle: (event: Event) => void): Promise<StopListening> => connection.onEvent(handle)
 
-export const onConnectionChange = (handle: (isConnected: boolean) => void): Promise<UnlistenFn> =>
-  listen<boolean>(CONNECTION_CHANNEL, message => handle(message.payload))
+export const onConnectionChange = (handle: (isConnected: boolean) => void): Promise<StopListening> => connection.onConnectionChange(handle)

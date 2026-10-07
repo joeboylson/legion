@@ -77,6 +77,8 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
         Action::Pause { mission, text } => entry(needs_deployment()?, EntryKind::Paused, Some(mission), None, &text),
         Action::Resume { mission, text } => entry(needs_deployment()?, EntryKind::Resumed, Some(mission), None, &text),
         Action::Flag { mission, text } => entry(needs_deployment()?, EntryKind::Decision, mission, None, &text),
+        Action::Callout { text } => Command::Callout { deployment: needs_deployment()?, text: text.join(" ") },
+        Action::Callouts => Command::CalloutList { deployment: needs_deployment()? },
         Action::Suggest { text } => entry(needs_deployment()?, EntryKind::Suggestion, None, None, &text),
         Action::Postmortem { text } => entry(needs_deployment()?, EntryKind::Postmortem, None, None, &text),
         Action::Log { filter, follow: false } => Command::Log { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)? },

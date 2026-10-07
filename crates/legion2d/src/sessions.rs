@@ -50,6 +50,8 @@ pub struct Session {
     pub started_at: Instant,
     /// Whether the human has been told it seems stuck before starting.
     pub is_reported_stuck: bool,
+    /// Its current turn only answers heads-ups, so what it writes needn't reach the commander.
+    pub is_answering_announcements: bool,
     pub screen: vt100::Parser,
     input: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -168,6 +170,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         is_stopping: false,
         started_at: Instant::now(),
         is_reported_stuck: false,
+        is_answering_announcements: false,
         screen: vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, 0),
         input,
         killer,

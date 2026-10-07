@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '@/generated/Entry'
 
-import { entryKindLabel, entryRecipient, modelFamily, paragraphs, sessionStatus, workLabel } from './format'
+import type { SessionInfo } from '@/generated/SessionInfo'
+
+import { entryKindLabel, entryRecipient, isWorking, modelFamily, paragraphs, sessionStatus, workingDotColor, workLabel } from './format'
 
 const entry = (overrides: Partial<Entry>): Entry => ({
   id: 1,
@@ -64,5 +66,31 @@ describe('entry formatting', () => {
 
   it('reads kinds as words', () => {
     expect(entryKindLabel(entry({ kind: 'session_started' }))).toBe('session started')
+  })
+})
+
+describe('isWorking', () => {
+  const session = (activity: SessionInfo['activity']): SessionInfo => ({
+    deployment: 'r',
+    position: 'builder',
+    mission: null,
+    activity,
+    can_see_state: true,
+    detail: null,
+    is_stuck_starting: false,
+    model: null,
+    context_percent: null,
+    part: null,
+  })
+
+  it('is true while any session is busy', () => {
+    expect(isWorking([session('idle'), session('busy')])).toBe(true)
+    expect(isWorking([session('idle'), session('permission')])).toBe(false)
+    expect(isWorking([])).toBe(false)
+  })
+
+  it('turns the dot green only while something works', () => {
+    expect(workingDotColor(true)).toBe('var(--success)')
+    expect(workingDotColor(false)).toBe('var(--fg-muted)')
   })
 })

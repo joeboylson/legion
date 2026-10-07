@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use legion2_proto::{EntryKind, LogFilter, NewEntry, COMMANDER, HUMAN, LEGION};
+use legion2_proto::{role_of_position, EntryKind, LogFilter, NewEntry, Role, COMMANDER, HUMAN, LEGION, STRATEGIST};
 
 use crate::{
     stalled_work::{stall_reminder, stalls, MissionView, Stall},
@@ -79,7 +79,8 @@ impl Daemon {
         if session.handover == HandoverPhase::Restarting && is_deployment_open {
             return self.start_fresh(session);
         }
-        if session.is_stopping || !is_deployment_open {
+        // The strategist isn't the commander's to start; Legion's timer brings it back.
+        if session.is_stopping || !is_deployment_open || session.position == STRATEGIST {
             return;
         }
         if session.position != COMMANDER {
@@ -158,7 +159,7 @@ impl Daemon {
             state
                 .sessions
                 .values_mut()
-                .filter(|session| session.position != COMMANDER && session.activity == legion2_proto::Activity::Busy)
+                .filter(|session| role_of_position(&session.position) == Role::Operator && session.activity == legion2_proto::Activity::Busy)
                 .filter(|session| is_check_in_due(session.turn_started_ms, session.last_check_in_ms, now))
                 .map(|session| {
                     session.last_check_in_ms = Some(now);

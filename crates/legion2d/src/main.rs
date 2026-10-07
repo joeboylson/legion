@@ -2,9 +2,10 @@
 //! Legion folder's deployments and their Claude sessions, in terminals it owns, and
 //! keeps each folder's deployment log.
 //!
-//!     legion2d [--addon <folder>] [--claude <command>]
+//!     legion2d [--addon <folder>] [--claude <command>] [--app <folder>]
 
 mod access;
+mod callouts;
 mod activity_entries;
 mod check_ins;
 mod claude_version;
@@ -31,6 +32,7 @@ mod session_arguments;
 mod session_commands;
 mod session_lifecycle;
 mod session_restore;
+mod strategist_checks;
 mod sessions;
 mod setup;
 mod shared_tools;
@@ -41,6 +43,7 @@ mod terminal_key;
 mod team_changes;
 mod tool_sharing;
 mod unreported_turns;
+mod web_server;
 
 use std::{path::PathBuf, sync::atomic::Ordering};
 
@@ -56,23 +59,31 @@ use crate::{
     daemon::{Config, Daemon},
     machine_settings::read_machine_settings,
     server::{claim_socket, router},
+    web_server::{web_address, web_router},
 };
 
 #[derive(Debug)]
 struct Arguments {
     addon_folder: PathBuf,
     claude_command: String,
+    /// The built app (app/dist), served to a browser.
+    app_folder: PathBuf,
 }
 
 fn usage() -> String {
-    format!("usage: {NAME}d [--addon <folder>] [--claude <command>]")
+    format!("usage: {NAME}d [--addon <folder>] [--claude <command>] [--app <folder>]")
 }
 
 fn parse_arguments(arguments: &[String]) -> Result<Arguments, String> {
-    let defaults = Arguments { addon_folder: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../addon")), claude_command: "claude".into() };
+    let defaults = Arguments {
+        addon_folder: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../addon")),
+        claude_command: "claude".into(),
+        app_folder: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../app/dist")),
+    };
     let parsed = arguments.chunks(2).try_fold(defaults, |parsed, pair| match pair {
         [flag, value] if flag == "--addon" => Ok(Arguments { addon_folder: PathBuf::from(value), ..parsed }),
         [flag, value] if flag == "--claude" => Ok(Arguments { claude_command: value.clone(), ..parsed }),
+        [flag, value] if flag == "--app" => Ok(Arguments { app_folder: PathBuf::from(value), ..parsed }),
         [flag] => Err(format!("{flag} needs a value\n{}", usage())),
         [flag, _] => Err(format!("unknown argument {flag}\n{}", usage())),
         _ => Ok(parsed),
@@ -102,8 +113,9 @@ async fn run() -> Result<(), String> {
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from))
         .ok_or("can't tell where legion2d lives")?;
-    // Read now only to refuse a broken file at the start; it's read again each time it's needed.
-    read_machine_settings(&data_folder)?;
+    // Read now to refuse a broken file at the start; it's read again each time it's needed.
+    let web_port = read_machine_settings(&data_folder)?.web_port;
+    let app_folder = arguments.app_folder;
 
     let daemon = Daemon::new(Config { data_folder, socket_path: socket_path.clone(), addon_folder: arguments.addon_folder, claude_command: arguments.claude_command, binary_folder });
     let folder_count = daemon.state.lock().unwrap().folders.len();
@@ -125,6 +137,7 @@ async fn run() -> Result<(), String> {
                 ticking_daemon.point_out_stalled_work();
                 ticking_daemon.restart_pending_sessions();
                 ticking_daemon.tell_commanders_about_team_changes();
+                ticking_daemon.keep_strategists();
             })
             .await;
         }
@@ -132,16 +145,46 @@ async fn run() -> Result<(), String> {
 
     // Ctrl-C by hand, or SIGTERM from launchd stopping the service.
     let mut terminate = signal(SignalKind::terminate()).map_err(|error| format!("can't listen for SIGTERM: {error}"))?;
+    let (stopping, stopped) = tokio::sync::watch::channel(false);
     let stopping_daemon = daemon.clone();
-    let stop_signal = async move {
+    tokio::spawn(async move {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
         }
         stopping_daemon.is_shutting_down.store(true, Ordering::SeqCst);
         println!("{NAME}d: stopping");
+        let _ = stopping.send(true);
+    });
+    let stop_signal = |mut receiver: tokio::sync::watch::Receiver<bool>| async move {
+        let _ = receiver.wait_for(|is_stopping| *is_stopping).await;
     };
-    let served = axum::serve(listener, router(daemon)).with_graceful_shutdown(stop_signal).await;
+
+    // The browser's way in is a convenience: without it legion2d still runs.
+    let web_listener = match web_port {
+        0 => None,
+        port => match tokio::net::TcpListener::bind(web_address(port)).await {
+            Ok(web_listener) => {
+                println!("{NAME}d: the app is at http://{}", web_address(port));
+                Some((web_listener, port))
+            }
+            Err(error) => {
+                eprintln!("{NAME}d: can't serve the app on {}: {error}", web_address(port));
+                None
+            }
+        },
+    };
+    let web_daemon = daemon.clone();
+    let web_stopped = stopped.clone();
+    let web_served = async move {
+        let Some((web_listener, port)) = web_listener else { return Ok(()) };
+        axum::serve(web_listener, web_router(web_daemon, &app_folder, port)).with_graceful_shutdown(stop_signal(web_stopped)).await
+    };
+    let socket_served = axum::serve(listener, router(daemon)).with_graceful_shutdown(stop_signal(stopped));
+    let (served, web_result) = tokio::join!(socket_served, web_served);
+    if let Err(error) = web_result {
+        eprintln!("{NAME}d: the app's web address failed: {error}");
+    }
     std::fs::remove_file(&socket_path).map_err(|error| format!("can't remove {}: {error}", socket_path.display()))?;
     served.map_err(|error| error.to_string())
 }

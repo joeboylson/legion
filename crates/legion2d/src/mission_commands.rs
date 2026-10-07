@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use legion2_proto::{EntryKind, MissionStatus, NewEntry, Reply, COMMANDER, HUMAN, LEGION};
+use legion2_proto::{EntryKind, MissionStatus, NewEntry, Reply, COMMANDER, HUMAN, LEGION, STRATEGIST};
 
 use crate::{
     constants::MISSIONS_FOLDER_NAME,
@@ -16,6 +16,11 @@ use crate::{
 /// The file a mission is written to: its number and its title.
 pub fn mission_file_name(number: u32, title: &str) -> String {
     format!("{number:04}-{}.md", mission_slug(title))
+}
+
+/// What the strategist is asked once a mission is finished.
+pub fn postmortem_request(mission: u32) -> String {
+    format!("Mission {mission} is finished. Write its postmortem with the postmortem tool (mission {mission}): what slowed it down, what sped it up, and what to do differently next run, in a few short lines. Read its log first (the log tool, mission {mission}).")
 }
 
 /// The deployment log entry for how a finish went.
@@ -81,7 +86,7 @@ impl Daemon {
     }
 
     pub fn finish_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {
-        let (deployment_id, entry) = {
+        let (deployment_id, entry, has_strategist) = {
             let mut guard = self.state.lock().unwrap();
             // Through one borrow, so its folders and sessions can be used apart.
             let state = &mut *guard;
@@ -99,21 +104,34 @@ impl Daemon {
             let check_command = read_settings(&folder.path)?.check;
             let outcome = finish_mission_branch(&folder.path, &worktree, check_command.as_deref())?;
             let is_finished = !matches!(outcome, FinishOutcome::NeedsHuman(_) | FinishOutcome::Clash { .. });
+            let has_strategist = is_finished && state.running_positions(&deployment.id).iter().any(|position| position == STRATEGIST);
             if is_finished {
                 folder.store.mark_worktree_removed(number)?;
                 // Operators stay idle between handoffs in case the work comes
                 // back; once it's finished, nothing will.
                 end_mission_sessions(&mut state.sessions, &deployment.id, number)?;
             }
-            (deployment.id, finish_entry(outcome, number, &worktree.branch, &worktree.base))
+            (deployment.id, finish_entry(outcome, number, &worktree.branch, &worktree.base), has_strategist)
         };
-        Ok(Reply::Entry { entry: self.post_entry(&deployment_id, LEGION, entry)? })
+        let finished = self.post_entry(&deployment_id, LEGION, entry)?;
+        if has_strategist {
+            let request = NewEntry { kind: EntryKind::Message, mission: Some(number), to: Some(STRATEGIST.into()), text: postmortem_request(number), answers: None };
+            self.post_entry(&deployment_id, LEGION, request)?;
+        }
+        Ok(Reply::Entry { entry: finished })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_strategist_is_asked_for_a_postmortem_of_the_mission() {
+        let text = postmortem_request(7);
+        assert!(text.starts_with("Mission 7 is finished."));
+        assert!(text.contains("postmortem tool (mission 7)") && text.contains("log tool, mission 7"));
+    }
 
     #[test]
     fn mission_files_are_numbered_and_named() {

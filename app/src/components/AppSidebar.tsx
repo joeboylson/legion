@@ -28,7 +28,7 @@ import {
 import type { Deployment } from '@/generated/Deployment'
 import type { Folder } from '@/generated/Folder'
 import { DISMISSIBLE_KINDS, type DeploymentSnapshot, type Escalation, type EscalationKind } from '@/lib/escalations'
-import { INACTIVE_LABEL, pipelineTag, sessionStatus } from '@/lib/format'
+import { INACTIVE_LABEL, isWorking, pipelineTag, sessionStatus, workingDotColor } from '@/lib/format'
 import { byOperatorOrder, type RosterEntry, rosterOf } from '@/lib/roster'
 import type { FolderTab } from '@/lib/selection'
 import { cn } from '@/lib/utils'
@@ -92,7 +92,7 @@ type SectionProps = { label: string; count: number; action?: ReactNode; children
 // A group under a folder (deployments, pipelines …): a row that folds, and its items.
 function Section({ label, count, action, children }: SectionProps) {
   return (
-    <Collapsible defaultOpen asChild className="group/section">
+    <Collapsible asChild className="group/section">
       <SidebarMenuSubItem>
         <Row action={action}>
           <CollapsibleTrigger asChild>
@@ -208,11 +208,11 @@ function OperatorRow({ entry, onOpen }: { entry: RosterEntry; onOpen: () => void
 // A deployment, and under it its operators (each with its activity's color)
 // and what it has escalated. The chevron folds them; the name opens it.
 function DeploymentRow({ snapshot, escalations, selectedKey, onSelect, onOpenOperator, onOpenEscalation, onDismissEscalation }: DeploymentRowProps) {
-  const isWorking = snapshot.sessions.some(session => session.activity === 'busy')
+  const isActive = isWorking(snapshot.sessions)
   const roster = rosterOf(snapshot.sessions, snapshot.pipelineOperators)
   const hasChildren = roster.length > 0 || escalations.length > 0
   return (
-    <Collapsible defaultOpen asChild className="group/deployment">
+    <Collapsible asChild className="group/deployment">
       <SidebarMenuSubItem>
         <Row action={<DeploymentMenu deployment={snapshot.deployment} sessions={snapshot.sessions} />}>
           <div className="flex items-center">
@@ -227,7 +227,7 @@ function DeploymentRow({ snapshot, escalations, selectedKey, onSelect, onOpenOpe
             )}
             <SidebarMenuSubButton asChild isActive={selectedKey === `deployment:${snapshot.deployment.id}`}>
               <button type="button" className="w-full" onClick={onSelect}>
-                <span className="dot flex-none" style={{ color: isWorking ? 'var(--success)' : 'var(--fg-muted)' }} />
+                <span className="dot flex-none" style={{ color: workingDotColor(isActive) }} />
                 <span className="truncate">{snapshot.deployment.name}</span>
                 {escalations.length > 0 ? (
                   <span className="count ml-auto">{escalations.length}</span>
@@ -281,18 +281,20 @@ export function AppSidebar(props: AppSidebarProps) {
                 .filter(deployment => deployment.closed_ms !== null)
                 .sort((first, second) => second.started_ms - first.started_ms)
               const folderEscalations = escalations.filter(escalation => escalation.folderPath === folder.path)
+              const isFolderActive = deployments.some(snapshot => isWorking(snapshot.sessions))
               const settingsButton = (
                 <Button variant="ghost" size="icon-xs" aria-label={`${folder.name}'s settings and setup`} title="Settings and setup" onClick={() => props.onOpenFolder(folder)}>
                   <Settings className="size-4" />
                 </Button>
               )
               return (
-                <Collapsible key={folder.path} defaultOpen asChild className="group/folder">
+                <Collapsible key={folder.path} asChild className="group/folder">
                   <SidebarMenuItem>
                     <Row action={settingsButton}>
                       <CollapsibleTrigger asChild>
                         <SidebarMenuButton isActive={selectedKey === `folder:${folder.path}`}>
                           <Chevron group="folder" />
+                          <span className="dot flex-none" style={{ color: workingDotColor(isFolderActive) }} />
                           <span className="truncate font-medium">{folder.name}</span>
                           {folderEscalations.length > 0 && <span className="count ml-auto">{folderEscalations.length}</span>}
                         </SidebarMenuButton>

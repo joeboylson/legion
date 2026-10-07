@@ -37,9 +37,11 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
 - **The app** in development: `cd app && npm run app` (Tauri, reloading on
   change). Debug builds can save snapshots of the screen
   (`LEGION2_SNAPSHOT_DIR`).
-- Folders registered: `hello-legion2` (the test app, in a scratchpad that
-  goes away) and `temp_plus_platform` (not in git). The `rogers-demo`
-  deployment is open there, with only its commander running.
+- Folders registered: `temp_plus_platform` (not in git), where the
+  `rogers-demo` deployment is open with only its commander running.
+  `hello-legion2`, the test app, lived in an old session's scratchpad and is
+  gone; legion2d skips it. Make a new test folder outside the scratchpad
+  (and turn the strategist on in its `legion.json`) for the next test run.
 
 ## Added 2026-10-07 (installed)
 
@@ -71,6 +73,23 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
 - `temp_plus_platform` ran a live deployment (rogers-demo). Its 32 findings
   are under "From the rogers-demo run" in IMPROVEMENTS.md.
 
+## Added 2026-10-07, later (installed)
+
+- **The strategist** (`strategist_checks.rs`): an optional session that
+  wakes on its own timer and sends the commander speed-up suggestions with
+  pros and cons; the commander has the final say. On in `hello-legion2`,
+  every minute, for testing. First run: it spotted a handed-off mission no
+  one had picked up, and the commander took the suggestion.
+- **Postmortems after each mission** from the strategist; the newest six
+  from every run in the folder go to the next commander and strategist.
+- **Callouts** (`callouts.rs`): one-line heads-ups in `.legion2/callouts.md`,
+  and the `toolbox`, `callouts` and `callout` tools for every session.
+- **The app in a browser**: legion2d serves `app/dist` and its WebSocket at
+  http://127.0.0.1:4610 (`web_server.rs`, refuses other sites); the app
+  picks the browser or window connection at start (`app/src/lib/legion*.ts`).
+- **The app's sidebar** starts closed, and a folder shows a green dot while
+  anything in it works, as deployments do.
+
 ## Good next steps
 
 1. **Folders that aren't in git** (IMPROVEMENTS.md has the proposed fix).
@@ -80,7 +99,9 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
    mission's checkout. Options so far: filter (.gitignore, a
    `.legion2/ignore`, a size cap, skip nested repos); or run missions there
    one at a time.
-2. **A speed role**, or a regular speed check by the commander: to talk
-   through.
+2. **The strategist**: watch it on a real run. Since its first run it skips
+   checks when nothing is busy or moving, and callouts and shared tools are
+   announcements (no reply wanted, and replies aren't forwarded to the
+   commander); neither is tested live yet.
 3. Then: how missions work (to talk through).
 4. A systemd unit for the service on Linux.
