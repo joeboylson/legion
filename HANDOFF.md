@@ -38,7 +38,9 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
   change). Debug builds can save snapshots of the screen
   (`LEGION2_SNAPSHOT_DIR`).
 - Folders registered: `temp_plus_platform` (not in git), where the
-  `rogers-demo` deployment is open with only its commander running.
+  `rogers-demo` deployment is open with only its commander and strategist
+  running (all its missions are done). The strategist is on there, every 5
+  minutes.
   `hello-legion2`, the test app, is in `ref/hello-legion2` (git-ignored
   here, its own git history): a tiny to-do app with the strategist on every
   minute, `auto` permissions and up to 3 builders.
@@ -90,6 +92,39 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
 - **The app's sidebar** starts closed, and a folder shows a green dot while
   anything in it works, as deployments do.
 
+## Where we left off (2026-10-07, end of day)
+
+The AD-3 run in `temp_plus_platform` is finished, and its deployment
+(`ad3-close`) is closed.
+
+- **Result:** the seven AD-3 rows still open in
+  `temp_plus_platform/feature_proof/overview.html` all pass. Five already
+  passed on develop; AD-3-10 and AD-3-15 needed fixes, now merged:
+  v2-frontend #194 and v2-core #199.
+- **Jira:** AD-3 and AD-346 are IN REVIEW. AD-3 has the 16 screenshots and
+  a comment saying what each proves; AD-346 has the updated overview
+  (`feature-proof-overview-2026-10-07.html`). overview.html now shows all 89
+  in-scope scenarios passing.
+- **Proof:** `temp_plus_platform/ad3-proof/` (screenshots, queries, how to
+  rerun each check), with `index.html` showing them all. Rerun with
+  `legion-tools/ad3-proof.sh`.
+- **Set up for it in `temp_plus_platform/.legion2/`:** the `ad3-close`
+  pipeline; two new operators, `proof-checker` (proves scenarios on the
+  local stack) and `opie-reviewer` (runs `/opie-pr-loop` on a PR, one round
+  per message, the commander deciding on more rounds); and `auto`
+  permissions for planner, builder (up to 3) and reviewer.
+- **The local stack** runs v2-core and v2-frontend develop (with both fixes),
+  started by naming the main checkouts on the `make` line. The devenv's own
+  `.env` (from Oct 5) still points at older `worktrees/v2-*-AD-3` folders;
+  it was left alone.
+- **Left open, for review with Spencer:** the Columns menu still names the
+  spend column "Cycle Spend" while its header says "Recurring spend"; with
+  a period chosen, the idle list counts recurring charges only, to match the
+  tile; after "View idle lines" the list keeps the dashboard's period when
+  the Idle filter is removed (labelled); and whether "recoverable spend"
+  should leave out cycles from before a line went idle.
+- Lessons for Legion are under "From the AD-3 run" in IMPROVEMENTS.md.
+
 ## Good next steps
 
 1. **Folders that aren't in git** (IMPROVEMENTS.md has the proposed fix).
@@ -105,5 +140,8 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
    commander). Both checked live on 2026-10-07 in `ref/hello-legion2`
    (test-1, test-2): no wake-ups after the work ran out, and no forwarded
    replies to 17 announcements.
-3. Then: how missions work (to talk through).
-4. A systemd unit for the service on Linux.
+3. **Two copies of one operator on one mission** in a folder without git
+   (see IMPROVEMENTS.md, "From the AD-3 run"): the AD-3 run needed an extra
+   mission to review two PRs at once.
+4. Then: how missions work (to talk through).
+5. A systemd unit for the service on Linux.
