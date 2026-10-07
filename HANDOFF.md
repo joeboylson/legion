@@ -39,9 +39,9 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
   (`LEGION2_SNAPSHOT_DIR`).
 - Folders registered: `temp_plus_platform` (not in git), where the
   `rogers-demo` deployment is open with only its commander running.
-  `hello-legion2`, the test app, lived in an old session's scratchpad and is
-  gone; legion2d skips it. Make a new test folder outside the scratchpad
-  (and turn the strategist on in its `legion.json`) for the next test run.
+  `hello-legion2`, the test app, is in `ref/hello-legion2` (git-ignored
+  here, its own git history): a tiny to-do app with the strategist on every
+  minute, `auto` permissions and up to 3 builders.
 
 ## Added 2026-10-07 (installed)
 
@@ -102,6 +102,8 @@ Where the rewrite stands, for the next session. Updated 2026-10-07.
 2. **The strategist**: watch it on a real run. Since its first run it skips
    checks when nothing is busy or moving, and callouts and shared tools are
    announcements (no reply wanted, and replies aren't forwarded to the
-   commander); neither is tested live yet.
+   commander). Both checked live on 2026-10-07 in `ref/hello-legion2`
+   (test-1, test-2): no wake-ups after the work ran out, and no forwarded
+   replies to 17 announcements.
 3. Then: how missions work (to talk through).
 4. A systemd unit for the service on Linux.

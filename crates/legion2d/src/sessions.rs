@@ -50,6 +50,9 @@ pub struct Session {
     pub started_at: Instant,
     /// Whether the human has been told it seems stuck before starting.
     pub is_reported_stuck: bool,
+    /// Messages handed to it run as its next turn, which may be after the
+    /// one it's in now: whether that next turn only answers heads-ups.
+    pub next_turn_answers_announcements: Option<bool>,
     /// Its current turn only answers heads-ups, so what it writes needn't reach the commander.
     pub is_answering_announcements: bool,
     pub screen: vt100::Parser,
@@ -170,6 +173,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         is_stopping: false,
         started_at: Instant::now(),
         is_reported_stuck: false,
+        next_turn_answers_announcements: None,
         is_answering_announcements: false,
         screen: vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, 0),
         input,

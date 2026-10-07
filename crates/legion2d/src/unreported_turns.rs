@@ -14,6 +14,12 @@ pub fn is_announcements_only(handed_kinds: &[EntryKind]) -> Option<bool> {
     }
 }
 
+/// Several handings can wait for the same next turn: it only answers
+/// heads-ups if every one of them was only heads-ups.
+pub fn next_turn_is_announcements_only(waiting: Option<bool>, just_handed: bool) -> bool {
+    waiting.unwrap_or(true) && just_handed
+}
+
 /// What the commander hears when an operator ends a turn having reported
 /// nothing through its tools, or None when there's nothing to pass on.
 pub fn unreported_turn_message(position: &str, kinds_added_this_turn: &[EntryKind], final_answer: &str) -> Option<String> {
@@ -38,6 +44,14 @@ mod tests {
         assert_eq!(is_announcements_only(&[EntryKind::Announcement, EntryKind::Announcement]), Some(true));
         assert_eq!(is_announcements_only(&[EntryKind::Announcement, EntryKind::Handoff]), Some(false));
         assert_eq!(is_announcements_only(&[]), None);
+    }
+
+    #[test]
+    fn real_work_waiting_for_the_next_turn_keeps_it_reported() {
+        assert!(next_turn_is_announcements_only(None, true));
+        assert!(next_turn_is_announcements_only(Some(true), true));
+        assert!(!next_turn_is_announcements_only(Some(false), true));
+        assert!(!next_turn_is_announcements_only(Some(true), false));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::context_handover::{note_request, on_turn_end, HandoverAction};
 use crate::{
     access::run_a_session_command_targets,
     activity_entries::entry_for_activity_change,
-    unreported_turns::{is_announcements_only, unreported_turn_message},
+    unreported_turns::{is_announcements_only, next_turn_is_announcements_only, unreported_turn_message},
     constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS},
     entry_routing::delivery_text,
     folder_state::{read_folder_registry, FolderState},
@@ -162,6 +162,9 @@ impl Daemon {
                 session.is_answering_announcements = false;
             }
             session.turn_started_ms = if is_turn_starting { Some(crate::store::now_ms()) } else { session.turn_started_ms };
+            if is_turn_starting {
+                session.is_answering_announcements = session.next_turn_answers_announcements.take().unwrap_or(false);
+            }
             let is_new_permission_question = matches!(logged, Some((legion2_proto::EntryKind::Permission, _)));
             session.permission_asked_at = match report.activity {
                 Activity::Permission if is_new_permission_question => Some(Instant::now()),
@@ -257,7 +260,7 @@ impl Daemon {
         store.mark_delivered(&entry_ids)?;
         let handed_kinds: Vec<legion2_proto::EntryKind> = entries.iter().map(|entry| entry.kind).collect();
         if let (Some(only_announcements), Some(session)) = (is_announcements_only(&handed_kinds), state.sessions.get_mut(session_id)) {
-            session.is_answering_announcements = only_announcements;
+            session.next_turn_answers_announcements = Some(next_turn_is_announcements_only(session.next_turn_answers_announcements, only_announcements));
         }
         Ok(Some(entries.iter().map(delivery_text).collect()))
     }
