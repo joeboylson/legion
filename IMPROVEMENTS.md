@@ -204,3 +204,24 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
   `mcp__opie`, but nothing allows "write output to a file in my folder". Each
   operator could get a scratch folder it may write, and be told to use the
   Write tool instead of `>`.
+
+## From the AD-3 run (temp_plus_platform, 2026-10-07)
+
+- **Two copies of one operator can't share a mission without git.** OPIE
+  review had to run on two PRs at once. Legion refuses a second copy on a
+  mission, and `split` (which would allow it) needs git, so the human had to
+  add a mission just for the second PR. Parts could work without git when
+  the parts don't share files, or a copy could be started on a named target
+  such as a PR.
+- **A long turn hides everything sent to it.** The builder spent 15 to 20
+  minutes in single turns while the commander's messages, including the
+  human's one-PR-per-repo rule, waited unread. The strategist spotted it each
+  time, but only the human could press Esc. (Same as "The commander can't
+  interrupt a long turn" above.)
+- **A new folder stalls on Claude's "trust this folder?" question.** The
+  commander and strategist sat on it for 3 minutes on the first run in
+  `ref/hello-legion2`. Legion could offer to answer it when the folder is
+  added.
+- **Proof checks go much faster with the strategist on.** It suggested 15
+  speed-ups; the commander took 10, mostly starting review and re-proof of
+  one fix while the next was still being built.
