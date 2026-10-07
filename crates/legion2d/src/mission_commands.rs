@@ -71,10 +71,13 @@ impl Daemon {
     }
 
     pub fn read_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {
-        let state = self.state.lock().unwrap();
-        let (folder_index, deployment) = state.find_deployment(deployment_key)?;
-        let (mission, body) = state.mission_with_body(folder_index, &deployment.id, number)?;
-        Ok(Reply::Mission { mission, body })
+        let (mission, body) = {
+            let state = self.state.lock().unwrap();
+            let (folder_index, deployment) = state.find_deployment(deployment_key)?;
+            state.mission_with_body(folder_index, &deployment.id, number)?
+        };
+        let parts = self.mission_parts(deployment_key, number)?;
+        Ok(Reply::Mission { mission, body, parts })
     }
 
     pub fn finish_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {

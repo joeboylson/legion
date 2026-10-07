@@ -1,6 +1,6 @@
 //! How replies and deployment log entries read on screen and in exports.
 
-use legion2_proto::{Entry, Mission, Reply, SessionInfo, NAME};
+use legion2_proto::{Entry, Mission, Part, Reply, SessionInfo, NAME};
 
 pub const CLOCK_FORMAT: &str = "%H:%M:%S";
 pub const DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -75,7 +75,11 @@ pub fn reply_text(reply: &Reply) -> String {
             let closed_note = if deployment.closed_ms.is_some() { "  (closed)" } else { "" };
             format!("{}  {}  {}  {}{closed_note}", deployment.id, deployment.name, deployment.pipeline, deployment.folder)
         }),
-        Reply::Mission { mission, body } => format!("#{} {:?}{}\n\n{}", mission.number, mission.status, holder_note(mission), body.trim_end()),
+        Reply::Mission { mission, body, parts } => {
+            let parts_note = if parts.is_empty() { String::new() } else { format!("\n\nparts:\n{}", lines(parts, part_line)) };
+            format!("#{} {:?}{}\n\n{}{parts_note}", mission.number, mission.status, holder_note(mission), body.trim_end())
+        }
+        Reply::Parts { parts } => lines(parts, part_line),
         Reply::Missions { missions } => lines(missions, |mission| format!("#{} {:?}{}  {}", mission.number, mission.status, holder_note(mission), mission.title)),
         Reply::Session { session } => format!("{} {}", session.position, session.activity.label()),
         Reply::Sessions { sessions } => lines(sessions, session_line),
@@ -83,6 +87,11 @@ pub fn reply_text(reply: &Reply) -> String {
         Reply::Entry { entry } => entry_line(entry),
         Reply::Entries { entries } => lines(entries, entry_line),
     }
+}
+
+fn part_line(part: &Part) -> String {
+    let state = if part.is_merged { "merged" } else { "open" };
+    format!("part {} ({state}): {}", part.number, part.brief)
 }
 
 #[cfg(test)]
@@ -126,7 +135,7 @@ mod tests {
 
     #[test]
     fn sessions_say_when_legion_cant_see_them() {
-        let session = SessionInfo { deployment: "r".into(), position: "builder".into(), mission: None, activity: Activity::Idle, can_see_state: false, detail: None, is_stuck_starting: false, model: None, context_percent: None };
+        let session = SessionInfo { deployment: "r".into(), position: "builder".into(), mission: None, activity: Activity::Idle, can_see_state: false, detail: None, is_stuck_starting: false, model: None, context_percent: None, part: None };
         assert_eq!(reply_text(&Reply::Sessions { sessions: vec![session] }), "r builder idle (can't see this session's state)");
     }
 

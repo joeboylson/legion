@@ -19,7 +19,7 @@ const stopEverySession = (deployment: Deployment, sessions: readonly SessionInfo
 
 // Its commander picks the work back up from the log.
 const startCommander = (deployment: Deployment) =>
-  askLegion({ type: 'session_start', deployment: deployment.id, operator: COMMANDER, mission: null })
+  askLegion({ type: 'session_start', deployment: deployment.id, operator: COMMANDER, mission: null, part: null })
 
 export function DeploymentMenu({ deployment, sessions }: DeploymentMenuProps) {
   const [isConfirmingClose, setIsConfirmingClose] = useState(false)

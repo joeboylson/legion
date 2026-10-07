@@ -74,17 +74,19 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         Command::MissionList { deployment } | Command::MissionRead { deployment, .. } | Command::Log { deployment, .. } => Ok(Some(deployment)),
         Command::SessionList { deployment } => deployment.as_deref().map(Some).ok_or_else(|| "say which deployment".to_string()),
         Command::Post { deployment, entry } if can_add_entry(role, entry.kind) => Ok(Some(deployment)),
+        Command::ToolShare { deployment, .. } | Command::PartFinish { deployment, .. } => Ok(Some(deployment)),
         Command::Post { entry, .. } => Err(refusal(allowed_to_add(entry.kind), &format!("add {} entries", entry.kind.as_str()))),
         Command::SessionStart { deployment, .. }
         | Command::SessionStop { deployment, .. }
         | Command::Screen { deployment, .. }
         | Command::MissionFinish { deployment, .. }
+        | Command::MissionSplit { deployment, .. }
             if is_commander =>
         {
             Ok(Some(deployment))
         }
-        Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } => {
-            Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish missions"))
+        Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } | Command::MissionSplit { .. } => {
+            Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish or split missions"))
         }
         Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with the suggest tool".into()),
         Command::Key { .. } | Command::Input { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
@@ -106,7 +108,7 @@ mod tests {
     }
 
     fn start() -> Command {
-        Command::SessionStart { deployment: "r".into(), operator: "builder".into(), mission: None }
+        Command::SessionStart { deployment: "r".into(), operator: "builder".into(), mission: None, part: None }
     }
 
     #[test]

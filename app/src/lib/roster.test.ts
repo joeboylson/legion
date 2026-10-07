@@ -14,6 +14,7 @@ const session = (position: string): SessionInfo => ({
   is_stuck_starting: false,
   model: null,
   context_percent: null,
+  part: null,
 })
 
 describe('operatorOfPosition', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '@/generated/Entry'
 
-import { entryKindLabel, entryRecipient, modelFamily, paragraphs, sessionStatus } from './format'
+import { entryKindLabel, entryRecipient, modelFamily, paragraphs, sessionStatus, workLabel } from './format'
 
 const entry = (overrides: Partial<Entry>): Entry => ({
   id: 1,
@@ -19,9 +19,18 @@ const entry = (overrides: Partial<Entry>): Entry => ({
 
 describe('sessionStatus', () => {
   it('shows the model, how full the conversation is, then the activity', () => {
-    const session = { deployment: 'd1', position: 'builder', mission: 8, activity: 'busy', can_see_state: true, detail: null, is_stuck_starting: false, model: 'claude-sonnet-5-5', context_percent: 55 } as const
+    const session = { deployment: 'd1', position: 'builder', mission: 8, activity: 'busy', can_see_state: true, detail: null, is_stuck_starting: false, model: 'claude-sonnet-5-5', context_percent: 55, part: null } as const
     expect(sessionStatus(session)).toBe('sonnet · 55% · working')
     expect(sessionStatus({ ...session, model: null, context_percent: null })).toBe('working')
+  })
+})
+
+describe('workLabel', () => {
+  it('names the mission, and the part when there is one', () => {
+    const session = { deployment: 'd1', position: 'builder-2', mission: 12, activity: 'busy', can_see_state: true, detail: null, is_stuck_starting: false, model: null, context_percent: null, part: null } as const
+    expect(workLabel(session)).toBe('m12')
+    expect(workLabel({ ...session, part: 2 })).toBe('m12 · part 2')
+    expect(workLabel({ ...session, mission: null })).toBeUndefined()
   })
 })
 

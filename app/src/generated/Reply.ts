@@ -4,6 +4,7 @@ import type { Entry } from "./Entry";
 import type { Folder } from "./Folder";
 import type { FolderDetail } from "./FolderDetail";
 import type { Mission } from "./Mission";
+import type { Part } from "./Part";
 import type { SessionInfo } from "./SessionInfo";
 
-export type Reply = { "type": "pong", version: string, } | { "type": "done" } | { "type": "folder", folder: Folder, created_setup: boolean, } | { "type": "folders", folders: Array<Folder>, } | { "type": "folder_detail", detail: FolderDetail, } | { "type": "deployment", deployment: Deployment, } | { "type": "deployments", deployments: Array<Deployment>, } | { "type": "mission", mission: Mission, body: string, } | { "type": "missions", missions: Array<Mission>, } | { "type": "session", session: SessionInfo, } | { "type": "sessions", sessions: Array<SessionInfo>, } | { "type": "screen", text: string, ansi: string, } | { "type": "entry", entry: Entry, } | { "type": "entries", entries: Array<Entry>, };
+export type Reply = { "type": "pong", version: string, } | { "type": "done" } | { "type": "folder", folder: Folder, created_setup: boolean, } | { "type": "folders", folders: Array<Folder>, } | { "type": "folder_detail", detail: FolderDetail, } | { "type": "deployment", deployment: Deployment, } | { "type": "deployments", deployments: Array<Deployment>, } | { "type": "mission", mission: Mission, body: string, parts: Array<Part>, } | { "type": "parts", parts: Array<Part>, } | { "type": "missions", missions: Array<Mission>, } | { "type": "session", session: SessionInfo, } | { "type": "sessions", sessions: Array<SessionInfo>, } | { "type": "screen", text: string, ansi: string, } | { "type": "entry", entry: Entry, } | { "type": "entries", entries: Array<Entry>, };

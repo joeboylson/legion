@@ -1,5 +1,11 @@
 # legion
 
+> **On this branch (`explore/tauri`):** Legion is being rebuilt as legion2,
+> with a background program and an app instead of tmux. See
+> [docs/legion2.md](docs/legion2.md) for how it works now, and
+> [HANDOFF.md](HANDOFF.md) for where the work stands. The rest of this README
+> describes the tmux version.
+
 Legion runs a team of [Claude Code](https://claude.com/claude-code) sessions
 in tmux, one project at a time. One session leads. The others each have a
 job, like planning, building or reviewing. They talk to each other directly

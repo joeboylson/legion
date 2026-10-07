@@ -29,9 +29,10 @@ Being built. Branch: `explore/tauri`. See "Build order" for where it's at.
 
 **A deployment stays open, with its commander.** The commander stays up the whole
 time, so you can message it even when nothing is going on. It starts
-operators as missions arrive. When there's no work left, the operators'
-sessions close, and the commander waits. A session that's waiting uses no
-usage.
+operators as missions arrive. An operator stays open, idle, until its
+mission is finished, in case the work comes back to it; then Legion ends
+it. An idle copy is ended sooner when new work needs its place. A session
+that's waiting uses no usage.
 
 **When the work runs out, the commander writes a short postmortem:**
 gotchas and learnings from that stretch of work, as a deployment log entry. A new
@@ -385,6 +386,14 @@ repos start fresh on the new version.
    machine: Tauri with React and shadcn in the house style, connected to
    legion2d. Debug builds can save what the screen looks like
    (`LEGION2_SNAPSHOT_DIR`) and open a deployment at start (`LEGION2_OPEN`).
+   Since then, from test runs (see `docs/legion2.md` for how each works):
+   operators idle between handoffs, handing over a full conversation
+   (`clearAt`), 5-minute check-ins, stalled-work reminders, steps that send
+   work to several operators at once, a shared toolbox (`share_tool`),
+   clashes at the finish going back to the builder, splitting a mission into
+   parts, and in the app a live graph of the squad. Installed with
+   `~/.local/bin/legion2d` since 2026-10-06; what's built but not installed
+   yet is in `HANDOFF.md`.
 5. Channels, then reaching another machine over SSH or a private network.
 
 **While it's being built, it stays apart from today's Legion.** Everything
@@ -409,7 +418,7 @@ gets its own name until the switch:
 | Today, through tmux                     | In the new app                     |
 |-----------------------------------------|------------------------------------|
 | Types messages into a session           | The add-on sends them in           |
-| Types `/clear` for a fresh start        | Same, into the terminal it owns    |
+| Types `/clear` for a fresh start        | Starts a fresh session that reads a handoff note (`clearAt`) |
 | Picks up an old session by its ID       | Same                               |
 | Starts sessions with their own settings | Same                               |
 | Reads the screen to see what a session is doing | The add-on reports it      |
@@ -419,9 +428,8 @@ gets its own name until the switch:
 
 ## Open
 
-**Not covered yet:**
-
-
+**Not covered yet:** channels and reaching another machine (step 5), and
+everything in `IMPROVEMENTS.md`.
 
 
 ## From the Claude Code news (Oct 2026)

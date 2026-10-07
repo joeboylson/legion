@@ -27,6 +27,8 @@ pub struct Session {
     pub deployment: String,
     pub position: String,
     pub mission: Option<u32>,
+    /// The part of its mission it works on, if the mission is split.
+    pub part: Option<u32>,
     pub activity: Activity,
     pub can_see_state: bool,
     pub detail: Option<String>,
@@ -66,6 +68,7 @@ impl Session {
             is_stuck_starting: self.is_reported_stuck && self.activity == Activity::Starting,
             model: self.model.clone(),
             context_percent: self.context_percent,
+            part: self.part,
         }
     }
 
@@ -102,6 +105,7 @@ pub struct SpawnRequest {
     pub deployment: String,
     pub position: String,
     pub mission: Option<u32>,
+    pub part: Option<u32>,
     pub working_folder: PathBuf,
     pub arguments: Vec<String>,
     pub clear_at: Option<u8>,
@@ -149,6 +153,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         deployment: request.deployment,
         position: request.position,
         mission: request.mission,
+        part: request.part,
         activity: Activity::Starting,
         can_see_state: true,
         detail: None,

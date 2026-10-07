@@ -76,7 +76,8 @@ pub enum Command {
     /// and running the folder's check first if the base has moved on.
     MissionFinish { deployment: String, mission: u32 },
     /// Starts an operator, or the commander, in the deployment.
-    SessionStart { deployment: String, operator: String, mission: Option<u32> },
+    /// `part`: one part of a split mission, worked in its own checkout.
+    SessionStart { deployment: String, operator: String, mission: Option<u32>, part: Option<u32> },
     SessionStop { deployment: String, position: String },
     SessionList { deployment: Option<String> },
     Screen { deployment: String, position: String },
@@ -87,6 +88,14 @@ pub enum Command {
     /// to a position are handed to its session.
     Post { deployment: String, entry: NewEntry },
     Log { deployment: String, filter: LogFilter },
+    /// Copies a tool into the folder's shared tools, where every mission sees
+    /// it at once, and tells everyone running in the deployment about it.
+    ToolShare { deployment: String, file: String, summary: String },
+    /// Splits a mission's current step into parts that can be worked at the
+    /// same time, each in its own checkout branched from the mission's.
+    MissionSplit { deployment: String, mission: u32, parts: Vec<String> },
+    /// A part is done: Legion merges it into the mission's branch.
+    PartFinish { deployment: String, mission: u32, part: u32, note: String },
     /// Sends events from now on, for as long as the connection stays open.
     Watch,
 }
@@ -152,7 +161,8 @@ pub enum Reply {
     FolderDetail { detail: FolderDetail },
     Deployment { deployment: Deployment },
     Deployments { deployments: Vec<Deployment> },
-    Mission { mission: Mission, body: String },
+    Mission { mission: Mission, body: String, parts: Vec<Part> },
+    Parts { parts: Vec<Part> },
     Missions { missions: Vec<Mission> },
     Session { session: SessionInfo },
     Sessions { sessions: Vec<SessionInfo> },
@@ -264,6 +274,17 @@ pub enum MissionStatus {
     Done,
 }
 
+/// One part of a split mission: a piece of its current step, worked in its
+/// own checkout and merged back into the mission's branch when done.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    pub mission: u32,
+    pub number: u32,
+    pub brief: String,
+    pub is_merged: bool,
+}
+
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SessionInfo {
@@ -282,6 +303,8 @@ pub struct SessionInfo {
     pub model: Option<String>,
     /// How full its conversation is, in percent; known once its add-on reports.
     pub context_percent: Option<u8>,
+    /// The part of its mission it works on, if the mission is split.
+    pub part: Option<u32>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]

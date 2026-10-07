@@ -77,6 +77,12 @@ pub const TOOLS: &[Tool] = &[
         arguments: &[required("question", Text, "The question, with your recommendation."), ABOUT_MISSION],
     },
     Tool {
+        name: "share_tool",
+        description: "Put a tool you made into the team's toolbox: a script, checker or setup step you or the next operator would otherwise do by hand again. Legion copies it to the shared tools folder, where every mission sees it at once, and tells everyone running.",
+        audience: Everyone,
+        arguments: &[required("file", Text, "The tool's full path."), required("summary", Text, "What it does and how to run it, in one line.")],
+    },
+    Tool {
         name: "suggest",
         description: "Suggest a mission to the human. Only the human creates missions.",
         audience: Everyone,
@@ -87,6 +93,12 @@ pub const TOOLS: &[Tool] = &[
         description: "Your step is done: hand the mission to whoever the pipeline table names next. Tells the commander.",
         audience: OperatorsOnly,
         arguments: &[MISSION, required("next", Text, "The operator for the next step, or several, comma-separated, when the table names a list."), required("note", Text, "What you did.")],
+    },
+    Tool {
+        name: "part_done",
+        description: "Your part of a split mission is built and committed. Legion merges it into the mission and tells the commander. Use this instead of handoff when you're on a part.",
+        audience: OperatorsOnly,
+        arguments: &[MISSION, required("part", Number, "Your part's number."), required("note", Text, "What you did.")],
     },
     Tool {
         name: "done",
@@ -104,7 +116,17 @@ pub const TOOLS: &[Tool] = &[
         name: "start",
         description: "Start an operator, on a mission if given. Legion refuses more copies than the operator's limit.",
         audience: CommanderOnly,
-        arguments: &[required("operator", Text, "The operator, as named in the pipeline."), optional("mission", Number, "The mission to start it on.")],
+        arguments: &[
+            required("operator", Text, "The operator, as named in the pipeline."),
+            optional("mission", Number, "The mission to start it on."),
+            optional("part", Number, "The part of a split mission to start it on."),
+        ],
+    },
+    Tool {
+        name: "split",
+        description: "Split a mission's current step into parts that copies of one operator can work at the same time, each in its own checkout. Only for parts that don't touch the same files. Legion merges each part back into the mission as it's done, and tells you when all are in.",
+        audience: CommanderOnly,
+        arguments: &[MISSION, required("parts", Text, "One part per line: what that part does, in a sentence.")],
     },
     Tool {
         name: "stop",
@@ -178,6 +200,15 @@ fn text_argument(arguments: &Value, name: &str) -> Result<String, String> {
     arguments.get(name).and_then(Value::as_str).map(str::to_string).ok_or_else(|| format!("{name} is missing"))
 }
 
+/// A text argument holding one item per line, blank lines left out.
+fn lines_argument(arguments: &Value, name: &str) -> Result<Vec<String>, String> {
+    let items: Vec<String> = text_argument(arguments, name)?.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect();
+    if items.is_empty() {
+        return Err(format!("{name} has nothing in it"));
+    }
+    Ok(items)
+}
+
 fn optional_number_argument(arguments: &Value, name: &str) -> Result<Option<u64>, String> {
     match arguments.get(name) {
         None | Some(Value::Null) => Ok(None),
@@ -225,6 +256,7 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
         "send" => post(&deployment, EntryKind::Message, None, Some(text_argument(arguments, "to")?), text_argument(arguments, "text")?),
         "note" => post(&deployment, EntryKind::Note, mission_number(arguments, "mission")?, None, text_argument(arguments, "text")?),
         "ask" => post(&deployment, EntryKind::Question, mission_number(arguments, "mission")?, None, text_argument(arguments, "question")?),
+        "share_tool" => Command::ToolShare { deployment, file: text_argument(arguments, "file")?, summary: text_argument(arguments, "summary")? },
         "suggest" => post(&deployment, EntryKind::Suggestion, None, None, text_argument(arguments, "text")?),
         "handoff" => {
             let handoff_text = format!("→ {}: {}", text_argument(arguments, "next")?, text_argument(arguments, "note")?);
@@ -232,7 +264,19 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
         }
         "done" => post(&deployment, EntryKind::Done, Some(required_mission(arguments)?), None, text_argument(arguments, "summary")?),
         "blocked" => post(&deployment, EntryKind::Blocked, Some(required_mission(arguments)?), None, text_argument(arguments, "reason")?),
-        "start" => Command::SessionStart { deployment, operator: text_argument(arguments, "operator")?, mission: mission_number(arguments, "mission")? },
+        "start" => Command::SessionStart {
+            deployment,
+            operator: text_argument(arguments, "operator")?,
+            mission: mission_number(arguments, "mission")?,
+            part: mission_number(arguments, "part")?,
+        },
+        "split" => Command::MissionSplit { deployment, mission: required_mission(arguments)?, parts: lines_argument(arguments, "parts")? },
+        "part_done" => Command::PartFinish {
+            deployment,
+            mission: required_mission(arguments)?,
+            part: mission_number(arguments, "part")?.ok_or("part is missing")?,
+            note: text_argument(arguments, "note")?,
+        },
         "stop" => Command::SessionStop { deployment, position: text_argument(arguments, "position")? },
         "screen" => Command::Screen { deployment, position: text_argument(arguments, "position")? },
         "finish" => Command::MissionFinish { deployment, mission: required_mission(arguments)? },
@@ -265,7 +309,8 @@ mod tests {
         assert_eq!(all_names.len(), TOOLS.len());
         let full_arguments = json!({
             "mission": 1, "position": "builder", "to": "reviewer", "text": "t", "question": "q", "question_entry": 2, "next": "reviewer",
-            "note": "n", "summary": "s", "reason": "r", "operator": "builder", "why": "w"
+            "note": "n", "summary": "s", "reason": "r", "operator": "builder", "why": "w", "file": "/tools/t.sh",
+            "parts": "one\ntwo", "part": 1
         });
         for tool in TOOLS {
             let caller = if tool.audience == ToolAudience::OperatorsOnly { "builder" } else { COMMANDER };

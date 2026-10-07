@@ -53,7 +53,7 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
         Action::Missions => Command::MissionList { deployment: needs_deployment()? },
         Action::Mission { number } => Command::MissionRead { deployment: needs_deployment()?, mission: number },
         Action::Finish { mission } => Command::MissionFinish { deployment: needs_deployment()?, mission },
-        Action::Start { operator, mission } => Command::SessionStart { deployment: needs_deployment()?, operator, mission },
+        Action::Start { operator, mission } => Command::SessionStart { deployment: needs_deployment()?, operator, mission, part: None },
         Action::Stop { position } => Command::SessionStop { deployment: needs_deployment()?, position },
         Action::Sessions => Command::SessionList { deployment: deployment.clone() },
         Action::Screen { position } => Command::Screen { deployment: needs_deployment()?, position },

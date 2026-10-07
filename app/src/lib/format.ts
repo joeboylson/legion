@@ -32,6 +32,12 @@ export const sessionStatus = (session: SessionInfo): string =>
     .filter(Boolean)
     .join(' · ')
 
+// The work a session is on: its mission, and its part if the mission is split.
+export const workLabel = (session: SessionInfo): string | undefined => {
+  if (session.mission === null) return undefined
+  return session.part === null ? `m${session.mission}` : `m${session.mission} · part ${session.part}`
+}
+
 // A pipeline operator with no session running.
 export const INACTIVE_LABEL = 'inactive'
 

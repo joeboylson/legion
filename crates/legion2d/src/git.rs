@@ -20,12 +20,60 @@ fn run_git(folder: &Path, arguments: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Commits just these paths, leaving anything else staged as it was. A path
+/// with no change commits nothing, which isn't a problem.
+pub fn commit_paths(folder: &Path, paths: &[&Path], message: &str) -> Result<(), String> {
+    let path_arguments: Vec<String> = paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
+    let add: Vec<&str> = ["add", "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect();
+    run_git(folder, &add)?;
+    let unchanged = run_git(folder, &["diff", "--cached", "--quiet", "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect::<Vec<_>>()).is_ok();
+    if unchanged {
+        return Ok(());
+    }
+    let commit: Vec<&str> = ["commit", "-q", "-m", message, "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect();
+    run_git(folder, &commit).map(|_| ())
+}
+
 pub fn is_git_repo(folder: &Path) -> bool {
     run_git(folder, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|answer| answer == "true")
 }
 
 pub fn current_branch(folder: &Path) -> Option<String> {
     run_git(folder, &["symbolic-ref", "--short", "HEAD"]).ok()
+}
+
+/// Makes a worktree for a part of a mission, branching from the mission's branch.
+pub fn create_part_worktree(folder: &Path, worktree_path: &Path, branch: &str, from_branch: &str) -> Result<(), String> {
+    run_git(folder, &["worktree", "add", "-b", branch, &worktree_path.to_string_lossy(), from_branch]).map(|_| ())
+}
+
+/// How merging a part into its mission went.
+#[derive(Debug, PartialEq)]
+pub enum MergeOutcome {
+    Merged,
+    /// It clashes in these files; the mission's checkout is left as it was.
+    Clash { files: Vec<String> },
+}
+
+/// Merges `branch` into the checkout at `into`, which must have nothing
+/// uncommitted.
+pub fn merge_branch(into: &Path, branch: &str) -> Result<MergeOutcome, String> {
+    if !run_git(into, &["status", "--porcelain"])?.is_empty() {
+        return Err(format!("{} has changes that aren't committed", into.display()));
+    }
+    if run_git(into, &["merge", "--no-edit", branch]).is_ok() {
+        return Ok(MergeOutcome::Merged);
+    }
+    // Read before aborting: the abort clears the list of clashing files.
+    let clashing = run_git(into, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
+    run_git(into, &["merge", "--abort"])?;
+    Ok(MergeOutcome::Clash { files: clashing.lines().map(str::to_string).collect() })
+}
+
+/// Removes a worktree and its branch.
+pub fn remove_worktree(folder: &Path, worktree_path: &Path, branch: &str) -> Result<(), String> {
+    run_git(folder, &["worktree", "remove", &worktree_path.to_string_lossy()])?;
+    run_git(folder, &["branch", "-D", branch]).map(|_| ())
 }
 
 /// Makes a worktree for a mission, branching from whatever the folder is on.
@@ -159,6 +207,25 @@ mod tests {
 
     fn new_worktree(folder: &Path) -> Worktree {
         create_worktree(folder, &folder.with_extension("wt"), "mission/test").unwrap()
+    }
+
+    #[test]
+    fn a_part_merges_into_its_mission_or_names_the_clash() {
+        let repo = temporary_repo("parts");
+        let mission = new_worktree(&repo);
+        let part_path = repo.with_extension("part");
+        let _ = fs::remove_dir_all(&part_path);
+        create_part_worktree(&repo, &part_path, "mission/test--part-1", "mission/test").unwrap();
+        commit_file(&part_path, "page.html", "part one");
+        assert_eq!(merge_branch(Path::new(&mission.path), "mission/test--part-1").unwrap(), MergeOutcome::Merged);
+        assert!(Path::new(&mission.path).join("page.html").exists());
+        remove_worktree(&repo, &part_path, "mission/test--part-1").unwrap();
+        create_part_worktree(&repo, &part_path, "mission/test--part-2", "mission/test").unwrap();
+        commit_file(&part_path, "page.html", "part two");
+        commit_file(Path::new(&mission.path), "page.html", "mission");
+        let outcome = merge_branch(Path::new(&mission.path), "mission/test--part-2").unwrap();
+        assert_eq!(outcome, MergeOutcome::Clash { files: vec!["page.html".into()] });
+        assert_eq!(run_git(Path::new(&mission.path), &["status", "--porcelain"]).unwrap(), "");
     }
 
     #[test]

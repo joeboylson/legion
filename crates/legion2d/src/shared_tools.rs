@@ -1,11 +1,11 @@
-//! Tools the operators make for each other, in `.<NAME>/tools/` in the repo:
-//! scripts that save repeating work across missions, such as a browser test
-//! harness. They're kept in git, so a tool made on a mission reaches everyone
-//! once that mission is finished.
+//! The team's toolbox: tools the operators make for each other, in the
+//! folder's own `.<NAME>/tools/`, such as a browser test harness. A tool is
+//! shared mid-mission (see tool_sharing.rs), so everyone has it at once.
 
-use std::{fs, path::Path};
-
-use legion2_proto::NAME;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::setup::setup_folder;
 
@@ -32,16 +32,22 @@ pub fn tool_summary(text: &str) -> String {
         .unwrap_or_else(|| NO_SUMMARY.to_string())
 }
 
+/// Where a folder's shared tools live: in the folder itself, never in a
+/// mission's worktree, so every mission sees a tool the moment it's shared.
+pub fn shared_tools_folder(folder: &Path) -> PathBuf {
+    setup_folder(folder).join(TOOLS_FOLDER_NAME)
+}
+
 /// The tools in a folder, by name. A folder with none has an empty list.
 pub fn shared_tools(folder: &Path) -> Vec<SharedTool> {
-    let Ok(entries) = fs::read_dir(setup_folder(folder).join(TOOLS_FOLDER_NAME)) else { return Vec::new() };
+    let Ok(entries) = fs::read_dir(shared_tools_folder(folder)) else { return Vec::new() };
     let mut tools: Vec<SharedTool> = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_file())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|name| !name.starts_with('.'))
         .map(|name| {
-            let text = fs::read_to_string(setup_folder(folder).join(TOOLS_FOLDER_NAME).join(&name)).unwrap_or_default();
+            let text = fs::read_to_string(shared_tools_folder(folder).join(&name)).unwrap_or_default();
             SharedTool { summary: tool_summary(&text), name }
         })
         .collect();
@@ -49,23 +55,26 @@ pub fn shared_tools(folder: &Path) -> Vec<SharedTool> {
     tools
 }
 
-/// What an operator is told about the shared tools.
-pub fn shared_tools_section(tools: &[SharedTool]) -> String {
-    let folder = format!(".{NAME}/{TOOLS_FOLDER_NAME}/");
+/// What an operator is told about the team's toolbox. `tools_folder` is the
+/// full path, since operators work in their mission's own worktree.
+pub fn shared_tools_section(tools: &[SharedTool], tools_folder: &Path) -> String {
+    let folder = tools_folder.display();
     let listed = match tools {
         [] => "None yet.".to_string(),
-        _ => tools.iter().map(|tool| format!("- {folder}{}: {}", tool.name, tool.summary)).collect::<Vec<_>>().join("\n"),
+        _ => tools.iter().map(|tool| format!("- {folder}/{}: {}", tool.name, tool.summary)).collect::<Vec<_>>().join("\n"),
     };
     format!(
-        "Shared tools, in {folder} (kept in git, for every operator):
+        "The team's toolbox, in {folder}:
 {listed}
 
-Use these before writing your own. When you'd otherwise build something a later mission will need again (a browser test harness, a checker, a setup step), make it a tool in {folder} instead: start it with a comment line saying what it does and how to run it, and commit it with your work. Improve a tool rather than copying it."
+Use these before doing anything by hand. Building the toolbox is part of your job: the second time you do something by hand (a browser test, a check, a setup step, a long command), or when the next operator will need it too, stop and make it a tool. Start it with a comment line saying what it does and how to run it, then share it with the share_tool tool right away; Legion tells everyone running. Improve a tool rather than copying it, and share it again after."
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use legion2_proto::NAME;
+
     use super::*;
 
     #[test]
@@ -78,8 +87,10 @@ mod tests {
     #[test]
     fn the_section_lists_each_tool_or_says_there_are_none() {
         let tools = [SharedTool { name: "browser-test.sh".into(), summary: "Runs tests.html.".into() }];
-        assert!(shared_tools_section(&tools).contains(&format!("- .{NAME}/tools/browser-test.sh: Runs tests.html.")));
-        assert!(shared_tools_section(&[]).contains("None yet."));
+        let folder = Path::new("/repo/.legion2/tools");
+        assert!(shared_tools_section(&tools, folder).contains("- /repo/.legion2/tools/browser-test.sh: Runs tests.html."));
+        assert!(shared_tools_section(&[], folder).contains("None yet."));
+        assert!(shared_tools_section(&[], folder).contains("share_tool"));
     }
 
     #[test]

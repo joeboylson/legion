@@ -22,4 +22,8 @@ model: string | null,
 /**
  * How full its conversation is, in percent; known once its add-on reports.
  */
-context_percent: number | null, };
+context_percent: number | null, 
+/**
+ * The part of its mission it works on, if the mission is split.
+ */
+part: number | null, };

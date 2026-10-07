@@ -19,6 +19,7 @@ const session = (position: string, activity: SessionInfo['activity'], detail: st
   is_stuck_starting: false,
   model: null,
   context_percent: null,
+  part: null,
 })
 
 const entry = (id: number, kind: Entry['kind'], text: string): Entry => ({

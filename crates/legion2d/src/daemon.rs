@@ -255,7 +255,7 @@ impl Daemon {
             Command::MissionList { deployment } => self.list_missions(&deployment),
             Command::MissionRead { deployment, mission } => self.read_mission(&deployment, mission),
             Command::MissionFinish { deployment, mission } => self.finish_mission(&deployment, mission),
-            Command::SessionStart { deployment, operator, mission } => self.start_session(&deployment, &operator, mission, &author, None),
+            Command::SessionStart { deployment, operator, mission, part } => self.start_session_on(&deployment, &operator, mission, part, &author, None),
             Command::SessionStop { deployment, position } => self.stop_session(&deployment, &position),
             Command::SessionList { deployment } => self.list_sessions(deployment.as_deref()),
             Command::Screen { deployment, position } => self.read_screen(&deployment, &position),
@@ -263,6 +263,9 @@ impl Daemon {
             Command::Input { deployment, position, text } => self.type_input(&deployment, &position, &text),
             Command::Post { deployment, entry } => self.post_from_caller(&deployment, &author, entry),
             Command::Log { deployment, filter } => self.read_log(&deployment, &filter),
+            Command::ToolShare { deployment, file, summary } => self.share_tool(&deployment, &author, &file, &summary),
+            Command::MissionSplit { deployment, mission, parts } => self.split_mission(&deployment, mission, &parts),
+            Command::PartFinish { deployment, mission, part, note } => self.finish_part(&deployment, &author, mission, part, &note),
         }
     }
 }

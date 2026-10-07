@@ -8,7 +8,9 @@ use std::{
 use legion2_proto::{Activity, EntryKind, LogFilter, NewEntry, Reply, Deployment, SessionInfo, COMMANDER};
 
 use crate::{
-    shared_tools::shared_tools,
+    shared_tools::{shared_tools, shared_tools_folder},
+    mission_parts::{part_first_prompt, part_instructions},
+    store::PartCheckout,
     constants::{DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
     daemon::{Daemon, State},
     git::{create_worktree, current_branch, is_git_repo},
@@ -33,11 +35,28 @@ pub fn is_busy(activity: Activity) -> bool {
     matches!(activity, Activity::Starting | Activity::Busy | Activity::Permission)
 }
 
-fn started_text(position: &str, mission: Option<u32>, starter: &str) -> String {
-    match mission {
-        Some(number) => format!("{position} started on mission {number} (by {starter})"),
-        None => format!("{position} started (by {starter})"),
+fn started_text(position: &str, mission: Option<u32>, part: Option<u32>, starter: &str) -> String {
+    match (mission, part) {
+        (Some(number), Some(part)) => format!("{position} started on part {part} of mission {number} (by {starter})"),
+        (Some(number), None) => format!("{position} started on mission {number} (by {starter})"),
+        (None, _) => format!("{position} started (by {starter})"),
     }
+}
+
+/// The checkout of the part a session starts on, if it starts on one.
+fn part_checkout_for(state: &State, folder_index: usize, mission: Option<u32>, part: Option<u32>) -> Result<Option<PartCheckout>, String> {
+    let Some(number) = part else { return Ok(None) };
+    let mission = mission.ok_or("a part needs its mission too")?;
+    let checkout = state.folders[folder_index]
+        .store
+        .parts(mission)?
+        .into_iter()
+        .find(|checkout| checkout.part.number == number)
+        .ok_or_else(|| format!("mission {mission} has no part {number}"))?;
+    if checkout.part.is_merged {
+        return Err(format!("part {number} of mission {mission} is already merged"));
+    }
+    Ok(Some(checkout))
 }
 
 fn operator_first_prompt(mission: Option<u32>) -> String {
@@ -106,9 +125,10 @@ fn operator_launch(
         .transpose()?;
     let briefing = mission_with_history.as_ref().map(|(number, body, history)| MissionBriefing { number: *number, body, history });
     let tools = shared_tools(&folder.path);
+    let tools_folder = shared_tools_folder(&folder.path);
     let base_branch = current_branch(&folder.path);
     let operator_briefing =
-        OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: &pipeline_text, shared_tools: &tools, base_branch: base_branch.as_deref() };
+        OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: &pipeline_text, shared_tools: &tools, shared_tools_folder: &tools_folder, base_branch: base_branch.as_deref() };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
     Ok(LaunchPlan {
         position,
@@ -148,14 +168,18 @@ impl Daemon {
     /// `first_prompt` replaces the usual one, as when Legion restarts a session.
     /// When every copy of an operator is taken and one is idle, ends that one
     /// so the new work can start. Its handoff note is in the log.
-    fn free_idle_copy(&self, deployment_key: &str, operator: &str, mission: Option<u32>) -> Result<(), String> {
+    fn free_idle_copy(&self, deployment_key: &str, operator: &str, mission: Option<u32>, part: Option<u32>) -> Result<(), String> {
         let freed = {
             let mut state = self.state.lock().unwrap();
             let (folder_index, deployment) = state.find_open_deployment(deployment_key)?;
             let limit = read_operator(&state.folders[folder_index].path, operator)?.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
-            // A copy already on this mission keeps what it knows: it gets a message, not a restart.
+            // A copy already on this mission (or part) keeps what it knows: it gets a message, not a restart.
             let already_on_it = state.sessions.values().find(|session| {
-                session.deployment == deployment.id && operator_of_position(&session.position) == operator && mission.is_some() && session.mission == mission
+                session.deployment == deployment.id
+                    && operator_of_position(&session.position) == operator
+                    && mission.is_some()
+                    && session.mission == mission
+                    && session.part == part
             });
             if let Some(session) = already_on_it {
                 return Err(format!(
@@ -188,6 +212,7 @@ impl Daemon {
         Ok(())
     }
 
+    /// `first_prompt` replaces the usual one, as when Legion restarts a session.
     pub fn start_session(
         self: &Arc<Self>,
         deployment_key: &str,
@@ -196,28 +221,53 @@ impl Daemon {
         starter: &str,
         first_prompt: Option<String>,
     ) -> Result<Reply, String> {
+        self.start_session_on(deployment_key, operator, mission, None, starter, first_prompt)
+    }
+
+    /// Starts a session, on one part of a split mission when `part` is given:
+    /// it then works in that part's checkout and is told to do only that part.
+    pub fn start_session_on(
+        self: &Arc<Self>,
+        deployment_key: &str,
+        operator: &str,
+        mission: Option<u32>,
+        part: Option<u32>,
+        starter: &str,
+        first_prompt: Option<String>,
+    ) -> Result<Reply, String> {
         if operator != COMMANDER {
-            self.free_idle_copy(deployment_key, operator, mission)?;
+            self.free_idle_copy(deployment_key, operator, mission, part)?;
         }
         let spawn_request = {
             let state = self.state.lock().unwrap();
             let (folder_index, deployment) = state.find_open_deployment(deployment_key)?;
-            let launch = if operator == COMMANDER {
+            let part_checkout = part_checkout_for(&state, folder_index, mission, part)?;
+            let first_prompt = match (&part_checkout, mission) {
+                (Some(checkout), Some(number)) => Some(first_prompt.unwrap_or_else(|| part_first_prompt(number, checkout.part.number))),
+                _ => first_prompt,
+            };
+            let mut launch = if operator == COMMANDER {
                 commander_launch(&state, folder_index, &deployment, first_prompt)?
             } else {
                 operator_launch(&state, folder_index, &deployment, operator, mission, first_prompt, self.config.max_busy_sessions)?
             };
+            if let (Some(checkout), Some(number)) = (&part_checkout, mission) {
+                launch.system_prompt = format!("{}\n\n{}", launch.system_prompt, part_instructions(number, &checkout.part));
+            }
             let tools_config = legion_tools_config(&self.config.binary_folder, &self.config.socket_path, &deployment.id, &launch.position);
             let prompt_file = self.config.data_folder.join(PROMPTS_FOLDER_NAME).join(format!("{}-{}.md", deployment.id, launch.position));
             write_prompt_file(&prompt_file, &launch.system_prompt)?;
             let arguments = session_arguments(&launch, &tools_config, &prompt_file);
-            let working_folder = mission_working_folder(&state, folder_index, &deployment.id, mission)?;
-            SpawnRequest { deployment: deployment.id, position: launch.position, mission, working_folder, arguments, clear_at: launch.clear_at }
+            let working_folder = match &part_checkout {
+                Some(checkout) => PathBuf::from(&checkout.path),
+                None => mission_working_folder(&state, folder_index, &deployment.id, mission)?,
+            };
+            SpawnRequest { deployment: deployment.id, position: launch.position, mission, part, working_folder, arguments, clear_at: launch.clear_at }
         };
         let deployment_id = spawn_request.deployment.clone();
         let position = spawn_request.position.clone();
         let info = spawn_session(self, spawn_request)?;
-        let started = NewEntry { kind: EntryKind::SessionStarted, mission, to: None, text: started_text(&position, mission, starter), answers: None };
+        let started = NewEntry { kind: EntryKind::SessionStarted, mission, to: None, text: started_text(&position, mission, part, starter), answers: None };
         self.post_entry(&deployment_id, &position, started)?;
         Ok(Reply::Session { session: info })
     }
@@ -279,8 +329,9 @@ mod tests {
 
     #[test]
     fn the_start_entry_names_the_mission_and_starter() {
-        assert_eq!(started_text("builder", Some(3), "commander"), "builder started on mission 3 (by commander)");
-        assert_eq!(started_text("commander", None, "human"), "commander started (by human)");
+        assert_eq!(started_text("builder", Some(3), None, "commander"), "builder started on mission 3 (by commander)");
+        assert_eq!(started_text("builder-2", Some(3), Some(2), "commander"), "builder-2 started on part 2 of mission 3 (by commander)");
+        assert_eq!(started_text("commander", None, None, "human"), "commander started (by human)");
     }
 
     #[test]

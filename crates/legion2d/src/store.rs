@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use legion2_proto::{Entry, EntryKind, LogFilter, Mission, NewEntry, Deployment};
+use legion2_proto::{Entry, EntryKind, LogFilter, Mission, NewEntry, Deployment, Part};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::{entry_filter::entries_matching, mission_status::mission_standing};
@@ -63,7 +63,24 @@ CREATE TABLE IF NOT EXISTS worktrees (
     base_commit TEXT NOT NULL,
     is_removed INTEGER NOT NULL DEFAULT 0
 );
+-- The parts a mission's step was split into, each in its own checkout.
+CREATE TABLE IF NOT EXISTS parts (
+    mission INTEGER NOT NULL REFERENCES missions(number),
+    number INTEGER NOT NULL,
+    brief TEXT NOT NULL,
+    path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    is_merged INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (mission, number)
+);
 ";
+
+/// A part of a split mission, with where it's worked.
+pub struct PartCheckout {
+    pub part: Part,
+    pub path: String,
+    pub branch: String,
+}
 
 const ENTRY_COLUMNS: &str = "id, deployment, at_ms, mission, from_position, to_position, kind, text, answers";
 
@@ -104,6 +121,14 @@ fn deployment_from_row(row: &Row) -> rusqlite::Result<Deployment> {
         pipeline: row.get(2)?,
         started_ms: row.get(3)?,
         closed_ms: row.get(4)?,
+    })
+}
+
+fn part_from_row(row: &Row) -> rusqlite::Result<PartCheckout> {
+    Ok(PartCheckout {
+        part: Part { mission: row.get(0)?, number: row.get(1)?, brief: row.get(2)?, is_merged: row.get::<_, i64>(5)? != 0 },
+        path: row.get(3)?,
+        branch: row.get(4)?,
     })
 }
 
@@ -251,11 +276,49 @@ impl Store {
     pub fn mark_worktree_removed(&self, mission: u32) -> Result<(), String> {
         self.execute("UPDATE worktrees SET is_removed = 1 WHERE mission = ?1", [mission])
     }
+
+    pub fn add_part(&self, checkout: &PartCheckout) -> Result<(), String> {
+        let part = &checkout.part;
+        self.execute(
+            "INSERT INTO parts (mission, number, brief, path, branch) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![part.mission, part.number, part.brief, checkout.path, checkout.branch],
+        )
+    }
+
+    /// A mission's parts, by number.
+    pub fn parts(&self, mission: u32) -> Result<Vec<PartCheckout>, String> {
+        let mut statement = self
+            .database
+            .prepare("SELECT mission, number, brief, path, branch, is_merged FROM parts WHERE mission = ?1 ORDER BY number")
+            .map_err(database_error)?;
+        let rows = statement.query_map([mission], part_from_row).map_err(database_error)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(database_error)
+    }
+
+    pub fn mark_part_merged(&self, mission: u32, number: u32) -> Result<(), String> {
+        self.execute("UPDATE parts SET is_merged = 1 WHERE mission = ?1 AND number = ?2", [mission, number])
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parts_are_kept_by_mission_and_marked_merged() {
+        let store = store_with_deployment();
+        store.add_mission(3, "r", "Pages", "/m/3.md").unwrap();
+        let checkout = |number: u32| PartCheckout {
+            part: Part { mission: 3, number, brief: format!("part {number}"), is_merged: false },
+            path: format!("/wt/3-part-{number}"),
+            branch: format!("mission/3--part-{number}"),
+        };
+        store.add_part(&checkout(2)).unwrap();
+        store.add_part(&checkout(1)).unwrap();
+        store.mark_part_merged(3, 2).unwrap();
+        let parts: Vec<(u32, bool)> = store.parts(3).unwrap().into_iter().map(|checkout| (checkout.part.number, checkout.part.is_merged)).collect();
+        assert_eq!(parts, [(1, false), (2, true)]);
+    }
 
     fn store_with_deployment() -> Store {
         let store = Store::open(Path::new(":memory:")).unwrap();

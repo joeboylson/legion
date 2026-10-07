@@ -5,7 +5,7 @@
 
 import { ActivityDot } from '@/components/ActivityDot'
 import { CommanderCrown } from '@/components/CommanderCrown'
-import { INACTIVE_LABEL, sessionStatus } from '@/lib/format'
+import { INACTIVE_LABEL, sessionStatus, workLabel } from '@/lib/format'
 import { groupedRoster, type RosterEntry } from '@/lib/roster'
 import { cn } from '@/lib/utils'
 
@@ -45,7 +45,7 @@ function PositionCard({ entry: { position, session }, isOpen, onOpen }: Position
       </span>
       <span className="text-muted-foreground">
         {sessionStatus(session)}
-        {session.mission !== null && <span className="font-mono"> · m{session.mission}</span>}
+        {workLabel(session) !== undefined && <span className="font-mono"> · {workLabel(session)}</span>}
       </span>
       {!session.can_see_state && <span className="text-warning">can't see this session's state</span>}
     </button>

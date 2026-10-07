@@ -1,5 +1,7 @@
 //! What each session is told about its job when it starts.
 
+use std::path::Path;
+
 use legion2_proto::{tools::tools_for_position, Entry, Deployment, COMMANDER, NAME};
 
 use crate::{
@@ -43,7 +45,9 @@ Deployment: {name} ({id}), in {folder}, on the {pipeline} pipeline.
 
 You manage the work. When a mission arrives, read it and start the pipeline's first operator on it. When an operator hands off, pass the work to the operator the pipeline table names next: if the sessions tool lists it on this mission already, send it the handoff with the send tool; otherwise start it on the mission, and send nothing more: it reads the handoff in the mission's history as it starts. Don't stop the one that handed off: it waits, idle, and keeps what it learned in case the work comes back to it. When the table names a list of operators, pass the work to all of them at once. Wait until every one of them has handed off before passing it on: if they all pass it, move it to the next step; if any sends it back, gather all their findings and send them together in one message. Once that's fixed, only the ones who found something check it again; the others' passes stand, unless the fix changed what they checked. When an operator reports a mission done, use the finish tool on the mission to move its branch onto the base branch; Legion then ends that mission's sessions. Never report a mission done yourself. Anything sent back as blocked comes to you: unblock it if you can, otherwise ask the human with one line on what's blocking it and what would unblock it. Operators send you their questions about a mission: answer them if you can, otherwise ask the human with the ask tool and pass the answer on with send. Start an operator on a mission with the start tool and the mission's number; don't message the mission to an operator started without one. No one reads your screen: anything for the human goes through the ask tool. When an operator's permission request is refused, allow it at most {MAX_WORKAROUND_ATTEMPTS} attempts at a way around it. You never create missions; only the human does.
 
-How many copies of each operator may run at once: {limits}. When every copy of an operator is taken and one is idle, starting it again ends the idle copy to make room; Legion refuses only when every copy is busy. So start waiting missions as soon as there's room, instead of waiting for earlier missions to finish.
+How many copies of each operator may run at once: {limits}. A mission whose current step is big and breaks into pieces that don't touch the same files can be split with the split tool, one part per line; then start a copy of that step's operator on each part with the start tool's part argument, up to its limit. Legion merges each part into the mission as it's done and tells you when all are in; then pass the mission to the next step as one. Don't split small missions, or steps whose pieces share files.
+
+When every copy of an operator is taken and one is idle, starting it again ends the idle copy to make room; Legion refuses only when every copy is busy. So start waiting missions as soon as there's room, instead of waiting for earlier missions to finish.
 
 The pipeline table:
 {pipeline_text}
@@ -66,12 +70,13 @@ pub struct OperatorBriefing<'a> {
     pub pipeline: &'a Pipeline,
     pub pipeline_text: &'a str,
     pub shared_tools: &'a [SharedTool],
+    pub shared_tools_folder: &'a Path,
     /// The branch a mission's work finishes onto, when the folder is in git.
     pub base_branch: Option<&'a str>,
 }
 
 pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: OperatorBriefing, mission: Option<MissionBriefing>) -> String {
-    let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, base_branch } = briefing;
+    let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch } = briefing;
     // Other missions finish onto the base meanwhile; catching up before a
     // handoff fixes clashes while this one's work is fresh, not at the finish.
     let catch_up = base_branch
@@ -104,7 +109,7 @@ Legion's tools, which already know your deployment and position:
 {tools}
 
 {shared}",
-        shared = shared_tools_section(shared_tools),
+        shared = shared_tools_section(shared_tools, shared_tools_folder),
         deployment_name = deployment.name,
         deployment_id = deployment.id,
         pipeline_name = deployment.pipeline,
@@ -144,6 +149,7 @@ mod tests {
         assert!(prompt.contains("Don't stop the one that handed off"));
         assert!(prompt.contains("send nothing more"));
         assert!(prompt.contains("pass the work to all of them at once"));
+        assert!(prompt.contains("split tool"));
         assert!(prompt.contains("only the ones who found something check it again"));
     }
 
@@ -158,7 +164,7 @@ mod tests {
         let operator = Operator { definition: "# Builder\nBuild it.\n".into(), config: OperatorConfig::default() };
         let briefing = MissionBriefing { number: 3, body: "Make it work", history: &[] };
         let shared = [SharedTool { name: "browser-test.sh".into(), summary: "Runs tests.html.".into() }];
-        let operator_briefing = OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: "", shared_tools: &shared, base_branch: Some("main") };
+        let operator_briefing = OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: "", shared_tools: &shared, shared_tools_folder: Path::new("/repo/.legion2/tools"), base_branch: Some("main") };
         let prompt = operator_prompt("builder-2", &deployment(), operator_briefing, Some(briefing));
         assert!(prompt.starts_with("You are builder-2"));
         assert!(prompt.contains("Build it."));

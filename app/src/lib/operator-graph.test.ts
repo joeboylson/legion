@@ -8,7 +8,7 @@ import type { RosterEntry } from './roster'
 
 const running = (position: string): RosterEntry => ({
   position,
-  session: { deployment: 'd1', position, mission: 7, activity: 'busy', can_see_state: true, detail: null, is_stuck_starting: false, model: null, context_percent: null } satisfies SessionInfo,
+  session: { deployment: 'd1', position, mission: 7, activity: 'busy', can_see_state: true, detail: null, is_stuck_starting: false, model: null, context_percent: null, part: null } satisfies SessionInfo,
 })
 const inactive = (position: string): RosterEntry => ({ position })
 

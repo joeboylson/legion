@@ -21,6 +21,7 @@ mod ids;
 mod log_commands;
 mod machine_settings;
 mod mission_commands;
+mod mission_parts;
 mod mission_status;
 mod naming;
 mod prompts;
@@ -36,6 +37,7 @@ mod stalled_work;
 mod state_lookup;
 mod store;
 mod terminal_key;
+mod tool_sharing;
 mod unreported_turns;
 
 use std::{path::PathBuf, time::Duration};

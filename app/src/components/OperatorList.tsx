@@ -3,7 +3,7 @@
 
 import { ActivityDot } from '@/components/ActivityDot'
 import { CommanderCrown } from '@/components/CommanderCrown'
-import { INACTIVE_LABEL, sessionStatus } from '@/lib/format'
+import { INACTIVE_LABEL, sessionStatus, workLabel } from '@/lib/format'
 import { groupedRoster, type RosterEntry } from '@/lib/roster'
 import { cn } from '@/lib/utils'
 
@@ -37,7 +37,7 @@ export function OperatorList({ roster, onOpen }: OperatorListProps) {
                 </button>
               </td>
               <td>{session === undefined ? INACTIVE_LABEL : sessionStatus(session)}</td>
-              <td className="font-mono">{session?.mission ?? ''}</td>
+              <td className="font-mono">{session === undefined ? '' : (workLabel(session) ?? '')}</td>
             </tr>
           ))}
         </tbody>
