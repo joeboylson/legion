@@ -1,24 +1,33 @@
-// A question for the human, or a decision a session made and carried on
-// with, on a page of its own: the whole text, the mission it's about, and
-// room for a proper answer. A decision can be dismissed instead.
+// A question for the human, a decision a session made and carried on with,
+// or a strategist's suggestion, in a dialog: the whole text, the mission it's
+// about, and room for a proper answer. A decision or suggestion can be
+// dismissed instead.
 
 import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { DISMISSIBLE_KINDS, type Escalation, KIND_LABELS } from '@/lib/escalations'
 import { askFor, askLegion } from '@/lib/legion'
-import type { Escalation } from '@/lib/escalations'
 
-type QuestionPageProps = {
-  question: Escalation
-  onAnswered: () => void
-  onBack: () => void
-  onDismiss: () => void
+type QuestionDialogProps = { question?: Escalation; onClose: () => void; onDismiss: (question: Escalation) => void }
+
+export function QuestionDialog({ question, onClose, onDismiss }: QuestionDialogProps) {
+  return (
+    <Dialog open={question !== undefined} onOpenChange={isOpen => !isOpen && onClose()}>
+      {question !== undefined && <QuestionContent key={question.key} question={question} onClose={onClose} onDismiss={() => onDismiss(question)} />}
+    </Dialog>
+  )
 }
 
-export function QuestionPage({ question, onAnswered, onBack, onDismiss }: QuestionPageProps) {
+type QuestionContentProps = { question: Escalation; onClose: () => void; onDismiss: () => void }
+
+function QuestionContent({ question, onClose, onDismiss }: QuestionContentProps) {
   const isDecision = question.kind === 'decision'
+  const canAnswer = question.questionId !== undefined && !question.isClosed
+  const canDismiss = DISMISSIBLE_KINDS.includes(question.kind)
   const [answer, setAnswer] = useState('')
   const [missionText, setMissionText] = useState<string>()
   const [problem, setProblem] = useState<string>()
@@ -39,7 +48,7 @@ export function QuestionPage({ question, onAnswered, onBack, onDismiss }: Questi
     try {
       const entry = { kind: 'answer' as const, mission: null, to: null, text: answer.trim(), answers: question.questionId }
       await askLegion({ type: 'post', deployment: question.deploymentId, entry })
-      onAnswered()
+      onClose()
     } catch (error) {
       setProblem(String(error))
     } finally {
@@ -50,27 +59,31 @@ export function QuestionPage({ question, onAnswered, onBack, onDismiss }: Questi
   const askedBy = [question.position, question.deploymentName, question.mission === undefined ? undefined : `mission ${question.mission}`]
     .filter(Boolean)
     .join(' · ')
+  const dismissButton = canDismiss && (
+    <Button type="button" variant="ghost" onClick={onDismiss}>
+      Dismiss
+    </Button>
+  )
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <header className="flex items-center gap-4 border-b border-border px-4 py-3">
-        <Button variant="ghost" size="sm" onClick={onBack}>
-          ← Back
-        </Button>
-        <span className="label">{isDecision ? 'Decision' : 'Question'}</span>
-        <span className="font-mono text-label text-muted-foreground">{askedBy}</span>
-      </header>
+    <DialogContent className="max-h-[calc(100vh-var(--space-8))] overflow-auto sm:max-w-[var(--measure)]">
+      <DialogHeader>
+        <DialogTitle className="flex items-baseline gap-3 font-normal">
+          <span className="label">{KIND_LABELS[question.kind]}</span>
+          <span className="font-mono text-label text-muted-foreground">{askedBy}</span>
+        </DialogTitle>
+      </DialogHeader>
 
-      <div className="flex max-w-[var(--measure)] flex-col gap-5 p-5">
-        <p className="whitespace-pre-wrap text-lead">{question.text}</p>
+      <p className="m-0 whitespace-pre-wrap text-lead">{question.text}</p>
 
-        {missionText !== undefined && (
-          <section className="flex flex-col gap-2">
-            <span className="label">The mission</span>
-            <p className="whitespace-pre-wrap rounded-lg border border-border bg-layer-1 p-4 text-muted-foreground">{missionText}</p>
-          </section>
-        )}
+      {missionText !== undefined && (
+        <section className="flex flex-col gap-2">
+          <span className="label">The mission</span>
+          <p className="m-0 max-h-[var(--panel)] overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-layer-1 p-4 text-muted-foreground">{missionText}</p>
+        </section>
+      )}
 
+      {canAnswer ? (
         <form
           className="flex flex-col gap-3"
           onSubmit={event => {
@@ -85,18 +98,19 @@ export function QuestionPage({ question, onAnswered, onBack, onDismiss }: Questi
             <Button type="submit" disabled={!hasAnswer || isSending}>
               Send answer
             </Button>
-            {isDecision ? (
-              <Button type="button" variant="ghost" onClick={onDismiss}>
-                Dismiss
-              </Button>
-            ) : (
-              <Button type="button" variant="ghost" onClick={onBack}>
+            {dismissButton || (
+              <Button type="button" variant="ghost" onClick={onClose}>
                 Not now
               </Button>
             )}
           </div>
         </form>
-      </div>
-    </div>
+      ) : (
+        <div className="flex items-center gap-3">
+          {question.isClosed && <p className="m-0 text-muted-foreground">Its deployment is closed, so no one is left to read an answer.</p>}
+          {dismissButton}
+        </div>
+      )}
+    </DialogContent>
   )
 }

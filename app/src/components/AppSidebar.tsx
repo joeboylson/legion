@@ -1,15 +1,18 @@
 // The sidebar, built from shadcn's Sidebar: each local folder, and under it
-// its deployments (each with what it has escalated), pipelines and operators.
-// Every level folds like a file tree.
+// its deployments, pipelines and operators. Each deployment holds its active
+// operators, questions, decisions, missions and mission templates. Every
+// level folds like a file tree. A blocker is marked on the deepest row you
+// can see, and every one is listed together on the Blockers page.
 
-import { ChevronRight, Settings, X } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ChevronRight, Settings, SquareArrowOutUpRight, TriangleAlert, X } from 'lucide-react'
+import { createContext, type ReactNode, useContext, useMemo } from 'react'
 
 import { ActivityDot } from '@/components/ActivityDot'
 import { CommanderCrown } from '@/components/CommanderCrown'
 import { DeploymentMenu } from '@/components/DeploymentMenu'
 import { NewProjectDialog } from '@/components/NewProjectDialog'
 import { StartDeploymentDialog } from '@/components/StartDeploymentDialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
@@ -17,7 +20,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -27,21 +29,19 @@ import {
 } from '@/components/ui/sidebar'
 import type { Deployment } from '@/generated/Deployment'
 import type { Folder } from '@/generated/Folder'
-import { DISMISSIBLE_KINDS, type DeploymentSnapshot, type Escalation, type EscalationKind } from '@/lib/escalations'
-import { INACTIVE_LABEL, isWorking, pipelineTag, sessionStatus, workingDotColor } from '@/lib/format'
+import type { Mission } from '@/generated/Mission'
+import { OpenRowsContext, useOpenRowsState, useRowOpen } from '@/hooks/useOpenRows'
+import { DEPLOYMENTS_SECTION, markedRows, blockersIn, BLOCKER_KINDS, OPERATOR_KINDS, OPERATORS_PART, rowKeys } from '@/lib/blockers'
+import { DISMISSIBLE_KINDS, type DeploymentSnapshot, type Escalation, type EscalationKind, KIND_LABELS } from '@/lib/escalations'
+import { INACTIVE_LABEL, isWorking, MISSION_STATUS_LABELS, pipelineTag, sessionStatus, workingDotColor } from '@/lib/format'
 import { byOperatorOrder, type RosterEntry, rosterOf } from '@/lib/roster'
-import type { FolderTab } from '@/lib/selection'
+import { type DeploymentPart, type FolderTab, BLOCKERS_KEY } from '@/lib/tabs'
 import { cn } from '@/lib/utils'
 
-const KIND_LABELS: Record<EscalationKind, string> = {
-  stuck: 'start',
-  permission: 'permission',
-  question: 'question',
-  blocked: 'blocked',
-  limit: 'usage limit',
-  decision: 'decision',
-  suggestion: 'suggestion',
-}
+// The border round each folder and the Blockers button, each a block of its
+// own: the muted text color at half strength, brighter than the usual line.
+const BOXED = 'rounded-lg border p-1'
+const BOX_BORDER = 'border-[color-mix(in_srgb,var(--fg-muted)_50%,transparent)]'
 
 // A little room between items (3px), and every level reaches the same right
 // edge so the action column lines up.
@@ -53,9 +53,12 @@ type AppSidebarProps = {
   escalations: readonly Escalation[]
   selectedKey?: string
   onFolderAdded: () => void
+  onOpenBlockers: () => void
   onOpenFolder: (folder: Folder, tab?: FolderTab) => void
   onSelectDeployment: (deployment: Deployment) => void
   onOpenOperator: (deployment: Deployment, position: string) => void
+  onOpenPart: (deployment: Deployment, part: DeploymentPart) => void
+  onOpenMission: (deployment: Deployment, mission: Mission) => void
   onOpenEscalation: (escalation: Escalation) => void
   onDismissEscalation: (escalation: Escalation) => void
 }
@@ -66,20 +69,75 @@ const TURNS_WHEN_OPEN = {
   folder: 'group-data-[state=open]/folder:rotate-90',
   section: 'group-data-[state=open]/section:rotate-90',
   deployment: 'group-data-[state=open]/deployment:rotate-90',
+  part: 'group-data-[state=open]/part:rotate-90',
+} as const
+
+// A section's own group name, so a chevron turns only with its own section:
+// a deployment's parts sit inside the folder's Deployments section.
+const SECTION_GROUPS = {
+  section: 'group/section',
+  part: 'group/part',
 } as const
 
 function Chevron({ group }: { group: keyof typeof TURNS_WHEN_OPEN }) {
   return <ChevronRight className={`size-4 flex-none transition-transform ${TURNS_WHEN_OPEN[group]}`} />
 }
 
-// Every row: its button, then one fixed-width slot for an action (or
-// nothing), so actions and counts line up down the whole tree.
-function Row({ children, action }: { children: ReactNode; action?: ReactNode }) {
+// Each marked row and what it carries, and where its mark leads.
+type Marks = { rows: ReadonlyMap<string, readonly Escalation[]>; onOpen: () => void }
+const MarksContext = createContext<Marks>({ rows: new Map(), onOpen: () => undefined })
+
+// The blockers under this row, while the row hides them (or its own).
+// Click it for the Blockers page.
+function BlockerMark({ rowKey }: { rowKey: string }) {
+  const marks = useContext(MarksContext)
+  const items = marks.rows.get(rowKey) ?? []
+  if (items.length === 0) return null
+  const list = items.map(item => `${KIND_LABELS[item.kind]} · ${item.position ?? ''}: ${item.text}`).join('\n')
+  return (
+    <button type="button" aria-label={`${items.length} blocked`} title={list} className="flex-none" onClick={marks.onOpen}>
+      <AlertMark count={items.length} />
+    </button>
+  )
+}
+
+// A warning sign with its count in a red bubble on its corner, as on a
+// notification. The bubble sits above the rows around it, and its parent
+// must not clip (a menu button's last span is truncated, so it goes after
+// the button, not in it).
+function AlertMark({ count }: { count: number }) {
+  return (
+    <span className="relative flex size-5 items-center justify-center text-warning">
+      <TriangleAlert className="size-4" />
+      <Badge
+        variant="destructive"
+        className="absolute -top-1.5 -right-2 z-10 h-4 min-w-4 px-1 py-0 font-mono leading-none tabular-nums dark:bg-destructive"
+      >
+        {count}
+      </Badge>
+    </span>
+  )
+}
+
+// Every row: its button, its mark if anything under it is blocked, then one
+// fixed-width slot for an action (or nothing), so actions and counts line up
+// down the whole tree.
+function Row({ rowKey, children, action }: { rowKey?: string; children: ReactNode; action?: ReactNode }) {
   return (
     <div className="flex items-center gap-1">
       <div className="min-w-0 flex-1">{children}</div>
+      {rowKey !== undefined && <BlockerMark rowKey={rowKey} />}
       <span className="flex size-5 flex-none items-center justify-center">{action}</span>
     </div>
+  )
+}
+
+// Marks a row with nothing under it, set apart from the rows that fold.
+function LeafMark() {
+  return (
+    <span aria-hidden className="flex-none text-muted-foreground">
+      —
+    </span>
   )
 }
 
@@ -87,18 +145,20 @@ function Count({ value }: { value: number }) {
   return <span className="ml-auto flex-none font-mono text-label text-muted-foreground">{value}</span>
 }
 
-type SectionProps = { label: string; count: number; action?: ReactNode; children: ReactNode }
+type SectionProps = { rowKey: string; label: string; count: number; group?: keyof typeof SECTION_GROUPS; action?: ReactNode; children?: ReactNode }
 
-// A group under a folder (deployments, pipelines …): a row that folds, and its items.
-function Section({ label, count, action, children }: SectionProps) {
+// A group under a folder (deployments, pipelines …) or a deployment
+// (questions, missions …): a row that folds, and its items.
+function Section({ rowKey, label, count, group = 'section', action, children }: SectionProps) {
+  const openProps = useRowOpen(rowKey)
   return (
-    <Collapsible asChild className="group/section">
+    <Collapsible asChild className={SECTION_GROUPS[group]} {...openProps}>
       <SidebarMenuSubItem>
-        <Row action={action}>
+        <Row rowKey={rowKey} action={action}>
           <CollapsibleTrigger asChild>
             <SidebarMenuSubButton asChild>
               <button type="button" className="w-full">
-                <Chevron group="section" />
+                <Chevron group={group} />
                 <span className="label">{label}</span>
                 <Count value={count} />
               </button>
@@ -122,6 +182,7 @@ function SetupRow({ name, onOpen }: { name: string; onOpen: () => void }) {
       <Row>
         <SidebarMenuSubButton asChild>
           <button type="button" className="w-full font-mono" onClick={onOpen}>
+            <LeafMark />
             {name}
           </button>
         </SidebarMenuSubButton>
@@ -130,27 +191,8 @@ function SetupRow({ name, onOpen }: { name: string; onOpen: () => void }) {
   )
 }
 
-// A closed deployment, listed after the open ones: opens it to read its
-// missions and log.
-function PastDeploymentRow({ deployment, isSelected, onOpen }: { deployment: Deployment; isSelected: boolean; onOpen: () => void }) {
-  return (
-    <SidebarMenuSubItem>
-      <Row>
-        <div className="flex items-center">
-          {/* Where an open deployment's chevron sits, so the names line up. */}
-          <span className="size-4 flex-none" />
-          <SidebarMenuSubButton asChild isActive={isSelected}>
-            <button type="button" className="w-full text-muted-foreground" onClick={onOpen}>
-              <ActivityDot />
-              <span className="truncate">{deployment.name}</span>
-              <span className="ml-auto flex-none font-mono text-label">{pipelineTag(deployment.pipeline)}</span>
-            </button>
-          </SidebarMenuSubButton>
-        </div>
-      </Row>
-    </SidebarMenuSubItem>
-  )
-}
+// Their section already says what they are; the rest of Questions are mixed.
+const UNLABELLED_KINDS: readonly EscalationKind[] = ['question', 'decision']
 
 type EscalationRowProps = { escalation: Escalation; isSelected: boolean; onOpen: () => void; onDismiss: () => void }
 
@@ -166,7 +208,8 @@ function EscalationRow({ escalation, isSelected, onOpen, onDismiss }: Escalation
       <Row action={dismiss}>
         <SidebarMenuSubButton asChild isActive={isSelected}>
           <button type="button" className="w-full" onClick={onOpen}>
-            <span className="flex-none font-mono text-label text-muted-foreground">{KIND_LABELS[escalation.kind]}</span>
+            <LeafMark />
+            {!UNLABELLED_KINDS.includes(escalation.kind) && <span className="flex-none font-mono text-label text-muted-foreground">{KIND_LABELS[escalation.kind]}</span>}
             <span className="truncate">{escalation.text}</span>
           </button>
         </SidebarMenuSubButton>
@@ -179,21 +222,23 @@ type DeploymentRowProps = {
   snapshot: DeploymentSnapshot
   escalations: readonly Escalation[]
   selectedKey?: string
-  onSelect: () => void
   onOpenOperator: (position: string) => void
+  onOpenPart: (part: DeploymentPart) => void
+  onOpenMission: (mission: Mission) => void
   onOpenEscalation: (escalation: Escalation) => void
   onDismissEscalation: (escalation: Escalation) => void
 }
 
 // An operator in the deployment: its activity, or "inactive" when its
 // pipeline names it but no session is running.
-function OperatorRow({ entry, onOpen }: { entry: RosterEntry; onOpen: () => void }) {
+function OperatorRow({ deploymentId, entry, onOpen }: { deploymentId: string; entry: RosterEntry; onOpen: () => void }) {
   const label = entry.session === undefined ? INACTIVE_LABEL : sessionStatus(entry.session)
   return (
     <SidebarMenuSubItem>
-      <Row>
+      <Row rowKey={rowKeys.operator(deploymentId, entry.position)}>
         <SidebarMenuSubButton asChild>
           <button type="button" className={cn('w-full', entry.session === undefined && 'text-muted-foreground')} onClick={onOpen} title={label}>
+            <LeafMark />
             <ActivityDot session={entry.session} />
             <span className="truncate font-mono">{entry.position}</span>
             <CommanderCrown position={entry.position} />
@@ -205,57 +250,100 @@ function OperatorRow({ entry, onOpen }: { entry: RosterEntry; onOpen: () => void
   )
 }
 
-// A deployment, and under it its operators (each with its activity's color)
-// and what it has escalated. The chevron folds them; the name opens it.
-function DeploymentRow({ snapshot, escalations, selectedKey, onSelect, onOpenOperator, onOpenEscalation, onDismissEscalation }: DeploymentRowProps) {
-  const isActive = isWorking(snapshot.sessions)
-  const roster = rosterOf(snapshot.sessions, snapshot.pipelineOperators)
-  const hasChildren = roster.length > 0 || escalations.length > 0
+// Opens one of a deployment's parts in its own tab.
+function OpenTabButton({ label, onOpen }: { label: string; onOpen: () => void }) {
   return (
-    <Collapsible asChild className="group/deployment">
+    <Button variant="ghost" size="icon-xs" aria-label={`Open ${label} in a tab`} title="Open in a tab" onClick={onOpen}>
+      <SquareArrowOutUpRight className="size-4" />
+    </Button>
+  )
+}
+
+// A mission in the deployment: opens the deployment's missions in a tab,
+// and the mission over it.
+function MissionRow({ mission, onOpen }: { mission: Mission; onOpen: () => void }) {
+  const status = MISSION_STATUS_LABELS[mission.status]
+  return (
+    <SidebarMenuSubItem>
+      <Row>
+        <SidebarMenuSubButton asChild>
+          <button type="button" className={cn('w-full', mission.status === 'done' && 'text-muted-foreground')} onClick={onOpen} title={mission.title}>
+            <LeafMark />
+            <span className="flex-none font-mono text-label text-muted-foreground">{mission.number}</span>
+            <span className="truncate">{mission.title}</span>
+            <span className="ml-auto flex-none text-label text-muted-foreground">{status}</span>
+          </button>
+        </SidebarMenuSubButton>
+      </Row>
+    </SidebarMenuSubItem>
+  )
+}
+
+// A deployment, and under it its parts: assigned operators (each with its
+// activity's color), questions, decisions, missions and mission templates.
+// The whole row folds them. A closed one is greyed, with
+// nothing to start or stop.
+function DeploymentRow(props: DeploymentRowProps) {
+  const { snapshot, escalations, selectedKey, onOpenOperator, onOpenPart, onOpenMission, onOpenEscalation, onDismissEscalation } = props
+  const openProps = useRowOpen(rowKeys.deployment(snapshot.deployment.id))
+  const partKey = (part: string) => rowKeys.deploymentPart(snapshot.deployment.id, part)
+  const isActive = isWorking(snapshot.sessions)
+  const isClosed = snapshot.deployment.closed_ms !== null
+  const roster = rosterOf(snapshot.sessions, snapshot.pipelineOperators)
+  // Decisions don't hold anyone up; a session's state shows on its operator.
+  const decisions = escalations.filter(escalation => escalation.kind === 'decision')
+  const questions = escalations.filter(escalation => escalation.kind !== 'decision' && !OPERATOR_KINDS.includes(escalation.kind))
+  const waitingCount = escalations.filter(escalation => !BLOCKER_KINDS.includes(escalation.kind)).length
+  const escalationRow = (escalation: Escalation) => (
+    <EscalationRow
+      key={escalation.key}
+      escalation={escalation}
+      isSelected={selectedKey === escalation.key}
+      onOpen={() => onOpenEscalation(escalation)}
+      onDismiss={() => onDismissEscalation(escalation)}
+    />
+  )
+  return (
+    <Collapsible asChild className="group/deployment" {...openProps}>
       <SidebarMenuSubItem>
-        <Row action={<DeploymentMenu deployment={snapshot.deployment} sessions={snapshot.sessions} />}>
-          <div className="flex items-center">
-            {hasChildren ? (
-              <CollapsibleTrigger asChild>
-                <button type="button" className="flex-none" aria-label={`Show ${snapshot.deployment.name}'s operators and escalations`}>
-                  <Chevron group="deployment" />
-                </button>
-              </CollapsibleTrigger>
-            ) : (
-              <span className="size-4 flex-none" />
-            )}
+        <Row rowKey={rowKeys.deployment(snapshot.deployment.id)} action={isClosed ? undefined : <DeploymentMenu deployment={snapshot.deployment} sessions={snapshot.sessions} />}>
+          <CollapsibleTrigger asChild>
             <SidebarMenuSubButton asChild isActive={selectedKey === `deployment:${snapshot.deployment.id}`}>
-              <button type="button" className="w-full" onClick={onSelect}>
-                <span className="dot flex-none" style={{ color: workingDotColor(isActive) }} />
+              <button type="button" className={cn('w-full', isClosed && 'text-muted-foreground')}>
+                <Chevron group="deployment" />
+                {isClosed ? <ActivityDot /> : <span className="dot flex-none" style={{ color: workingDotColor(isActive) }} />}
                 <span className="truncate">{snapshot.deployment.name}</span>
-                {escalations.length > 0 ? (
-                  <span className="count ml-auto">{escalations.length}</span>
+                {waitingCount > 0 ? (
+                  <span className="count ml-auto">{waitingCount}</span>
                 ) : (
                   <span className="ml-auto flex-none font-mono text-label text-muted-foreground">{pipelineTag(snapshot.deployment.pipeline)}</span>
                 )}
               </button>
             </SidebarMenuSubButton>
-          </div>
+          </CollapsibleTrigger>
         </Row>
-        {hasChildren && (
-          <CollapsibleContent>
-            <SidebarMenuSub className={TIGHT_SUBMENU}>
+        <CollapsibleContent>
+          <SidebarMenuSub className={TIGHT_SUBMENU}>
+            <Section group="part" rowKey={partKey(OPERATORS_PART)} label="Assigned operators" action={<OpenTabButton label="assigned operators" onOpen={() => onOpenPart('operators')} />} count={roster.length}>
               {roster.map(entry => (
-                <OperatorRow key={entry.position} entry={entry} onOpen={() => onOpenOperator(entry.position)} />
+                <OperatorRow key={entry.position} deploymentId={snapshot.deployment.id} entry={entry} onOpen={() => onOpenOperator(entry.position)} />
               ))}
-              {escalations.map(escalation => (
-                <EscalationRow
-                  key={escalation.key}
-                  escalation={escalation}
-                  isSelected={selectedKey === escalation.key}
-                  onOpen={() => onOpenEscalation(escalation)}
-                  onDismiss={() => onDismissEscalation(escalation)}
-                />
+            </Section>
+            <Section group="part" rowKey={partKey('questions')} label="Questions" action={<OpenTabButton label="questions" onOpen={() => onOpenPart('questions')} />} count={questions.length}>
+              {questions.map(escalationRow)}
+            </Section>
+            <Section group="part" rowKey={partKey('decisions')} label="Decisions" action={<OpenTabButton label="decisions" onOpen={() => onOpenPart('decisions')} />} count={decisions.length}>
+              {decisions.map(escalationRow)}
+            </Section>
+            <Section group="part" rowKey={partKey('missions')} label="Missions" action={<OpenTabButton label="missions" onOpen={() => onOpenPart('missions')} />} count={snapshot.missions.length}>
+              {snapshot.missions.map(mission => (
+                <MissionRow key={mission.number} mission={mission} onOpen={() => onOpenMission(mission)} />
               ))}
-            </SidebarMenuSub>
-          </CollapsibleContent>
-        )}
+            </Section>
+            {/* Filled in once mission templates exist. */}
+            <Section group="part" rowKey={partKey('mission templates')} label="Mission templates" action={<OpenTabButton label="mission templates" onOpen={() => onOpenPart('templates')} />} count={0} />
+          </SidebarMenuSub>
+        </CollapsibleContent>
       </SidebarMenuSubItem>
     </Collapsible>
   )
@@ -263,86 +351,117 @@ function DeploymentRow({ snapshot, escalations, selectedKey, onSelect, onOpenOpe
 
 export function AppSidebar(props: AppSidebarProps) {
   const { folders, snapshots, escalations, selectedKey } = props
+  const openRows = useOpenRowsState()
+  const { onOpenBlockers } = props
+  const marks = useMemo<Marks>(() => ({ rows: markedRows(escalations, openRows.isOpen), onOpen: onOpenBlockers }), [escalations, openRows.isOpen, onOpenBlockers])
+  const blockerCount = blockersIn(escalations).length
   return (
-    <Sidebar collapsible="none" className="h-full">
-      <SidebarHeader>
-        <NewProjectDialog onAdded={props.onFolderAdded} />
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel className="label">Local folders</SidebarGroupLabel>
-          {/* 21px between folders, so each reads as its own block. */}
-          <SidebarMenu className="gap-5">
-            {folders.map(folder => {
-              const inFolder = snapshots.filter(snapshot => snapshot.deployment.folder === folder.path)
-              const deployments = inFolder.filter(snapshot => snapshot.deployment.closed_ms === null)
-              const pastDeployments = inFolder
-                .map(snapshot => snapshot.deployment)
-                .filter(deployment => deployment.closed_ms !== null)
-                .sort((first, second) => second.started_ms - first.started_ms)
-              const folderEscalations = escalations.filter(escalation => escalation.folderPath === folder.path)
-              const isFolderActive = deployments.some(snapshot => isWorking(snapshot.sessions))
-              const settingsButton = (
-                <Button variant="ghost" size="icon-xs" aria-label={`${folder.name}'s settings and setup`} title="Settings and setup" onClick={() => props.onOpenFolder(folder)}>
-                  <Settings className="size-4" />
-                </Button>
-              )
-              return (
-                <Collapsible key={folder.path} asChild className="group/folder">
-                  <SidebarMenuItem>
-                    <Row action={settingsButton}>
-                      <CollapsibleTrigger asChild>
-                        <SidebarMenuButton isActive={selectedKey === `folder:${folder.path}`}>
-                          <Chevron group="folder" />
-                          <span className="dot flex-none" style={{ color: workingDotColor(isFolderActive) }} />
-                          <span className="truncate font-medium">{folder.name}</span>
-                          {folderEscalations.length > 0 && <span className="count ml-auto">{folderEscalations.length}</span>}
-                        </SidebarMenuButton>
-                      </CollapsibleTrigger>
-                    </Row>
-                    <CollapsibleContent>
-                      <SidebarMenuSub className={TIGHT_SUBMENU}>
-                        <Section label="Deployments" count={deployments.length + pastDeployments.length} action={<StartDeploymentDialog folder={folder} onStarted={props.onSelectDeployment} />}>
-                          {deployments.map(snapshot => (
-                            <DeploymentRow
-                              key={snapshot.deployment.id}
-                              snapshot={snapshot}
-                              escalations={folderEscalations.filter(escalation => escalation.deploymentId === snapshot.deployment.id)}
-                              selectedKey={selectedKey}
-                              onSelect={() => props.onSelectDeployment(snapshot.deployment)}
-                              onOpenOperator={position => props.onOpenOperator(snapshot.deployment, position)}
-                              onOpenEscalation={props.onOpenEscalation}
-                              onDismissEscalation={props.onDismissEscalation}
-                            />
-                          ))}
-                          {pastDeployments.map(deployment => (
-                            <PastDeploymentRow
-                              key={deployment.id}
-                              deployment={deployment}
-                              isSelected={selectedKey === `deployment:${deployment.id}`}
-                              onOpen={() => props.onSelectDeployment(deployment)}
-                            />
-                          ))}
-                        </Section>
-                        <Section label="Pipelines" count={folder.pipelines.length}>
-                          {folder.pipelines.map(pipeline => (
-                            <SetupRow key={pipeline} name={pipeline} onOpen={() => props.onOpenFolder(folder, 'pipelines')} />
-                          ))}
-                        </Section>
-                        <Section label="Operators" count={folder.operators.length}>
-                          {[...folder.operators].sort(byOperatorOrder).map(operator => (
-                            <SetupRow key={operator} name={operator} onOpen={() => props.onOpenFolder(folder, 'operators')} />
-                          ))}
-                        </Section>
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
-                  </SidebarMenuItem>
-                </Collapsible>
-              )
-            })}
-          </SidebarMenu>
-        </SidebarGroup>
-      </SidebarContent>
-    </Sidebar>
+    <OpenRowsContext value={openRows}>
+      <MarksContext value={marks}>
+        <Sidebar collapsible="none" className="h-full">
+          <SidebarContent>
+            <SidebarGroup>
+              <SidebarMenu>
+                <SidebarMenuItem className={cn(BOXED, blockerCount > 0 ? 'border-[var(--yellow)]' : BOX_BORDER)}>
+                  <Row
+                    action={
+                      blockerCount > 0 && (
+                        <button type="button" aria-label={`${blockerCount} blocked`} onClick={props.onOpenBlockers}>
+                          <AlertMark count={blockerCount} />
+                        </button>
+                      )
+                    }
+                  >
+                    <SidebarMenuButton isActive={selectedKey === BLOCKERS_KEY} onClick={props.onOpenBlockers}>
+                      <span className="font-medium">Blockers</span>
+                    </SidebarMenuButton>
+                  </Row>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroup>
+            <SidebarGroup>
+              {/* Inset like a folder's border, so the plus lines up with the folders' buttons. */}
+              <div className="border border-transparent px-1">
+                <Row action={<NewProjectDialog onAdded={props.onFolderAdded} />}>
+                  <SidebarGroupLabel className="label">Local folders</SidebarGroupLabel>
+                </Row>
+              </div>
+              <SidebarMenu>
+                {folders.map(folder => {
+                  const inFolder = snapshots.filter(snapshot => snapshot.deployment.folder === folder.path)
+                  const deployments = inFolder.filter(snapshot => snapshot.deployment.closed_ms === null)
+                  // Closed ones after the open ones, newest first.
+                  const pastDeployments = inFolder
+                    .filter(snapshot => snapshot.deployment.closed_ms !== null)
+                    .sort((first, second) => second.deployment.started_ms - first.deployment.started_ms)
+                  const folderEscalations = escalations.filter(escalation => escalation.folderPath === folder.path)
+                  // What waits on you now, not what closed deployments left; what
+                  // stops the work has its own mark.
+                  const waitingCount = folderEscalations.filter(escalation => !escalation.isClosed && !BLOCKER_KINDS.includes(escalation.kind)).length
+                  const isFolderActive = deployments.some(snapshot => isWorking(snapshot.sessions))
+                  const settingsButton = (
+                    <Button variant="ghost" size="icon-xs" aria-label={`${folder.name}'s settings and setup`} title="Settings and setup" onClick={() => props.onOpenFolder(folder)}>
+                      <Settings className="size-4" />
+                    </Button>
+                  )
+                  return (
+                    <Collapsible
+                      key={folder.path}
+                      asChild
+                      className="group/folder"
+                      open={openRows.isOpen(rowKeys.folder(folder.path))}
+                      onOpenChange={isOpen => openRows.setOpen(rowKeys.folder(folder.path), isOpen)}
+                    >
+                      {/* A border round each folder, so its whole tree reads as one block. */}
+                      <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
+                        <Row rowKey={rowKeys.folder(folder.path)} action={settingsButton}>
+                          <CollapsibleTrigger asChild>
+                            <SidebarMenuButton isActive={selectedKey === `folder:${folder.path}`}>
+                              <Chevron group="folder" />
+                              <span className="dot flex-none" style={{ color: workingDotColor(isFolderActive) }} />
+                              <span className="truncate font-medium">{folder.name}</span>
+                              {waitingCount > 0 && <span className="count ml-auto">{waitingCount}</span>}
+                            </SidebarMenuButton>
+                          </CollapsibleTrigger>
+                        </Row>
+                        <CollapsibleContent>
+                          <SidebarMenuSub className={TIGHT_SUBMENU}>
+                            <Section rowKey={rowKeys.folderSection(folder.path, DEPLOYMENTS_SECTION)} label="Deployments" count={deployments.length + pastDeployments.length} action={<StartDeploymentDialog folder={folder} onStarted={props.onSelectDeployment} />}>
+                              {[...deployments, ...pastDeployments].map(snapshot => (
+                                <DeploymentRow
+                                  key={snapshot.deployment.id}
+                                  snapshot={snapshot}
+                                  escalations={folderEscalations.filter(escalation => escalation.deploymentId === snapshot.deployment.id)}
+                                  selectedKey={selectedKey}
+                                  onOpenOperator={position => props.onOpenOperator(snapshot.deployment, position)}
+                                  onOpenPart={part => props.onOpenPart(snapshot.deployment, part)}
+                                  onOpenMission={mission => props.onOpenMission(snapshot.deployment, mission)}
+                                  onOpenEscalation={props.onOpenEscalation}
+                                  onDismissEscalation={props.onDismissEscalation}
+                                />
+                              ))}
+                            </Section>
+                            <Section rowKey={rowKeys.folderSection(folder.path, 'pipelines')} label="Pipelines" count={folder.pipelines.length}>
+                              {folder.pipelines.map(pipeline => (
+                                <SetupRow key={pipeline} name={pipeline} onOpen={() => props.onOpenFolder(folder, 'pipelines')} />
+                              ))}
+                            </Section>
+                            <Section rowKey={rowKeys.folderSection(folder.path, 'operators')} label="Operators" count={folder.operators.length}>
+                              {[...folder.operators].sort(byOperatorOrder).map(operator => (
+                                <SetupRow key={operator} name={operator} onOpen={() => props.onOpenFolder(folder, 'operators')} />
+                              ))}
+                            </Section>
+                          </SidebarMenuSub>
+                        </CollapsibleContent>
+                      </SidebarMenuItem>
+                    </Collapsible>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroup>
+          </SidebarContent>
+        </Sidebar>
+      </MarksContext>
+    </OpenRowsContext>
   )
 }

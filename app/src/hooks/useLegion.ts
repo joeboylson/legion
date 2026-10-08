@@ -39,11 +39,8 @@ const loadDeploymentSnapshot = async (
   const sessions = allSessions.filter(session => session.deployment === deployment.id)
   const pipeline = pipelines.get(deployment.folder)?.get(deployment.pipeline)
   const isOpen = deployment.closed_ms === null
-  if (!isOpen) {
-    // Closed: its missions are still worth reading; nothing in it waits on the human.
-    const { missions } = await askFor('missions', { type: 'mission_list', deployment: deployment.id })
-    return { deployment, sessions, pipelineOperators: pipeline?.operators ?? [], pipelineSteps: pipeline?.decisions ?? [], missions, openQuestions: [], suggestions: [] }
-  }
+  // Closed: its missions, and the questions left unanswered when it closed,
+  // are still worth reading; its suggestions went to a commander that's gone.
   const [missionsReply, questionsReply, suggestionsReply] = await Promise.all([
     askFor('missions', { type: 'mission_list', deployment: deployment.id }),
     askFor('entries', {
@@ -51,11 +48,13 @@ const loadDeploymentSnapshot = async (
       deployment: deployment.id,
       filter: { mission: null, position: null, kinds: null, since_ms: null, open_questions: true },
     }),
-    askFor('entries', {
-      type: 'log',
-      deployment: deployment.id,
-      filter: { mission: null, position: null, kinds: ['suggestion'], since_ms: null, open_questions: false },
-    }),
+    isOpen
+      ? askFor('entries', {
+          type: 'log',
+          deployment: deployment.id,
+          filter: { mission: null, position: null, kinds: ['suggestion'], since_ms: null, open_questions: false },
+        })
+      : { entries: [] },
   ])
   return {
     deployment,

@@ -1,9 +1,10 @@
 // The Operators tab: the deployment's operators as a live graph, a list or
-// a grid of cards, switched at the top.
+// a grid of cards, or the log of what they've said, switched at the top.
 
-import { LayoutGrid, List, Network } from 'lucide-react'
+import { LayoutGrid, List, Network, ScrollText } from 'lucide-react'
 import { useState } from 'react'
 
+import { LogTab } from '@/components/LogTab'
 import { OperatorGraph } from '@/components/OperatorGraph'
 import { OperatorList } from '@/components/OperatorList'
 import { PositionCards } from '@/components/PositionCards'
@@ -16,11 +17,12 @@ const VIEW_CHOICES: readonly { view: OperatorsView; label: string; icon: typeof 
   { view: 'graph', label: 'Graph', icon: Network },
   { view: 'list', label: 'List', icon: List },
   { view: 'grid', label: 'Grid', icon: LayoutGrid },
+  { view: 'log', label: 'Log', icon: ScrollText },
 ]
 
-type OperatorsPaneProps = { snapshot: DeploymentSnapshot; openPosition?: string; onOpen: (position: string) => void }
+type OperatorsPaneProps = { snapshot: DeploymentSnapshot; changeCount: number; openPosition?: string; onOpen: (position: string) => void }
 
-export function OperatorsPane({ snapshot, openPosition, onOpen }: OperatorsPaneProps) {
+export function OperatorsPane({ snapshot, changeCount, openPosition, onOpen }: OperatorsPaneProps) {
   const [view, setView] = useState<OperatorsView>(readOperatorsView)
   const roster = rosterOf(snapshot.sessions, snapshot.pipelineOperators)
   const chooseView = (value: string) => {
@@ -41,6 +43,7 @@ export function OperatorsPane({ snapshot, openPosition, onOpen }: OperatorsPaneP
       {view === 'graph' && <OperatorGraph deploymentId={snapshot.deployment.id} roster={roster} steps={snapshot.pipelineSteps} pipelineOrder={snapshot.pipelineOperators} onOpen={onOpen} />}
       {view === 'list' && <OperatorList roster={roster} onOpen={onOpen} />}
       {view === 'grid' && <PositionCards roster={roster} openPosition={openPosition} onOpen={onOpen} />}
+      {view === 'log' && <LogTab deploymentId={snapshot.deployment.id} changeCount={changeCount} />}
     </div>
   )
 }

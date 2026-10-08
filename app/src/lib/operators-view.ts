@@ -1,6 +1,7 @@
-// Which way the Operators tab shows its operators, remembered per viewer.
+// Which way the Operators tab shows its operators (or their log),
+// remembered per viewer.
 
-export const OPERATORS_VIEWS = ['graph', 'list', 'grid'] as const
+export const OPERATORS_VIEWS = ['graph', 'list', 'grid', 'log'] as const
 export type OperatorsView = (typeof OPERATORS_VIEWS)[number]
 
 const STORAGE_KEY = 'legion.operatorsView'

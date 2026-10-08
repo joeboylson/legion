@@ -95,9 +95,11 @@ describe('escalationsIn', () => {
     expect(escalationsIn([snapshot({ openQuestions: [entry(9, 'decision', 'Used SQLite')] })], new Set(['decision:9']))).toEqual([])
   })
 
-  it('leaves out closed deployments', () => {
+  it('marks what a closed deployment left unanswered as closed', () => {
     const closedDeployment = { ...deployment, closed_ms: 1 }
-    expect(escalationsIn([snapshot({ deployment: closedDeployment, sessions: [session('builder', 'permission')] })], new Set())).toEqual([])
+    const items = escalationsIn([snapshot({ deployment: closedDeployment, openQuestions: [entry(9, 'decision', 'Used SQLite')] })], new Set())
+    expect(items.map(item => [item.key, item.isClosed])).toEqual([['decision:9', true]])
+    expect(escalationsIn([snapshot({ openQuestions: [entry(9, 'decision', 'Used SQLite')] })], new Set())[0]?.isClosed).toBe(false)
   })
 
   it('puts a session stuck before starting first, with how to unstick it', () => {

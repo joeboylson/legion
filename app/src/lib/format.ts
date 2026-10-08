@@ -12,6 +12,7 @@ export const ACTIVITY_LABELS: Record<Activity, string> = {
   busy: 'working',
   permission: 'needs permission',
   limited: 'at usage limit',
+  halted: 'halted',
   ended: 'ended',
 }
 
@@ -54,6 +55,7 @@ export const ACTIVITY_COLORS: Record<Activity, string> = {
   busy: 'var(--success)',
   permission: 'var(--warning)',
   limited: 'var(--warning)',
+  halted: 'var(--warning)',
   ended: 'var(--danger)',
 }
 

@@ -16,9 +16,8 @@ export function NewProjectDialog({ onAdded }: { onAdded: () => void }) {
   return (
     <FormDialog
       trigger={
-        <Button variant="outline" size="sm" className="w-full">
+        <Button variant="ghost" size="icon-xs" aria-label="Add folder" title="Add folder">
           <Plus className="size-4" />
-          Add folder
         </Button>
       }
       title="Add folder"

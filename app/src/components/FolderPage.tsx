@@ -11,7 +11,7 @@ import type { PipelineDetail } from '@/generated/PipelineDetail'
 import type { Deployment } from '@/generated/Deployment'
 import { askFor } from '@/lib/legion'
 import { byOperatorOrder } from '@/lib/roster'
-import { type FolderTab, isFolderTab } from '@/lib/selection'
+import { type FolderTab, isFolderTab } from '@/lib/tabs'
 
 type FolderPageProps = {
   folderPath: string

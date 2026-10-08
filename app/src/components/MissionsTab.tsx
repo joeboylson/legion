@@ -1,10 +1,11 @@
 // The deployment's missions and where each stands. Click one to read it.
 
-import { MissionDialog } from '@/components/MissionDialog'
 import type { Mission } from '@/generated/Mission'
 import { MISSION_STATUS_LABELS } from '@/lib/format'
 
-export function MissionsTab({ missions }: { missions: readonly Mission[] }) {
+type MissionsTabProps = { missions: readonly Mission[]; onOpen: (mission: Mission) => void }
+
+export function MissionsTab({ missions, onOpen }: MissionsTabProps) {
   if (missions.length === 0) return <p className="text-muted-foreground">No missions yet.</p>
   return (
     <table>
@@ -21,7 +22,9 @@ export function MissionsTab({ missions }: { missions: readonly Mission[] }) {
           <tr key={mission.number}>
             <td className="font-mono">{mission.number}</td>
             <td>
-              <MissionDialog mission={mission} />
+              <button type="button" className="text-left underline-offset-4 hover:underline" onClick={() => onOpen(mission)}>
+                {mission.title}
+              </button>
             </td>
             <td>{MISSION_STATUS_LABELS[mission.status]}</td>
             <td className="font-mono">{mission.holder ?? ''}</td>
