@@ -139,8 +139,11 @@ they come back clean, then stop.
 
 ## Good next steps
 
-1. Run AD-393, AD-396, AD-400 through `v2-q4`, then an independent review
-   of each PR to confirm the tuning holds.
+1. Run AD-393, AD-396, AD-400 through `v2-q4`, plus the `.strip` cleanup
+   above as a mission with no Jira ticket (Joe's call: no ticket for now;
+   the mission body carries the details, so the spec reader passes it
+   straight to the shipper). Then an independent review of each PR to
+   confirm the tuning holds.
 2. Channels: the receive/send switches ("ask me"), letting a team accept
    work from another, and reaching another machine.
 3. Folders that aren't in git (IMPROVEMENTS.md), the trust-folder start
