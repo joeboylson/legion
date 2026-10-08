@@ -1,147 +1,147 @@
 # Handoff: legion2
 
-Where the rewrite stands, for the next session. Updated 2026-10-07.
+Where the rewrite stands, for the next session. Updated 2026-10-08 (afternoon).
 
 ## Read first
 
-- [docs/legion2.md](docs/legion2.md): how legion2 works now.
-- [docs/tauri-rewrite.md](docs/tauri-rewrite.md): the design, and why.
-- [IMPROVEMENTS.md](IMPROVEMENTS.md): what to fix or try next, from the
-  test runs and a live run in `temp_plus_platform`.
+- [docs/legion2.md](docs/legion2.md): how legion2 works.
+- [docs/tauri-rewrite.md](docs/tauri-rewrite.md): the design, and why. Step 5
+  (channels, then reaching another machine) is now half done: see below.
+- [IMPROVEMENTS.md](IMPROVEMENTS.md): what to fix or try next.
 - [TEST_CASES.md](TEST_CASES.md): end-to-end tests to run by hand.
 
 ## Rules
 
 - Code follows `~/@/1_Projects/code_workspaces/temp_plus_platform/DEV_GUIDELINES.md`:
   one concern per file, named constants with one owner, guard clauses, fail
-  loud, test behaviour, and comments that only say why.
+  loud, test behaviour, comments that only say why. Extremely functional.
 - Docs are short and plain: no jargon, no made-up terms.
-- The app uses shadcn components, restyled to the Slag house style
-  (workbench mode). React Doctor (`npm run doctor`) must be clean.
+- The app uses shadcn components restyled to Slag (workbench mode). React
+  Doctor (`npm run doctor`) must be clean. Never run Prettier: the repo has
+  no config and it rewrites files in the wrong style.
+- **After any change under `app/`, run `npm run build` in `app/`.** Joe uses
+  the browser version (legion2d serves `app/dist` at http://127.0.0.1:4610).
 - Commit or push only when asked.
-- **Never restart legion2d, or the app, without asking.** The installed
-  copy runs real missions; a restart cuts every session off.
+- **Never restart legion2d without asking.** To update it: `cargo build
+  --release -p legion2 -p legion2d`, copy both to `~/.local/bin` under a new
+  name and `mv` them over, then `legion2 service install --claude
+  ~/.local/bin/claude`. That restarts it and cuts every session; operators on
+  missions come back fresh.
+- No screen reading in the product: use Claude Code's built-ins (the add-on's
+  events) and Legion's own commands. Reading a screen by hand to check
+  something is fine.
+- `cargo` is at `~/.cargo/bin/cargo` (not on PATH in Bash). App types:
+  `PATH="$HOME/.cargo/bin:$PATH" npm run types` in `app/`.
 
 ## What's running
 
-- **legion2d** runs as a launchd service, installed 2026-10-07 from this
-  branch (`legion2 service install --claude ~/.local/bin/claude`). It starts
-  at login, comes back if it crashes, and writes to
-  `~/.local/share/legion2/legion2d.log`. To update it: rebuild
-  (`cargo build --release -p legion2 -p legion2d`), copy both to
-  `~/.local/bin` (copy to a new name, then `mv`, so the running file isn't
-  overwritten in place), then `legion2 service install` again. That restarts
-  it, so ask first.
-- **The add-on** loads from this repo's `addon/` folder, so changes to it
-  reach every session started after the change, without a reinstall.
-- **The app** in development: `cd app && npm run app` (Tauri, reloading on
-  change). Debug builds can save snapshots of the screen
-  (`LEGION2_SNAPSHOT_DIR`).
-- Folders registered: `temp_plus_platform` (not in git), where the
-  `rogers-demo` deployment is open with only its commander and strategist
-  running (all its missions are done). The strategist is on there, every 5
-  minutes.
-  `hello-legion2`, the test app, is in `ref/hello-legion2` (git-ignored
-  here, its own git history): a tiny to-do app with the strategist on every
-  minute, `auto` permissions and up to 3 builders.
+- **legion2d**: launchd service, built from this branch (with all the
+  uncommitted work below), log at `~/.local/share/legion2/legion2d.log`.
+- **Every session Legion starts gets `HINDSIGHT_NO_CAPTURE=1`**
+  (`constants.rs`, set in `sessions.rs`), so the Hindsight session miner
+  skips them.
+- **A channel**: this machine hosts one on port 4620 and subscribes to
+  itself (`127.0.0.1:4620`), so deployments here message each other the way
+  two machines would. `legion2 channel status` / `log`. Settings in
+  `~/.local/share/legion2/channels.json`, log in `channel-log.jsonl`.
+- **Deployments**:
+  - `v2-q4` (temp_plus_platform, pipeline `v2-q4-ship-it`): the fast V2 Q4
+    ticket team. Use it for all Q4 tickets. Missions 10–26 are finished.
+  - `test-3` (ref/hello-legion2) and `docs-1` (ref/hello-docs): the channel
+    test pair. Idle.
+- Test folders in `ref/` (git-ignored here): `hello-legion2` (auto mode),
+  `hello-manual` (manual mode, every tool asks: good for blocker tests),
+  `hello-docs` (a writer → editor docs team).
 
-## Added 2026-10-07 (installed)
+## Committed (`explore/tauri`)
 
-- `share_tool` and parts, from the last handoff.
-- **The service** (`legion2 service install` / `remove`). legion2d now stops
-  cleanly on SIGTERM too.
-- **Restarts keep operators.** Legion records each running session in the
-  folder's database; after a restart every operator that was on a mission
-  comes back under the same name, as the machine has room
-  (`session_restore.rs`). A fresh start after a full conversation keeps the
-  name and part too.
-- **No restart for settings.** `settings.json` is read each time; a running
-  commander is told when its pipeline or an operator's copy limit changes
-  (`team_changes.rs`).
-- **`flag_decision`.** A non-blocking decision for the human: it shows with
-  the escalations, and can be answered (the answer goes back to the
-  operator) or dismissed. New entry kind `decision`; `legion2 flag` on the
-  command line.
+- `031f82f` blockers from Claude Code's own signals.
+- `3c36833` app: tabs, deployment tree, Blockers page.
+- Channels (host/subscribe over TCP, directory, relayed messages, the
+  channel log, the Channels tab), `legion2 rename`, `finish` without git,
+  quieter commander/operator prompts, and `HINDSIGHT_NO_CAPTURE=1` on
+  every session. Commander tools: `channel_deployments`,
+  `channel_describe`, `channel_send`; CLI `legion2 channel
+  open|close|subscribe|unsubscribe|status|log`.
 
-## Where things stand
+## Blockers (how they work now)
 
-- Steps 1 to 4 of the build order are done (see tauri-rewrite.md). Step 5,
-  channels and reaching another machine, hasn't started.
-- Two test runs on `hello-legion2`:
-  - 10 operators added one at a time over 8 missions, which built a to-do
-    app to version 1.0.0.
-  - 10 missions at once, which worked out how operator copies behave.
-  Both passed, with the fixes noted in IMPROVEMENTS.md.
-- `temp_plus_platform` ran a live deployment (rogers-demo). Its 32 findings
-  are under "From the rogers-demo run" in IMPROVEMENTS.md.
+- Detection, all from Claude Code built-ins: a permission question when the
+  add-on's `tool.check` returns "ask" in a mode where a person answers
+  (legion2d passes `LEGION_PERMISSION_MODE`); **halted** when a turn ends
+  "aborted", or ends right after a call refused at the dialog. Claude's
+  `PermissionRequest` and permission notifications never reach a hooks
+  module: don't rely on them.
+- Answers: Allow types "1"; Deny presses Esc then sends a carry-on message;
+  Carry on sends a message. A halted session carries on by itself after 30 s.
+  legion2d marks a session busy as soon as it passes on an answering key.
+- Not solved: the "trust this folder?" start question (pressing keys blind
+  is unsafe: the highlighted choice is "No, exit"), and a flagged command's
+  blocker shows only Claude's reason, not the command.
 
-## Added 2026-10-07, later (installed)
+## temp_plus_platform: the `v2-q4-ship-it` pipeline
 
-- **The strategist** (`strategist_checks.rs`): an optional session that
-  wakes on its own timer and sends the commander speed-up suggestions with
-  pros and cons; the commander has the final say. On in `hello-legion2`,
-  every minute, for testing. First run: it spotted a handed-off mission no
-  one had picked up, and the commander took the suggestion.
-- **Postmortems after each mission** from the strategist; the newest six
-  from every run in the folder go to the next commander and strategist.
-- **Callouts** (`callouts.rs`): one-line heads-ups in `.legion2/callouts.md`,
-  and the `toolbox`, `callouts` and `callout` tools for every session.
-- **The app in a browser**: legion2d serves `app/dist` and its WebSocket at
-  http://127.0.0.1:4610 (`web_server.rs`, refuses other sites); the app
-  picks the browser or window connection at start (`app/src/lib/legion*.ts`).
-- **The app's sidebar** starts closed, and a folder shows a green dot while
-  anything in it works, as deployments do.
+Goal: PRs that need nothing from the human but the merge. Files in
+`temp_plus_platform/.legion2/` (not a git repo; a backup of the pre-tuning
+version is in this session's scratchpad only).
 
-## Where we left off (2026-10-07, end of day)
+- `spec-reader` → `shipper` → `pattern-checker` → `opie-reviewer`.
+- A fix to an open PR skips the brief; the pattern checker does a short
+  pass (probes on the fix, remove-each-guard across the whole PR, spec and
+  PR body, conventions on touched files); then one OPIE round.
+- **spec-reader** writes a numbered rules checklist (limits, error codes
+  and params, raise vs return, invariants, link lifecycle) from the node,
+  its parent chain and its links.
+- **shipper** builds to the checklist, attacks its own change first, keeps
+  the whole PR body current, and ends it with a `## Changes for
+  spec-graph` yaml block (built / rename / rule / error / question) for
+  the spec-graph side to read in. New API label keys get en/fr wording in
+  a linked v2-frontend PR (v2-core ADR-0022).
+- **pattern-checker** runs hostile probe specs (every association writer,
+  partly loaded records, nil everywhere, pasted Unicode, deletes, shared
+  rows, bulk writes, migration from scratch), removes each guard to prove
+  a spec fails, checks the spec item by item, then patterns. Repo-wide
+  gaps are reported separately, not fixed in the PR.
+- **opie-reviewer** checks a won't-do's facts against the spec graph.
+- Commits: `/dev-workflow` Step 5 only (one-line conventional subject, no
+  body, no trailer).
+- Errors follow ADR-0022: the API sends codes and params, the frontend
+  words them. The api's own validation text stays English on purpose.
+- Toolbox: `spec-graph.sh` (read the spec graph: `ticket`, `node`,
+  `chain`, `links`, `action`, `questions`, `search`); `wt-run.sh` gives
+  each worktree its own test DB by default (never the shared core_test).
+- Jira through `~/.local/bin/twg`.
 
-The AD-3 run in `temp_plus_platform` is finished, and its deployment
-(`ad3-close`) is closed.
+## How the tuning went
 
-- **Result:** the seven AD-3 rows still open in
-  `temp_plus_platform/feature_proof/overview.html` all pass. Five already
-  passed on develop; AD-3-10 and AD-3-15 needed fixes, now merged:
-  v2-frontend #194 and v2-core #199.
-- **Jira:** AD-3 and AD-346 are IN REVIEW. AD-3 has the 16 screenshots and
-  a comment saying what each proves; AD-346 has the updated overview
-  (`feature-proof-overview-2026-10-07.html`). overview.html now shows all 89
-  in-scope scenarios passing.
-- **Proof:** `temp_plus_platform/ad3-proof/` (screenshots, queries, how to
-  rerun each check), with `index.html` showing them all. Rerun with
-  `legion-tools/ad3-proof.sh`.
-- **Set up for it in `temp_plus_platform/.legion2/`:** the `ad3-close`
-  pipeline; two new operators, `proof-checker` (proves scenarios on the
-  local stack) and `opie-reviewer` (runs `/opie-pr-loop` on a PR, one round
-  per message, the commander deciding on more rounds); and `auto`
-  permissions for planner, builder (up to 3) and reviewer.
-- **The local stack** runs v2-core and v2-frontend develop (with both fixes),
-  started by naming the main checkouts on the `make` line. The devenv's own
-  `.env` (from Oct 5) still points at older `worktrees/v2-*-AD-3` folders;
-  it was left alone.
-- **Left open, for review with Spencer:** the Columns menu still names the
-  spend column "Cycle Spend" while its header says "Recurring spend"; with
-  a period chosen, the idle list counts recurring charges only, to match the
-  tile; after "View idle lines" the list keeps the dashboard's period when
-  the Idle filter is removed (labelled); and whether "recoverable spend"
-  should leave out cycles from before a line went idle.
-- Lessons for Legion are under "From the AD-3 run" in IMPROVEMENTS.md.
+After each batch, an independent adversarial review per PR (one subagent
+each, read-only, probes in a throwaway worktree) found what the pipeline
+missed, and the definitions were tuned from it. Four rounds on #200–#202:
+must-fixes went from several per PR to none (#201) or one cross-repo
+item (#200). Keep doing a review after a batch or two of new tickets until
+they come back clean, then stop.
+
+## Where the work stands
+
+- **#200 (AD-401, with v2-frontend #195), #201 (AD-397), #202 (AD-402):
+  merged, done in Jira.** Spec-graph updates from their PR bodies are
+  with Joe.
+- **Next tickets** (Tenancy, Brands & Access, AD-294), all unassigned, To
+  Do: AD-393 (record which sign-on provider each sign-in used), AD-396
+  (record each bulk sign-on import), AD-400 (block access for one
+  person); then AD-398, AD-399.
+- **To do, no ticket yet:** `.strip` misses invisible and look-alike
+  characters (non-breaking and zero-width spaces, en dashes, bidi marks)
+  in codes and names repo-wide (department.rb:19, cost_centre_match.rb:24,
+  site.rb).
+- **Open for later tickets:** Company contact phones (company.rb:57-67)
+  aren't stored in E.164; unassigned country codes like +999 are accepted.
 
 ## Good next steps
 
-1. **Folders that aren't in git** (IMPROVEMENTS.md has the proposed fix).
-   On hold to talk through: `temp_plus_platform` is 7.1 GB, with a 175 MB
-   zip, an API key file, nested repos and a `worktrees/` folder, so a
-   straight snapshot would copy all of that into history and every
-   mission's checkout. Options so far: filter (.gitignore, a
-   `.legion2/ignore`, a size cap, skip nested repos); or run missions there
-   one at a time.
-2. **The strategist**: watch it on a real run. Since its first run it skips
-   checks when nothing is busy or moving, and callouts and shared tools are
-   announcements (no reply wanted, and replies aren't forwarded to the
-   commander). Both checked live on 2026-10-07 in `ref/hello-legion2`
-   (test-1, test-2): no wake-ups after the work ran out, and no forwarded
-   replies to 17 announcements.
-3. **Two copies of one operator on one mission** in a folder without git
-   (see IMPROVEMENTS.md, "From the AD-3 run"): the AD-3 run needed an extra
-   mission to review two PRs at once.
-4. Then: how missions work (to talk through).
-5. A systemd unit for the service on Linux.
+1. Run AD-393, AD-396, AD-400 through `v2-q4`, then an independent review
+   of each PR to confirm the tuning holds.
+2. Channels: the receive/send switches ("ask me"), letting a team accept
+   work from another, and reaching another machine.
+3. Folders that aren't in git (IMPROVEMENTS.md), the trust-folder start
+   blocker, and a systemd unit for Linux.
