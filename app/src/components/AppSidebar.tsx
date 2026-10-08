@@ -27,6 +27,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from '@/components/ui/sidebar'
+import type { Channels } from '@/generated/Channels'
 import type { Deployment } from '@/generated/Deployment'
 import type { Folder } from '@/generated/Folder'
 import type { Mission } from '@/generated/Mission'
@@ -35,7 +36,7 @@ import { DEPLOYMENTS_SECTION, markedRows, blockersIn, BLOCKER_KINDS, OPERATOR_KI
 import { DISMISSIBLE_KINDS, type DeploymentSnapshot, type Escalation, type EscalationKind, KIND_LABELS } from '@/lib/escalations'
 import { INACTIVE_LABEL, isWorking, MISSION_STATUS_LABELS, pipelineTag, sessionStatus, workingDotColor } from '@/lib/format'
 import { byOperatorOrder, type RosterEntry, rosterOf } from '@/lib/roster'
-import { type DeploymentPart, type FolderTab, BLOCKERS_KEY } from '@/lib/tabs'
+import { BLOCKERS_KEY, CHANNELS_KEY, type DeploymentPart, type FolderTab } from '@/lib/tabs'
 import { cn } from '@/lib/utils'
 
 // The border round each folder and the Blockers button, each a block of its
@@ -47,13 +48,25 @@ const BOX_BORDER = 'border-[color-mix(in_srgb,var(--fg-muted)_50%,transparent)]'
 // edge so the action column lines up.
 const TIGHT_SUBMENU = 'mr-0 translate-x-0 gap-1 pt-1 pb-0 pr-0'
 
+// Green while every channel is up, red when one is down, grey with none.
+const channelsDotColor = (channels: Channels | undefined): string => {
+  const ends = [
+    ...(channels?.hosted === null || channels?.hosted === undefined ? [] : [channels.hosted.problem === null]),
+    ...(channels?.subscriptions.map(subscription => subscription.is_up) ?? []),
+  ]
+  if (ends.length === 0) return 'var(--fg-muted)'
+  return ends.every(Boolean) ? 'var(--success)' : 'var(--danger)'
+}
+
 type AppSidebarProps = {
   folders: readonly Folder[]
   snapshots: readonly DeploymentSnapshot[]
   escalations: readonly Escalation[]
+  channels?: Channels
   selectedKey?: string
   onFolderAdded: () => void
   onOpenBlockers: () => void
+  onOpenChannels: () => void
   onOpenFolder: (folder: Folder, tab?: FolderTab) => void
   onSelectDeployment: (deployment: Deployment) => void
   onOpenOperator: (deployment: Deployment, position: string) => void
@@ -457,6 +470,16 @@ export function AppSidebar(props: AppSidebarProps) {
                     </Collapsible>
                   )
                 })}
+              </SidebarMenu>
+            </SidebarGroup>
+            <SidebarGroup className="mt-auto">
+              <SidebarMenu>
+                <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
+                  <SidebarMenuButton isActive={selectedKey === CHANNELS_KEY} onClick={props.onOpenChannels}>
+                    <span className="dot flex-none" style={{ color: channelsDotColor(props.channels) }} />
+                    <span className="font-medium">Channels</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroup>
           </SidebarContent>

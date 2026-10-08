@@ -194,6 +194,10 @@ impl Store {
         )
     }
 
+    pub fn rename_deployment(&self, deployment_id: &str, name: &str) -> Result<(), String> {
+        self.execute("UPDATE deployments SET name = ?2 WHERE id = ?1", params![deployment_id, name])
+    }
+
     pub fn close_deployment(&self, deployment_id: &str, closed_ms: i64) -> Result<(), String> {
         self.execute("UPDATE deployments SET closed_ms = ?2 WHERE id = ?1", params![deployment_id, closed_ms])
     }

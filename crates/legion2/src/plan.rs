@@ -3,7 +3,7 @@
 use legion2_proto::{Command, EntryKind, LogFilter, NewEntry, ENV_DEPLOYMENT};
 
 use crate::{
-    arguments::{Action, ExportFormat, FilterArguments, ServiceAction},
+    arguments::{Action, ChannelAction, ExportFormat, FilterArguments, ServiceAction},
     time_span::parse_time_span_ms,
 };
 
@@ -51,6 +51,7 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
         Action::Deploy { folder, pipeline, name } => Command::DeploymentStart { folder, pipeline, name },
         Action::Deployments { folder } => Command::DeploymentList { folder },
         Action::Close => Command::DeploymentClose { deployment: needs_deployment()? },
+        Action::Rename { name } => Command::DeploymentRename { deployment: needs_deployment()?, name },
         Action::New { title, .. } => Command::MissionAdd { deployment: needs_deployment()?, title, body: mission_body.unwrap_or_default() },
         Action::Missions => Command::MissionList { deployment: needs_deployment()? },
         Action::Mission { number } => Command::MissionRead { deployment: needs_deployment()?, mission: number },
@@ -87,6 +88,14 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
             return Ok(Plan::Export { deployment: needs_deployment()?, filter: log_filter(&filter, now_ms)?, format, output })
         }
         Action::Service { action } => return Ok(Plan::Service(action)),
+        Action::Channel { action } => match action {
+            ChannelAction::Open { port, key } => Command::ChannelOpen { port, key },
+            ChannelAction::Close => Command::ChannelClose,
+            ChannelAction::Subscribe { address, key } => Command::ChannelSubscribe { address, key },
+            ChannelAction::Unsubscribe { address } => Command::ChannelUnsubscribe { address },
+            ChannelAction::Status => Command::ChannelStatus,
+            ChannelAction::Log { limit } => Command::ChannelLog { limit },
+        },
     };
     Ok(Plan::Ask(command))
 }

@@ -24,8 +24,11 @@ export type Tab =
   | { kind: 'folder'; path: string; folderTab: FolderTab }
   // Everything, in every folder, that stops until you act.
   | { kind: 'blockers' }
+  // The channels: their state, the teams on them and their log.
+  | { kind: 'channels' }
 
 export const BLOCKERS_KEY = 'blockers'
+export const CHANNELS_KEY = 'channels'
 
 export type OpenTabs = { tabs: readonly Tab[]; activeKey?: string }
 
@@ -40,6 +43,8 @@ export const tabKey = (tab: Tab): string => {
       return `folder:${tab.path}`
     case 'blockers':
       return BLOCKERS_KEY
+    case 'channels':
+      return CHANNELS_KEY
   }
 }
 
@@ -73,6 +78,7 @@ const parseTab = (value: unknown): Tab | undefined => {
     return { kind: 'deployment', deploymentId: value.deploymentId, part: value.part }
   }
   if (value.kind === 'blockers') return { kind: 'blockers' }
+  if (value.kind === 'channels') return { kind: 'channels' }
   if (value.kind === 'folder' && typeof value.path === 'string') {
     return { kind: 'folder', path: value.path, folderTab: isFolderTab(value.folderTab) ? value.folderTab : FOLDER_TABS[0] }
   }
@@ -103,5 +109,7 @@ export const selectedRowKey = (tab: Tab | undefined): string | undefined => {
       return `folder:${tab.path}`
     case 'blockers':
       return BLOCKERS_KEY
+    case 'channels':
+      return CHANNELS_KEY
   }
 }

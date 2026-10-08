@@ -6,6 +6,12 @@
 
 mod access;
 mod callouts;
+mod channel_delivery;
+mod channel_log;
+mod channel_routes;
+mod channel_settings;
+mod channel_wire;
+mod channels;
 mod activity_entries;
 mod check_ins;
 mod claude_version;
@@ -121,6 +127,12 @@ async fn run() -> Result<(), String> {
     let daemon = Daemon::new(Config { data_folder, socket_path: socket_path.clone(), addon_folder: arguments.addon_folder, claude_command: arguments.claude_command, binary_folder });
     let folder_count = daemon.state.lock().unwrap().folders.len();
     println!("{NAME}d: listening on {} (Claude Code {}, {folder_count} folders)", socket_path.display(), version_label(claude_version));
+
+    // A broken channels.json shouldn't stop legion2d: say so and run without channels.
+    daemon.connect_channels();
+    if let Err(error) = daemon.channels.restore() {
+        eprintln!("{NAME}d: channels not restored: {error}");
+    }
 
     // Sessions reach legion2d over the socket, so they start once it listens.
     let restoring_daemon = daemon.clone();

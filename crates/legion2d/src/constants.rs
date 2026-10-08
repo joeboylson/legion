@@ -30,6 +30,10 @@ pub const ADDON_PERMISSION_MODE_ENV: &str = "LEGION_PERMISSION_MODE";
 /// child, which turns off saving its transcript (and so resuming it).
 pub const CHILD_SESSION_MARKERS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT"];
 
+/// Set on every session Legion starts, so Hindsight's session miner skips
+/// them: they're the team's work, not a person's.
+pub const HINDSIGHT_NO_CAPTURE: (&str, &str) = ("HINDSIGHT_NO_CAPTURE", "1");
+
 /// Skills turned on in claude.ai stay out of Legion's sessions, and their
 /// screens show no tips or suggested next prompts: no one types there.
 pub const SESSION_SETTINGS_JSON: &str = r#"{"syncClaudeAiSkills": false, "spinnerTipsEnabled": false, "promptSuggestionEnabled": false}"#;
@@ -44,6 +48,16 @@ pub const DEFAULT_PERMISSION_TIMEOUT_MINUTES: u64 = 30;
 /// Where a browser opens the app: http://127.0.0.1:<port>. 0 turns it off.
 pub const DEFAULT_WEB_PORT: u16 = 4610;
 pub const SECONDS_PER_MINUTE: u64 = 60;
+/// A hosted channel listens on every network this machine is on, so other
+/// machines can reach it; the key keeps out anyone who doesn't have it.
+pub const CHANNEL_LISTEN_ADDRESS: &str = "0.0.0.0";
+/// How often a subscriber checks in, and how long either end waits to hear
+/// back before calling the other end down.
+pub const CHANNEL_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+pub const CHANNEL_SILENCE_LIMIT: Duration = Duration::from_secs(25);
+pub const CHANNEL_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+pub const CHANNELS_FILE_NAME: &str = "channels.json";
+pub const CHANNEL_LOG_FILE_NAME: &str = "channel-log.jsonl";
 pub const WAITING_SESSIONS_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// A session whose add-on hasn't reported by now is likely stuck on a
 /// question shown before the add-on loads, such as whether to trust the folder.

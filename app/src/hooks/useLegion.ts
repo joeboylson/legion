@@ -7,6 +7,7 @@ import type { Folder } from '@/generated/Folder'
 import type { Deployment } from '@/generated/Deployment'
 import type { PipelineDetail } from '@/generated/PipelineDetail'
 import type { SessionInfo } from '@/generated/SessionInfo'
+import type { Channels } from '@/generated/Channels'
 import { askFor, onConnectionChange, onLegionEvent } from '@/lib/legion'
 import type { DeploymentSnapshot } from '@/lib/escalations'
 
@@ -17,6 +18,9 @@ export type LegionData = {
   isConnected: boolean
   folders: Folder[]
   snapshots: DeploymentSnapshot[]
+  // The channel this machine hosts and the ones it subscribes to; none
+  // from a legion2d older than channels.
+  channels?: Channels
   problem?: string
   // Bumps on every change, for views that load their own data.
   changeCount: number
@@ -67,23 +71,37 @@ const loadDeploymentSnapshot = async (
   }
 }
 
-const loadEverything = async (): Promise<{ folders: Folder[]; snapshots: DeploymentSnapshot[] }> => {
-  const [foldersReply, deploymentsReply, sessionsReply] = await Promise.all([
+// A legion2d older than channels may never answer the channel request, so
+// it's given up on after a while rather than holding up everything else.
+const CHANNELS_WAIT_MS = 2000
+
+const loadChannels = (): Promise<Channels | undefined> =>
+  Promise.race([
+    askFor('channels', { type: 'channel_status' })
+      .then(reply => reply.channels)
+      .catch(() => undefined),
+    new Promise<undefined>(resolve => window.setTimeout(() => resolve(undefined), CHANNELS_WAIT_MS)),
+  ])
+
+const loadEverything = async (): Promise<{ folders: Folder[]; snapshots: DeploymentSnapshot[]; channels?: Channels }> => {
+  const [foldersReply, deploymentsReply, sessionsReply, channels] = await Promise.all([
     askFor('folders', { type: 'folder_list' }),
     askFor('deployments', { type: 'deployment_list', folder: null }),
     askFor('sessions', { type: 'session_list', deployment: null }),
+    loadChannels(),
   ])
   const pipelines = await loadPipelines([...new Set(deploymentsReply.deployments.map(deployment => deployment.folder))])
   const snapshots = await Promise.all(
     deploymentsReply.deployments.map(deployment => loadDeploymentSnapshot(deployment, sessionsReply.sessions, pipelines)),
   )
-  return { folders: foldersReply.folders, snapshots }
+  return { folders: foldersReply.folders, snapshots, channels }
 }
 
 export const useLegion = (): LegionData => {
   const [isConnected, setIsConnected] = useState(false)
   const [folders, setFolders] = useState<Folder[]>([])
   const [snapshots, setSnapshots] = useState<DeploymentSnapshot[]>([])
+  const [channels, setChannels] = useState<Channels>()
   const [problem, setProblem] = useState<string>()
   const [changeCount, setChangeCount] = useState(0)
   const pendingReload = useRef<number | undefined>(undefined)
@@ -95,6 +113,7 @@ export const useLegion = (): LegionData => {
         .then(loaded => {
           setFolders(loaded.folders)
           setSnapshots(loaded.snapshots)
+          setChannels(loaded.channels)
           setIsConnected(true)
           setProblem(undefined)
           setChangeCount(count => count + 1)
@@ -119,5 +138,5 @@ export const useLegion = (): LegionData => {
     }
   }, [reload])
 
-  return { isConnected, folders, snapshots, problem, changeCount, reload }
+  return { isConnected, folders, snapshots, channels, problem, changeCount, reload }
 }

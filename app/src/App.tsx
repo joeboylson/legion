@@ -8,6 +8,7 @@ import { DeploymentPartView } from '@/components/DeploymentPartView'
 import { type EditorTabItem, EditorTabs } from '@/components/EditorTabs'
 import { FolderPage } from '@/components/FolderPage'
 import { BlockerActions } from '@/components/BlockerActions'
+import { ChannelsPage } from '@/components/ChannelsPage'
 import { EscalationsTable } from '@/components/EscalationsTable'
 import { MissionDialog } from '@/components/MissionDialog'
 import { QuestionDialog } from '@/components/QuestionDialog'
@@ -93,6 +94,8 @@ export function App() {
         return legion.folders.find(folder => folder.path === tab.path)?.name ?? lastPathPart(tab.path)
       case 'blockers':
         return 'Blockers'
+      case 'channels':
+        return 'Channels'
     }
   }
   const tabItems: EditorTabItem[] = openTabs.open.tabs.map(tab => {
@@ -102,6 +105,8 @@ export function App() {
 
   const renderTab = (tab: Tab) => {
     switch (tab.kind) {
+      case 'channels':
+        return <ChannelsPage channels={legion.channels} changeCount={legion.changeCount} />
       case 'blockers':
         return (
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
@@ -159,9 +164,11 @@ export function App() {
         folders={legion.folders}
         snapshots={legion.snapshots}
         escalations={escalations}
+        channels={legion.channels}
         selectedKey={selectedRowKey(shownTab)}
         onFolderAdded={legion.reload}
         onOpenBlockers={() => show({ kind: 'blockers' })}
+        onOpenChannels={() => show({ kind: 'channels' })}
         onOpenFolder={(folder, folderTab) => show({ kind: 'folder', path: folder.path, folderTab: folderTab ?? FOLDER_TABS[0] })}
         onSelectDeployment={deployment => openPart(deployment.id, 'operators')}
         onOpenOperator={(deployment, position) => openOperator(deployment.id, position)}
@@ -184,7 +191,7 @@ export function App() {
           {tabItems.length > 0 && <EditorTabs items={tabItems} activeKey={openTabs.open.activeKey} onActivate={openTabs.activate} onClose={close} />}
           {shownTab === undefined ? <div className="grid flex-1 place-items-center text-muted-foreground">{emptyMessage}</div> : renderTab(shownTab)}
         </main>
-        <StatusBar legion={legion} />
+        <StatusBar legion={legion} onOpenChannels={() => show({ kind: 'channels' })} />
       </SidebarInset>
       <TerminalDialog
         deploymentId={openPosition?.deploymentId ?? ''}

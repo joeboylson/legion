@@ -1,6 +1,6 @@
 //! How replies and deployment log entries read on screen and in exports.
 
-use legion2_proto::{Entry, Mission, Part, Reply, SessionInfo, NAME};
+use legion2_proto::{Channels, Entry, Mission, Part, Reply, SessionInfo, NAME};
 
 pub const CLOCK_FORMAT: &str = "%H:%M:%S";
 pub const DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -87,7 +87,38 @@ pub fn reply_text(reply: &Reply) -> String {
         Reply::Entry { entry } => entry_line(entry),
         Reply::Entries { entries } => lines(entries, entry_line),
         Reply::Text { text } => text.clone(),
+        Reply::Channels { channels } => channels_text(channels),
+        Reply::ChannelLog { entries } => lines(entries, |entry| {
+            let between = match (&entry.from, &entry.to) {
+                (Some(from), Some(to)) => format!(" {from} → {to}"),
+                (Some(from), None) => format!(" {from}"),
+                _ => String::new(),
+            };
+            let machine = entry.machine.as_deref().map(|machine| format!(" [{machine}]")).unwrap_or_default();
+            format!("#{} {} {:?}{machine}{between}: {}", entry.id, local_time(entry.at_ms, CLOCK_FORMAT), entry.kind, entry.text)
+        }),
     }
+}
+
+fn channels_text(channels: &Channels) -> String {
+    let hosted = match &channels.hosted {
+        None => "not hosting a channel".to_string(),
+        Some(hosted) => {
+            let state = match &hosted.problem {
+                Some(problem) => format!("down: {problem}"),
+                None => format!("{} subscribed", hosted.subscribers.len()),
+            };
+            let subscribers = lines(&hosted.subscribers, |end| format!("  {} ({})", end.machine, end.address));
+            let subscribers_text = if subscribers.is_empty() { String::new() } else { format!("\n{subscribers}") };
+            format!("hosting a channel on port {} ({state}); key {}{subscribers_text}", hosted.port, hosted.key)
+        }
+    };
+    let subscriptions = lines(&channels.subscriptions, |subscription| {
+        let host = subscription.host_machine.as_deref().map(|machine| format!(" ({machine})")).unwrap_or_default();
+        let state = if subscription.is_up { "up".to_string() } else { format!("down: {}", subscription.problem.as_deref().unwrap_or("connecting")) };
+        format!("subscribed to {}{host}: {state}", subscription.address)
+    });
+    [hosted, subscriptions].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
 fn part_line(part: &Part) -> String {

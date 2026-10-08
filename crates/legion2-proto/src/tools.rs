@@ -205,6 +205,24 @@ pub const TOOLS: &[Tool] = &[
             ABOUT_MISSION,
         ],
     },
+    Tool {
+        name: "channel_deployments",
+        description: "List the other teams you can message: every open deployment on Legions linked to this one by a channel, with its pipeline, operators and what its commander says it does.",
+        audience: COMMANDER_ONLY,
+        arguments: &[],
+    },
+    Tool {
+        name: "channel_describe",
+        description: "Tell the other teams what your team is and can do, in a sentence or two. They see it in channel_deployments.",
+        audience: COMMANDER_ONLY,
+        arguments: &[required("text", Text, "What your team is and can do.")],
+    },
+    Tool {
+        name: "channel_send",
+        description: "Send a message to another team's commander over a channel. If its deployment has closed, the message doesn't get through and Legion tells you.",
+        audience: COMMANDER_ONLY,
+        arguments: &[required("to", Text, "The team's key, as channel_deployments lists it."), required("text", Text, "The message.")],
+    },
 ];
 
 pub fn tools_for_position(position: &str) -> Vec<&'static Tool> {
@@ -338,6 +356,9 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
             let text = speedup_text(&text_argument(arguments, "suggestion")?, &text_argument(arguments, "pros")?, &text_argument(arguments, "cons")?);
             post(&deployment, EntryKind::Message, mission_number(arguments, "mission")?, Some(COMMANDER.into()), text)
         }
+        "channel_deployments" => Command::ChannelDeployments { deployment },
+        "channel_describe" => Command::ChannelDescribe { deployment, text: text_argument(arguments, "text")? },
+        "channel_send" => Command::ChannelSend { deployment, to: text_argument(arguments, "to")?, text: text_argument(arguments, "text")? },
         unknown => return Err(format!("no tool {unknown:?}")),
     };
     Ok(command)

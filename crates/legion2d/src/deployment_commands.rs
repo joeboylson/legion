@@ -36,6 +36,7 @@ impl Daemon {
         };
         self.post_entry(&deployment.id, HUMAN, started)?;
         self.start_session(&deployment.id, COMMANDER, None, HUMAN, None)?;
+        self.refresh_channel_deployments();
         Ok(Reply::Deployment { deployment })
     }
 
@@ -48,6 +49,30 @@ impl Daemon {
             .flat_map(|folder| folder.deployments.iter().cloned())
             .collect();
         Reply::Deployments { deployments }
+    }
+
+    /// A new name, unique among the folder's deployments. Its ID, missions,
+    /// log and sessions stay as they are.
+    pub fn rename_deployment(&self, deployment_key: &str, name: &str) -> Result<Reply, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("give the deployment a name".into());
+        }
+        let (deployment, old_name) = {
+            let mut state = self.state.lock().unwrap();
+            let (folder_index, deployment) = state.find_deployment(deployment_key)?;
+            let folder = &mut state.folders[folder_index];
+            if folder.deployments.iter().any(|known| known.name == name && known.id != deployment.id) {
+                return Err(format!("{} already has a deployment called {name}", folder.name));
+            }
+            folder.store.rename_deployment(&deployment.id, name)?;
+            folder.deployments.iter_mut().filter(|known| known.id == deployment.id).for_each(|known| known.name = name.to_string());
+            (Deployment { name: name.to_string(), ..deployment.clone() }, deployment.name)
+        };
+        let renamed = NewEntry { kind: EntryKind::Note, mission: None, to: None, text: format!("deployment {old_name} renamed to {name}"), answers: None };
+        self.post_entry(&deployment.id, HUMAN, renamed)?;
+        self.refresh_channel_deployments();
+        Ok(Reply::Text { text: format!("deployment {old_name} ({}) renamed to {}", deployment.id, deployment.name) })
     }
 
     /// Ends every session in the deployment. A closed deployment isn't brought back after
@@ -68,6 +93,7 @@ impl Daemon {
         };
         let closed = NewEntry { kind: EntryKind::DeploymentClosed, mission: None, to: None, text: format!("deployment {} closed", deployment.name), answers: None };
         self.post_entry(&deployment.id, HUMAN, closed)?;
+        self.refresh_channel_deployments();
         Ok(Reply::Done)
     }
 }

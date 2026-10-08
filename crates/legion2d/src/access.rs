@@ -102,10 +102,24 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         }
         Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with the suggest tool".into()),
         Command::Key { .. } | Command::Input { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
-        Command::FolderAdd { .. } | Command::FolderList | Command::FolderRead { .. } | Command::DeploymentStart { .. } | Command::DeploymentList { .. } | Command::DeploymentClose { .. } => {
+        Command::FolderAdd { .. } | Command::FolderList | Command::FolderRead { .. } | Command::DeploymentStart { .. } | Command::DeploymentList { .. } | Command::DeploymentClose { .. } | Command::DeploymentRename { .. } => {
             Err(refusal(AllowedTo::HumanOnly, "add folders, or start, list or close deployments"))
         }
         Command::Watch => Err(refusal(AllowedTo::HumanOnly, "watch everything")),
+        Command::ChannelDeployments { deployment } | Command::ChannelDescribe { deployment, .. } | Command::ChannelSend { deployment, .. } if is_commander => {
+            Ok(Some(deployment))
+        }
+        Command::ChannelDeployments { .. } | Command::ChannelDescribe { .. } | Command::ChannelSend { .. } => {
+            Err(refusal(AllowedTo::CommanderAndHuman, "message other teams over channels"))
+        }
+        Command::ChannelOpen { .. }
+        | Command::ChannelClose
+        | Command::ChannelSubscribe { .. }
+        | Command::ChannelUnsubscribe { .. }
+        | Command::ChannelStatus
+        | Command::ChannelLog { .. } => {
+            Err(refusal(AllowedTo::HumanOnly, "open, close or subscribe to channels"))
+        }
     }
 }
 

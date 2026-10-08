@@ -24,6 +24,17 @@ pub fn postmortem_request(mission: u32) -> String {
 }
 
 /// The deployment log entry for how a finish went.
+/// A mission with no branch here closes with nothing to move.
+pub fn no_branch_finish_entry(mission: u32) -> NewEntry {
+    NewEntry {
+        kind: EntryKind::Finished,
+        mission: Some(mission),
+        to: None,
+        text: format!("mission {mission} closed; it has no branch in this folder, so there's nothing to move"),
+        answers: None,
+    }
+}
+
 pub fn finish_entry(outcome: FinishOutcome, mission: u32, branch: &str, base: &str) -> NewEntry {
     let (kind, to, text) = match outcome {
         FinishOutcome::Moved => (EntryKind::Finished, None, format!("{base} moved up to {branch}")),
@@ -96,22 +107,29 @@ impl Daemon {
             if mission.status != MissionStatus::Done {
                 return Err(format!("mission {number} isn't done yet"));
             }
-            let worktree = folder
-                .store
-                .worktree(number)?
-                .filter(|worktree| !worktree.is_removed)
-                .ok_or_else(|| format!("mission {number} has no branch to finish"))?;
-            let check_command = read_settings(&folder.path)?.check;
-            let outcome = finish_mission_branch(&folder.path, &worktree, check_command.as_deref())?;
-            let is_finished = !matches!(outcome, FinishOutcome::NeedsHuman(_) | FinishOutcome::Clash { .. });
+            let worktree = folder.store.worktree(number)?.filter(|worktree| !worktree.is_removed);
+            // A folder that isn't a git repo gives a mission no branch of its
+            // own: its work lands elsewhere (pull requests in other repos), so
+            // finishing only closes the mission.
+            let (is_finished, entry) = match worktree {
+                None => (true, no_branch_finish_entry(number)),
+                Some(worktree) => {
+                    let check_command = read_settings(&folder.path)?.check;
+                    let outcome = finish_mission_branch(&folder.path, &worktree, check_command.as_deref())?;
+                    let is_finished = !matches!(outcome, FinishOutcome::NeedsHuman(_) | FinishOutcome::Clash { .. });
+                    if is_finished {
+                        folder.store.mark_worktree_removed(number)?;
+                    }
+                    (is_finished, finish_entry(outcome, number, &worktree.branch, &worktree.base))
+                }
+            };
             let has_strategist = is_finished && state.running_positions(&deployment.id).iter().any(|position| position == STRATEGIST);
             if is_finished {
-                folder.store.mark_worktree_removed(number)?;
                 // Operators stay idle between handoffs in case the work comes
                 // back; once it's finished, nothing will.
                 end_mission_sessions(&mut state.sessions, &deployment.id, number)?;
             }
-            (deployment.id, finish_entry(outcome, number, &worktree.branch, &worktree.base), has_strategist)
+            (deployment.id, entry, has_strategist)
         };
         let finished = self.post_entry(&deployment_id, LEGION, entry)?;
         if has_strategist {

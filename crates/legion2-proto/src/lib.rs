@@ -74,6 +74,10 @@ pub struct Caller {
     pub position: String,
 }
 
+/// Where other Legions subscribe to a channel a machine hosts, unless
+/// another port is given.
+pub const DEFAULT_CHANNEL_PORT: u16 = 4620;
+
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -88,6 +92,8 @@ pub enum Command {
     DeploymentList { folder: Option<String> },
     /// Ends every session in the deployment; it isn't brought back after a restart.
     DeploymentClose { deployment: String },
+    /// Gives the deployment a new name, unique in its folder.
+    DeploymentRename { deployment: String, name: String },
     MissionAdd { deployment: String, title: String, body: String },
     MissionList { deployment: String },
     MissionRead { deployment: String, mission: u32 },
@@ -122,6 +128,27 @@ pub enum Command {
     CalloutList { deployment: String },
     /// The folder's shared tools, or one tool's text when `tool` names it.
     ToolboxRead { deployment: String, tool: Option<String> },
+    /// Hosts a channel on this machine: other Legions subscribe to it at
+    /// this machine's address and `port`, giving the same `key`. With no key,
+    /// one is made up. Replaces a channel already hosted.
+    ChannelOpen { port: u16, key: Option<String> },
+    /// Stops hosting the channel; subscriptions stay.
+    ChannelClose,
+    /// Subscribes to another Legion's channel at `address` (host:port).
+    ChannelSubscribe { address: String, key: String },
+    ChannelUnsubscribe { address: String },
+    /// The channel this machine hosts, and the ones it subscribes to.
+    ChannelStatus,
+    /// The deployments reachable over channels, each with what it can do.
+    ChannelDeployments { deployment: String },
+    /// What this deployment's team is and can do, for the others on the channels.
+    ChannelDescribe { deployment: String, text: String },
+    /// A message to another deployment's commander, by the key the
+    /// deployment list gives it.
+    ChannelSend { deployment: String, to: String, text: String },
+    /// What the channels carried and saw on this machine, newest last; the
+    /// latest `limit` entries.
+    ChannelLog { limit: u32 },
     /// Sends events from now on, for as long as the connection stays open.
     Watch,
 }
@@ -199,6 +226,8 @@ pub enum Reply {
     Entries { entries: Vec<Entry> },
     /// Plain text to show as it is.
     Text { text: String },
+    Channels { channels: Channels },
+    ChannelLog { entries: Vec<ChannelLogEntry> },
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
@@ -207,6 +236,111 @@ pub enum Reply {
 pub enum Event {
     Entry { entry: Entry },
     Session { session: SessionInfo },
+    /// The channels changed: one opened or closed, or an end came or went.
+    Channels { channels: Channels },
+    ChannelLogged { entry: ChannelLogEntry },
+}
+
+/// One thing the channels carried or saw on this machine.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChannelLogEntry {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub id: u64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub at_ms: i64,
+    pub kind: ChannelLogKind,
+    /// The machine at the other end, or the one the deployment is on.
+    pub machine: Option<String>,
+    /// Deployment keys, for messages.
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub text: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelLogKind {
+    /// A commander here sent a message.
+    Sent,
+    /// A message reached a commander here.
+    Delivered,
+    /// The host passed a message on between two other Legions.
+    PassedOn,
+    /// A message didn't get through.
+    Undelivered,
+    ChannelOpened,
+    ChannelClosed,
+    /// A Legion subscribed to the channel hosted here, or dropped off it.
+    SubscriberJoined,
+    SubscriberLeft,
+    /// This machine's subscription to another's channel came up or went down.
+    SubscriptionUp,
+    SubscriptionDown,
+    /// A team became reachable over the channels, or stopped being.
+    TeamAppeared,
+    TeamGone,
+}
+
+/// The channel this machine hosts, if any, and the ones it subscribes to.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct Channels {
+    pub hosted: Option<HostedChannel>,
+    pub subscriptions: Vec<Subscription>,
+    /// Every open deployment reachable over the channels, this machine's too.
+    pub deployments: Vec<ChannelDeployment>,
+}
+
+/// An open deployment as the channels know it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChannelDeployment {
+    /// Unique across linked Legions: the machine's name and the deployment's ID.
+    pub key: String,
+    pub machine: String,
+    pub name: String,
+    /// The folder's name.
+    pub folder: String,
+    pub pipeline: String,
+    pub operators: Vec<String>,
+    /// What the team is and can do, in its commander's words.
+    pub description: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HostedChannel {
+    pub port: u16,
+    /// What a subscriber gives to be let in.
+    pub key: String,
+    /// The Legions subscribed and checking in now.
+    pub subscribers: Vec<ChannelEnd>,
+    /// Why it isn't taking subscribers, such as the port being in use.
+    pub problem: Option<String>,
+}
+
+/// A Legion at the other end of a channel.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChannelEnd {
+    /// The machine's name, as it gave it.
+    pub machine: String,
+    pub address: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Subscription {
+    /// host:port
+    pub address: String,
+    /// Connected, let in, and heard from within the last check.
+    pub is_up: bool,
+    /// The hosting machine's name, once it has answered.
+    pub host_machine: Option<String>,
+    /// Why it's down, while it is.
+    pub problem: Option<String>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]

@@ -1,7 +1,7 @@
 //! The legion2 command's arguments.
 
 use clap::{Parser, Subcommand};
-use legion2_proto::ENV_DEPLOYMENT;
+use legion2_proto::{DEFAULT_CHANNEL_PORT, ENV_DEPLOYMENT};
 
 #[derive(Parser)]
 #[command(name = "legion2", about = "Run Legion: folders, deployments, missions, sessions and the deployment log.")]
@@ -33,6 +33,8 @@ pub enum Action {
     },
     /// List deployments.
     Deployments { folder: Option<String> },
+    /// Give the deployment a new name, unique in its folder.
+    Rename { name: String },
     /// Close the deployment: every session in it ends, and it isn't brought back.
     Close,
     /// Create a mission in the deployment (human only). The body comes from --body, --file or stdin.
@@ -168,6 +170,43 @@ pub enum Action {
     Service {
         #[command(subcommand)]
         action: ServiceAction,
+    },
+    /// Link this machine's Legion with others: host a channel, or subscribe to one.
+    Channel {
+        #[command(subcommand)]
+        action: ChannelAction,
+    },
+}
+
+#[derive(Subcommand, Clone, Debug, PartialEq)]
+pub enum ChannelAction {
+    /// Host a channel other Legions can subscribe to. Prints the key to give them.
+    Open {
+        #[arg(long, default_value_t = DEFAULT_CHANNEL_PORT)]
+        port: u16,
+        /// The key subscribers give; one is made up without it.
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Stop hosting the channel. Subscriptions stay.
+    Close,
+    /// Subscribe to another Legion's channel.
+    Subscribe {
+        /// host:port
+        address: String,
+        #[arg(long)]
+        key: String,
+    },
+    Unsubscribe {
+        /// host:port
+        address: String,
+    },
+    /// Show the hosted channel and the subscriptions, and whether each end is up.
+    Status,
+    /// Show what the channels carried and saw on this machine, newest last.
+    Log {
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
     },
 }
 

@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 use crate::context_handover::{note_request, on_turn_end, HandoverAction};
 use crate::{
     access::run_a_session_command_targets,
+    channels::ChannelManager,
     activity_entries::entry_for_activity_change,
     unreported_turns::{is_announcements_only, next_turn_is_announcements_only, unreported_turn_message},
     constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS},
@@ -37,6 +38,8 @@ pub struct Daemon {
     pub config: Config,
     pub state: Mutex<State>,
     pub events: broadcast::Sender<Event>,
+    /// The channel this machine hosts and the ones it subscribes to.
+    pub channels: ChannelManager,
     /// Set once legion2d is stopping: sessions cut off by its exit are
     /// still remembered as running, so they come back when it starts again.
     pub is_shutting_down: AtomicBool,
@@ -100,7 +103,8 @@ impl Daemon {
             strategist_started_at: HashMap::new(),
             strategist_checked_at: HashMap::new(),
         };
-        Arc::new(Daemon { config, state: Mutex::new(state), events, is_shutting_down: AtomicBool::new(false) })
+        let channels = ChannelManager::new(config.data_folder.clone(), events.clone());
+        Arc::new(Daemon { config, state: Mutex::new(state), events, channels, is_shutting_down: AtomicBool::new(false) })
     }
 
     /// Read fresh each time, so a change to settings.json needs no restart.
@@ -292,6 +296,7 @@ impl Daemon {
             Command::DeploymentStart { folder, pipeline, name } => self.start_deployment(&folder, &pipeline, name),
             Command::DeploymentList { folder } => Ok(self.list_deployments(folder.as_deref())),
             Command::DeploymentClose { deployment } => self.close_deployment(&deployment),
+            Command::DeploymentRename { deployment, name } => self.rename_deployment(&deployment, &name),
             Command::MissionAdd { deployment, title, body } => self.add_mission(&deployment, &title, &body),
             Command::MissionList { deployment } => self.list_missions(&deployment),
             Command::MissionRead { deployment, mission } => self.read_mission(&deployment, mission),
@@ -312,6 +317,15 @@ impl Daemon {
             Command::Callout { deployment, text } => self.call_out(&deployment, &author, &text),
             Command::CalloutList { deployment } => self.list_callouts(&deployment),
             Command::ToolboxRead { deployment, tool } => self.read_toolbox(&deployment, tool.as_deref()),
+            Command::ChannelOpen { port, key } => self.channels.open(port, key).map(|channels| Reply::Channels { channels }),
+            Command::ChannelClose => self.channels.close().map(|channels| Reply::Channels { channels }),
+            Command::ChannelSubscribe { address, key } => self.channels.subscribe(&address, &key).map(|channels| Reply::Channels { channels }),
+            Command::ChannelUnsubscribe { address } => self.channels.unsubscribe(&address).map(|channels| Reply::Channels { channels }),
+            Command::ChannelStatus => Ok(Reply::Channels { channels: self.channels.status() }),
+            Command::ChannelDeployments { deployment } => self.list_channel_deployments(&deployment),
+            Command::ChannelDescribe { deployment, text } => self.describe_on_channels(&deployment, &text),
+            Command::ChannelSend { deployment, to, text } => self.send_on_channels(&deployment, &to, &text),
+            Command::ChannelLog { limit } => Ok(Reply::ChannelLog { entries: self.channels.log(limit) }),
         }
     }
 }

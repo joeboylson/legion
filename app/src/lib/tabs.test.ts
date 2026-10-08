@@ -62,6 +62,7 @@ describe('selectedRowKey', () => {
     expect(selectedRowKey(operators)).toBe('deployment:d1')
     expect(selectedRowKey(folder)).toBe('folder:/repo')
     expect(selectedRowKey({ kind: 'blockers' })).toBe('blockers')
+    expect(selectedRowKey({ kind: 'channels' })).toBe('channels')
     expect(selectedRowKey(undefined)).toBeUndefined()
   })
 })
