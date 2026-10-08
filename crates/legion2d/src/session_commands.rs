@@ -15,6 +15,7 @@ use crate::{
     daemon::{Daemon, State},
     git::{create_worktree, current_branch, is_git_repo},
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
+    permission_answers::answers_permission_question,
     callouts::read_callouts,
     prompts::{commander_prompt, operator_prompt, strategist_prompt, MissionBriefing, OperatorBriefing, StrategistBriefing},
     session_arguments::{legion_tools_config, session_arguments, LaunchPlan},
@@ -48,9 +49,10 @@ fn write_prompt_file(path: &Path, prompt: &str) -> Result<(), String> {
     std::fs::write(path, prompt).map_err(|error| format!("can't write {}: {error}", path.display()))
 }
 
-/// A waiting session costs nothing, so only starting, busy and asking ones count.
+/// A waiting session costs nothing, so only starting, busy and asking ones
+/// count, and a halted one, which holds its work until a person answers.
 pub fn is_busy(activity: Activity) -> bool {
-    matches!(activity, Activity::Starting | Activity::Busy | Activity::Permission)
+    matches!(activity, Activity::Starting | Activity::Busy | Activity::Permission | Activity::Halted)
 }
 
 fn started_text(position: &str, mission: Option<u32>, part: Option<u32>, starter: &str) -> String {
@@ -306,7 +308,7 @@ impl Daemon {
                 Some(checkout) => PathBuf::from(&checkout.path),
                 None => mission_working_folder(&state, folder_index, &deployment.id, mission)?,
             };
-            let spawn_request = SpawnRequest { deployment: deployment.id, position: launch.position, mission, part, working_folder, arguments, clear_at: launch.clear_at };
+            let spawn_request = SpawnRequest { deployment: deployment.id, position: launch.position, mission, part, working_folder, arguments, clear_at: launch.clear_at, permission_mode: launch.permission_mode };
             (spawn_request, commanders_team)
         };
         let deployment_id = spawn_request.deployment.clone();
@@ -350,17 +352,33 @@ impl Daemon {
     }
 
     pub fn type_input(&self, deployment_key: &str, position: &str, text: &str) -> Result<Reply, String> {
-        let mut state = self.state.lock().unwrap();
-        let (_, deployment) = state.find_deployment(deployment_key)?;
-        state.session_in_deployment(&deployment.id, position)?.type_bytes(text.as_bytes())?;
-        Ok(Reply::Done)
+        self.send_to_terminal(deployment_key, position, text.as_bytes())
     }
 
     pub fn press_key(&self, deployment_key: &str, position: &str, key_name: &str) -> Result<Reply, String> {
-        let key = TerminalKey::from_name(key_name)?;
-        let mut state = self.state.lock().unwrap();
-        let (_, deployment) = state.find_deployment(deployment_key)?;
-        state.session_in_deployment(&deployment.id, position)?.press_key(key)?;
+        self.send_to_terminal(deployment_key, position, TerminalKey::from_name(key_name)?.bytes())
+    }
+
+    /// Sends what a person typed or pressed. An answer to a waiting
+    /// permission question marks the session busy at once: Claude says only
+    /// when the tool call ends, which for a slow tool is long after.
+    fn send_to_terminal(&self, deployment_key: &str, position: &str, bytes: &[u8]) -> Result<Reply, String> {
+        let answered = {
+            let mut state = self.state.lock().unwrap();
+            let (_, deployment) = state.find_deployment(deployment_key)?;
+            let session = state.session_in_deployment(&deployment.id, position)?;
+            session.type_bytes(bytes)?;
+            let is_answer = session.activity == Activity::Permission && answers_permission_question(bytes);
+            if is_answer {
+                session.activity = Activity::Busy;
+                session.detail = None;
+                session.permission_asked_at = None;
+            }
+            is_answer.then(|| session.info())
+        };
+        if let Some(info) = answered {
+            self.announce_session(&info);
+        }
         Ok(Reply::Done)
     }
 }
@@ -371,7 +389,7 @@ mod tests {
 
     #[test]
     fn only_working_sessions_are_busy() {
-        assert!(is_busy(Activity::Busy) && is_busy(Activity::Permission) && is_busy(Activity::Starting));
+        assert!(is_busy(Activity::Busy) && is_busy(Activity::Permission) && is_busy(Activity::Starting) && is_busy(Activity::Halted));
         assert!(!is_busy(Activity::Idle) && !is_busy(Activity::Ended));
     }
 

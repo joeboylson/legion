@@ -5,7 +5,7 @@ use legion2_proto::{Activity, EntryKind};
 const DEFAULT_PERMISSION_REQUEST: &str = "a tool needs permission";
 
 /// The deployment log entry a change calls for, if any: a new permission question,
-/// or a new wait on a usage limit. Both go to the human.
+/// a new wait on a usage limit, or a halt. Each goes to the human.
 pub fn entry_for_activity_change(position: &str, previous: Activity, current: Activity, detail: Option<&str>) -> Option<(EntryKind, String)> {
     if previous == current {
         return None;
@@ -16,6 +16,7 @@ pub fn entry_for_activity_change(position: &str, previous: Activity, current: Ac
             let reset = detail.map(|reset| format!(" ({reset})")).unwrap_or_default();
             Some((EntryKind::Note, format!("{position} hit its usage limit{reset}; Legion tells it to carry on once the limit resets")))
         }
+        Activity::Halted => Some((EntryKind::Note, format!("{position} was halted in its terminal and waits to be told what to do next"))),
         _ => None,
     }
 }
@@ -46,6 +47,9 @@ mod tests {
     #[test]
     fn ordinary_changes_and_repeats_are_not() {
         assert_eq!(entry_for_activity_change("builder", Activity::Idle, Activity::Busy, None), None);
+        let (kind, text) = entry_for_activity_change("builder", Activity::Busy, Activity::Halted, None).unwrap();
+        assert_eq!(kind, EntryKind::Note);
+        assert!(text.starts_with("builder was halted"));
         assert_eq!(entry_for_activity_change("builder", Activity::Permission, Activity::Permission, Some("x")), None);
     }
 }

@@ -345,6 +345,9 @@ pub enum Activity {
     Permission,
     /// Hit its usage limit; the add-on tells it to carry on once it resets.
     Limited,
+    /// A person stopped its turn (Esc, or a deny, in its terminal); it waits
+    /// to be told what to do next.
+    Halted,
     Ended,
 }
 
@@ -356,6 +359,7 @@ impl Activity {
             Activity::Busy => "busy",
             Activity::Permission => "waiting on a permission question",
             Activity::Limited => "waiting for its usage limit to reset",
+            Activity::Halted => "halted, waiting to be told what to do next",
             Activity::Ended => "ended",
         }
     }

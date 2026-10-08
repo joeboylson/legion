@@ -25,6 +25,7 @@ mod mission_commands;
 mod mission_parts;
 mod mission_status;
 mod naming;
+mod permission_answers;
 mod prompts;
 mod deployment_commands;
 mod server;

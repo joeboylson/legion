@@ -13,13 +13,14 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 
 use crate::{
     constants::{
-        ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
+        ADDON_PERMISSION_MODE_ENV, ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
         CHILD_SESSION_MARKERS, TERMINAL_COLUMNS, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
     context_handover::{autocompact_percent, HandoverPhase},
     daemon::Daemon,
     ids::new_id,
+    setup::PermissionMode,
     store::RunningSession,
     terminal_key::TerminalKey,
 };
@@ -115,6 +116,7 @@ pub struct SpawnRequest {
     pub working_folder: PathBuf,
     pub arguments: Vec<String>,
     pub clear_at: Option<u8>,
+    pub permission_mode: Option<PermissionMode>,
 }
 
 fn claude_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> CommandBuilder {
@@ -128,6 +130,9 @@ fn claude_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> 
     CHILD_SESSION_MARKERS.iter().for_each(|marker| command.env_remove(marker));
     command.env(ADDON_SOCKET_ENV, &config.socket_path);
     command.env(ADDON_SESSION_ENV, session_id);
+    if let Some(mode) = request.permission_mode {
+        command.env(ADDON_PERMISSION_MODE_ENV, mode.flag_value());
+    }
     command.env(ENV_DEPLOYMENT, &request.deployment);
     command.env(ENV_POSITION, &request.position);
     if let Some(clear_at) = request.clear_at {

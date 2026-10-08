@@ -22,6 +22,9 @@ pub const KNOWN_ADDON_VERSIONS: &[&str] = &["1"];
 /// The add-on reads these (the names are spelled out in register.ts too).
 pub const ADDON_SOCKET_ENV: &str = "LEGION_ADDON_SOCKET";
 pub const ADDON_SESSION_ENV: &str = "LEGION_ADDON_SESSION";
+/// The session's permission mode, so the add-on knows whether an ask waits on
+/// a person (manual) or on Claude's own checker (auto). Unset: Claude's default.
+pub const ADDON_PERMISSION_MODE_ENV: &str = "LEGION_PERMISSION_MODE";
 
 /// Started from inside a Claude session, these mark the new one as its
 /// child, which turns off saving its transcript (and so resuming it).
