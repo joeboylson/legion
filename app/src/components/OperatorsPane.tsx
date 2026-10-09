@@ -42,7 +42,7 @@ export function OperatorsPane({ snapshot, changeCount, openPosition, onOpen }: O
       </ToggleGroup>
       {view === 'graph' && <OperatorGraph deploymentId={snapshot.deployment.id} roster={roster} steps={snapshot.pipelineSteps} pipelineOrder={snapshot.pipelineOperators} onOpen={onOpen} />}
       {view === 'list' && <OperatorList roster={roster} onOpen={onOpen} />}
-      {view === 'grid' && <PositionCards roster={roster} openPosition={openPosition} onOpen={onOpen} />}
+      {view === 'grid' && <PositionCards deploymentId={snapshot.deployment.id} roster={roster} openPosition={openPosition} onOpen={onOpen} />}
       {view === 'log' && <LogTab deploymentId={snapshot.deployment.id} changeCount={changeCount} />}
     </div>
   )

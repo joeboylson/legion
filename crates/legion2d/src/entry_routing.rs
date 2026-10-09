@@ -79,7 +79,7 @@ pub fn delivery_text(entry: &Entry) -> String {
             let number = entry.mission.unwrap_or_default();
             format!("New mission {number}: {text}. Read it with the mission_read tool.")
         }
-        EntryKind::Answer => format!("The human answered your #{}: {text}", entry.answers.unwrap_or_default()),
+        EntryKind::Answer => format!("The admin answered your #{}: {text}", entry.answers.unwrap_or_default()),
         EntryKind::Handoff => format!("{author} handed off{on_mission}: {text}"),
         EntryKind::Done => format!("{author} reports{on_mission} done: {text}"),
         EntryKind::Blocked => format!("{author} reports{on_mission} blocked: {text}"),
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(delivery_text(&entry(EntryKind::Handoff, Some(2))), "[legion2] builder handed off mission 2: ok");
         assert_eq!(delivery_text(&entry(EntryKind::Message, None)), "[legion2] Message from builder: ok");
         assert_eq!(delivery_text(&entry(EntryKind::Message, Some(2))), "[legion2] Message from builder (mission 2): ok");
-        assert_eq!(delivery_text(&entry(EntryKind::Answer, None)), "[legion2] The human answered your #7: ok");
+        assert_eq!(delivery_text(&entry(EntryKind::Answer, None)), "[legion2] The admin answered your #7: ok");
         assert_eq!(delivery_text(&entry(EntryKind::Announcement, None)), "[legion2] Heads-up, no reply needed: ok");
     }
 }

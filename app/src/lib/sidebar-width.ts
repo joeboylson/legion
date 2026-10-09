@@ -1,4 +1,4 @@
-// The sidebar's width when the human drags its edge.
+// The sidebar's width when the admin drags its edge.
 
 // Fibonacci bounds from the design tokens: --space-9 and --measure.
 export const MIN_SIDEBAR_WIDTH_PX = 144

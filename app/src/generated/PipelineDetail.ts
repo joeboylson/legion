@@ -5,4 +5,8 @@ export type PipelineDetail = { name: string, operators: Array<string>, first: st
 /**
  * Why Legion can't use it as written, if it can't.
  */
-problem: string | null, };
+problem: string | null, 
+/**
+ * Its file as written; none for no pipeline, which has no file.
+ */
+file_text: string | null, };

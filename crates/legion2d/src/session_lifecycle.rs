@@ -64,7 +64,7 @@ pub fn refusal_messages(position: &str, timeout_minutes: u64, request: &str) -> 
 pub fn stuck_starting_text(position: &str) -> String {
     let grace = SESSION_START_GRACE.as_secs();
     format!(
-        "{position}'s session hasn't started after {grace} seconds. It's likely waiting on a question Legion can't see, such as whether to trust the folder. Look with `legion2 screen {position}` and answer with `legion2 key {position} <key>`."
+        "{position}'s session hasn't started after {grace} seconds. It's likely waiting on a question Legion can't see, such as whether to trust the folder. Look with `legion2 session watch --position {position}` and answer with `legion2 session key --position {position}`."
     )
 }
 
@@ -99,7 +99,7 @@ impl Daemon {
             may_restart
         };
         if !may_restart {
-            let text = "the commander ended by itself again soon after a restart, so Legion left it down. Start it with `legion2 start commander`.";
+            let text = "the commander ended by itself again soon after a restart, so Legion left it down. Start it with `legion2 session start --operator commander`.";
             self.post_legion_entry(&session.deployment, entry(EntryKind::Note, Some(HUMAN), None, text.into()));
             return;
         }
@@ -128,7 +128,7 @@ impl Daemon {
         self.post_legion_entry(&session.deployment, fresh_entry);
     }
 
-    /// Tells the human about sessions whose add-on hasn't reported in time,
+    /// Tells the admin about sessions whose add-on hasn't reported in time,
     /// once each.
     pub fn report_sessions_stuck_starting(&self) {
         let stuck: Vec<(legion2_proto::SessionInfo, Option<u32>)> = {
@@ -190,11 +190,15 @@ impl Daemon {
                     let (folder_index, deployment) = state.find_open_deployment(deployment_id).ok()?;
                     let folder = &state.folders[folder_index];
                     let (pipeline, _) = read_pipeline(&folder.path, &deployment.pipeline).ok()?;
-                    let limit = read_operator(&folder.path, &pipeline.first).ok()?.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
                     let deployment_sessions: Vec<&Session> = state.sessions.values().filter(|session| &session.deployment == deployment_id).collect();
-                    let first_copies: Vec<&&Session> =
-                        deployment_sessions.iter().filter(|session| operator_of_position(&session.position) == pipeline.first).collect();
-                    let first_has_room = first_copies.len() < limit as usize || first_copies.iter().any(|session| session.activity == legion2_proto::Activity::Idle);
+                    // With no first step, the commander may start anyone on a waiting mission.
+                    let starters: Vec<String> = pipeline.first.clone().map_or_else(|| pipeline.operators.clone(), |first| vec![first]);
+                    let has_room = |operator: &String| {
+                        let limit = read_operator(&folder.path, operator).ok().and_then(|read| read.config.limit).unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
+                        let copies: Vec<&&Session> = deployment_sessions.iter().filter(|session| &operator_of_position(&session.position) == operator).collect();
+                        copies.len() < limit as usize || copies.iter().any(|session| session.activity == legion2_proto::Activity::Idle)
+                    };
+                    let first_has_room = starters.iter().any(has_room);
                     let missions: Vec<MissionView> = folder
                         .store
                         .missions(deployment_id)
@@ -213,7 +217,8 @@ impl Daemon {
                             }
                         })
                         .collect();
-                    Some((deployment_id.clone(), pipeline.first, stalls(&missions, first_has_room, now)))
+                    let starter = pipeline.first.unwrap_or_else(|| "an operator".to_string());
+                    Some((deployment_id.clone(), starter, stalls(&missions, first_has_room, now)))
                 })
                 .collect();
             found
@@ -288,6 +293,6 @@ mod tests {
     #[test]
     fn a_stuck_session_tells_the_human_how_to_look() {
         let text = stuck_starting_text("planner");
-        assert!(text.contains("legion2 screen planner") && text.contains("legion2 key planner"));
+        assert!(text.contains("legion2 session watch --position planner") && text.contains("legion2 session key --position planner"));
     }
 }

@@ -151,7 +151,7 @@ fn operator_launch(
     }
     let (pipeline, pipeline_text) = read_pipeline(&folder.path, &deployment.pipeline)?;
     if !pipeline.operators.iter().any(|operator| operator == operator_name) {
-        return Err(format!("{operator_name} isn't on the {} pipeline ({})", deployment.pipeline, pipeline.operators.join(", ")));
+        return Err(format!("{operator_name} isn't on the team {} ({})", legion2_proto::pipeline_phrase(&deployment.pipeline), pipeline.operators.join(", ")));
     }
     let operator = read_operator(&folder.path, operator_name)?;
     let settings = read_settings(&folder.path)?;

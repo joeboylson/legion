@@ -6,6 +6,7 @@
 import { Copy } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 
+import { ActionButton, ActionMenuButton } from '@/components/actions/ActionMenus'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -14,7 +15,7 @@ import type { ChannelLogKind } from '@/generated/ChannelLogKind'
 import type { Channels } from '@/generated/Channels'
 import type { ChannelSwitch } from '@/generated/ChannelSwitch'
 import type { DeploymentSwitches } from '@/generated/DeploymentSwitches'
-import { clockTime } from '@/lib/format'
+import { clockTime, pipelineLabel } from '@/lib/format'
 import { askFor } from '@/lib/legion'
 import { partiesIn, partyColors, type PartyColors } from '@/lib/party-colors'
 import { cn } from '@/lib/utils'
@@ -71,7 +72,7 @@ function StatusDot({ isUp }: { isUp: boolean }) {
 function ChannelSummary({ channels }: { channels: Channels }) {
   const { hosted, subscriptions } = channels
   if (hosted === null && subscriptions.length === 0) {
-    return <p className="m-0 text-muted-foreground">No channels yet. Open one with `legion2 channel open`, or subscribe to another Legion's with `legion2 channel subscribe`.</p>
+    return <p className="m-0 text-muted-foreground">No channels yet. Host one, or subscribe to another Legion's.</p>
   }
   return (
     <div className="flex flex-col gap-3">
@@ -187,7 +188,7 @@ function TeamsTable({ channels, colors }: { channels: Channels; colors: PartyCol
             </td>
             <td>{team.folder}</td>
             <td className="font-mono" title={team.operators.join(' → ')}>
-              {team.pipeline}
+              {pipelineLabel(team.pipeline)}
             </td>
             {(['send', 'receive'] as const).map(direction => {
               const switches = ownSwitches(channels, team.key)
@@ -286,7 +287,12 @@ export function ChannelsPage({ channels, changeCount }: { channels?: Channels; c
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto p-4">
       <section className="flex flex-col gap-2">
-        <span className="label">This machine</span>
+        <div className="flex items-center gap-2">
+          <span className="label flex-1">This machine</span>
+          <ActionButton actionId="channel.open" prefill={{}} />
+          <ActionButton actionId="channel.subscribe" prefill={{}} />
+          <ActionMenuButton subject="channel" prefill={{}} label="Channels" />
+        </div>
         <ChannelSummary channels={channels} />
       </section>
       <section className="flex flex-col gap-2">

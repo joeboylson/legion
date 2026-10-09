@@ -16,7 +16,7 @@ pub fn check_in_request(position: &str, mission: Option<u32>, working_ms: i64) -
     let minutes = working_ms / 60_000;
     let on_mission = mission.map(|number| format!(" on mission {number}")).unwrap_or_default();
     format!(
-        "{position} has been working for {minutes} minutes{on_mission}. Read its screen with the screen tool. If it's making progress, leave it be. If it's stuck (a command that never returns, the same step over and over, waiting on something), send it a message to get it moving, or ask the human."
+        "{position} has been working for {minutes} minutes{on_mission}. Read its screen with the screen tool. If it's making progress, leave it be. If it's stuck (a command that never returns, the same step over and over, waiting on something), send it a message to get it moving, or ask the admin."
     )
 }
 

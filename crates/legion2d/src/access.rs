@@ -1,4 +1,4 @@
-//! What a session may ask legion2d to do. The human (a caller that isn't a
+//! What a session may ask legion2d to do. The admin (a caller that isn't a
 //! session) may do everything; sessions only act in their own deployment.
 
 use legion2_proto::{Command, EntryKind, Role, COMMANDER};
@@ -32,7 +32,7 @@ const OPERATOR_ENTRY_KINDS: &[EntryKind] = &[
     EntryKind::Decision,
 ];
 
-/// The commander also passes the human's answers back.
+/// The commander also passes the admin's answers back.
 const COMMANDER_ONLY_ENTRY_KINDS: &[EntryKind] =
     &[EntryKind::Paused, EntryKind::Resumed, EntryKind::Postmortem, EntryKind::Answer];
 
@@ -55,8 +55,8 @@ enum AllowedTo {
 
 fn refusal(allowed_to: AllowedTo, what: &str) -> String {
     let who_can = match allowed_to {
-        AllowedTo::CommanderAndHuman => "the commander or the human",
-        AllowedTo::HumanOnly => "the human",
+        AllowedTo::CommanderAndHuman => "the commander or the admin",
+        AllowedTo::HumanOnly => "the admin",
     };
     format!("a session can't {what}; that's for {who_can}")
 }
@@ -100,16 +100,27 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } | Command::MissionSplit { .. } => {
             Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish or split missions"))
         }
-        Command::MissionAdd { .. } => Err("only the human creates missions; suggest one with the suggest tool".into()),
+        Command::MissionAdd { .. } => Err("only the admin creates missions; suggest one with the suggest tool".into()),
         Command::Key { .. } | Command::Input { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
         Command::FolderAdd { .. }
         | Command::FolderList
         | Command::FolderRemove { .. }
         | Command::FolderRead { .. }
+        | Command::OperatorAdd { .. }
+        | Command::OperatorRemove { .. }
+        | Command::PipelineAdd { .. }
+        | Command::SettingsSet { .. }
+        | Command::OperatorSet { .. }
+        | Command::PipelineRemove { .. }
+        | Command::OperatorDefine { .. }
+        | Command::PipelineWrite { .. }
         | Command::DeploymentStart { .. }
         | Command::DeploymentList { .. }
         | Command::DeploymentClose { .. }
-        | Command::DeploymentRename { .. } => Err(refusal(AllowedTo::HumanOnly, "add or remove folders, or start, list or close deployments")),
+        | Command::DeploymentRename { .. }
+        | Command::DeploymentRepipe { .. }
+        | Command::DeploymentReopen { .. }
+        | Command::DeploymentDelete { .. } => Err(refusal(AllowedTo::HumanOnly, "change folders, operators or pipelines, or start, list or close deployments")),
         Command::Watch => Err(refusal(AllowedTo::HumanOnly, "watch everything")),
         Command::ChannelDeployments { deployment } | Command::ChannelDescribe { deployment, .. } | Command::ChannelSend { deployment, .. } if is_commander => {
             Ok(Some(deployment))
@@ -226,11 +237,11 @@ mod tests {
     #[test]
     fn refusals_name_who_can() {
         let close = Command::DeploymentClose { deployment: "r".into() };
-        assert!(run_a_session_command_targets(Role::Operator, &close).unwrap_err().ends_with("that's for the human"));
+        assert!(run_a_session_command_targets(Role::Operator, &close).unwrap_err().ends_with("that's for the admin"));
         let postmortem = run_a_session_command_targets(Role::Operator, &post(EntryKind::Postmortem)).unwrap_err();
-        assert!(postmortem.ends_with("the commander or the human"));
+        assert!(postmortem.ends_with("the commander or the admin"));
         let legion_entry = run_a_session_command_targets(Role::Commander, &post(EntryKind::Finished)).unwrap_err();
-        assert!(legion_entry.ends_with("that's for the human"));
+        assert!(legion_entry.ends_with("that's for the admin"));
     }
 
     #[test]

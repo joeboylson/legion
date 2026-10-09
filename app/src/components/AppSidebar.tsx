@@ -4,14 +4,12 @@
 // level folds like a file tree. A blocker is marked on the deepest row you
 // can see, and every one is listed together on the Blockers page.
 
-import { ChevronRight, Settings, SquareArrowOutUpRight, TriangleAlert, X } from 'lucide-react'
+import { ChevronRight, Search, SquareArrowOutUpRight, TriangleAlert, X } from 'lucide-react'
 import { createContext, type ReactNode, useContext, useMemo } from 'react'
 
 import { ActivityDot } from '@/components/ActivityDot'
 import { CommanderCrown } from '@/components/CommanderCrown'
-import { DeploymentMenu } from '@/components/DeploymentMenu'
-import { NewProjectDialog } from '@/components/NewProjectDialog'
-import { StartDeploymentDialog } from '@/components/StartDeploymentDialog'
+import { ActionContextMenu, ActionMenuButton, AddButton, type MenuOpen } from '@/components/actions/ActionMenus'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -31,10 +29,11 @@ import type { Channels } from '@/generated/Channels'
 import type { Deployment } from '@/generated/Deployment'
 import type { Folder } from '@/generated/Folder'
 import type { Mission } from '@/generated/Mission'
+import { useActions } from '@/hooks/useActions'
 import { OpenRowsContext, useOpenRowsState, useRowOpen } from '@/hooks/useOpenRows'
 import { DEPLOYMENTS_SECTION, markedRows, blockersIn, BLOCKER_KINDS, OPERATOR_KINDS, OPERATORS_PART, rowKeys } from '@/lib/blockers'
 import { DISMISSIBLE_KINDS, type DeploymentSnapshot, type Escalation, type EscalationKind, KIND_LABELS } from '@/lib/escalations'
-import { INACTIVE_LABEL, isWorking, MISSION_STATUS_LABELS, pipelineTag, sessionStatus, workingDotColor } from '@/lib/format'
+import { INACTIVE_LABEL, isWorking, MISSION_STATUS_LABELS, pipelineLabel, pipelineTag, sessionStatus, workingDotColor } from '@/lib/format'
 import { byOperatorOrder, type RosterEntry, rosterOf } from '@/lib/roster'
 import { BLOCKERS_KEY, CHANNELS_KEY, type DeploymentPart, type FolderTab } from '@/lib/tabs'
 import { cn } from '@/lib/utils'
@@ -64,7 +63,6 @@ type AppSidebarProps = {
   escalations: readonly Escalation[]
   channels?: Channels
   selectedKey?: string
-  onFolderAdded: () => void
   onOpenBlockers: () => void
   onOpenChannels: () => void
   onOpenFolder: (folder: Folder, tab?: FolderTab) => void
@@ -189,18 +187,20 @@ function Section({ rowKey, label, count, group = 'section', action, children }: 
 }
 
 // A pipeline or an operator: opens the folder page on its tab.
-function SetupRow({ name, onOpen }: { name: string; onOpen: () => void }) {
+function SetupRow({ name, folder, subject, onOpen }: { name: string; folder: string; subject: 'pipeline' | 'operator'; onOpen: () => void }) {
   return (
-    <SidebarMenuSubItem>
-      <Row>
-        <SidebarMenuSubButton asChild>
-          <button type="button" className="w-full font-mono" onClick={onOpen}>
-            <LeafMark />
-            {name}
-          </button>
-        </SidebarMenuSubButton>
-      </Row>
-    </SidebarMenuSubItem>
+    <ActionContextMenu subject={subject} prefill={{ folder, [subject]: name }} open={{ label: 'Open', onOpen }}>
+      <SidebarMenuSubItem>
+        <Row>
+          <SidebarMenuSubButton asChild>
+            <button type="button" className="w-full font-mono" onClick={onOpen}>
+              <LeafMark />
+              {subject === 'pipeline' ? pipelineLabel(name) : name}
+            </button>
+          </SidebarMenuSubButton>
+        </Row>
+      </SidebarMenuSubItem>
+    </ActionContextMenu>
   )
 }
 
@@ -208,6 +208,10 @@ function SetupRow({ name, onOpen }: { name: string; onOpen: () => void }) {
 const UNLABELLED_KINDS: readonly EscalationKind[] = ['question', 'decision']
 
 type EscalationRowProps = { escalation: Escalation; isSelected: boolean; onOpen: () => void; onDismiss: () => void }
+
+// A question can be answered from its menu; the rest only opened.
+const escalationPrefill = (escalation: Escalation) =>
+  escalation.questionId === undefined ? { deployment: escalation.deploymentId } : { deployment: escalation.deploymentId, question: String(escalation.questionId) }
 
 function EscalationRow({ escalation, isSelected, onOpen, onDismiss }: EscalationRowProps) {
   const dismiss =
@@ -217,17 +221,19 @@ function EscalationRow({ escalation, isSelected, onOpen, onDismiss }: Escalation
       </Button>
     ) : undefined
   return (
-    <SidebarMenuSubItem>
-      <Row action={dismiss}>
-        <SidebarMenuSubButton asChild isActive={isSelected}>
-          <button type="button" className="w-full" onClick={onOpen}>
-            <LeafMark />
-            {!UNLABELLED_KINDS.includes(escalation.kind) && <span className="flex-none font-mono text-label text-muted-foreground">{KIND_LABELS[escalation.kind]}</span>}
-            <span className="truncate">{escalation.text}</span>
-          </button>
-        </SidebarMenuSubButton>
-      </Row>
-    </SidebarMenuSubItem>
+    <ActionContextMenu subject={escalation.kind === 'question' ? 'question' : 'deployment'} prefill={escalationPrefill(escalation)} open={{ label: 'Open', onOpen }}>
+      <SidebarMenuSubItem>
+        <Row action={dismiss}>
+          <SidebarMenuSubButton asChild isActive={isSelected}>
+            <button type="button" className="w-full" onClick={onOpen}>
+              <LeafMark />
+              {!UNLABELLED_KINDS.includes(escalation.kind) && <span className="flex-none font-mono text-label text-muted-foreground">{KIND_LABELS[escalation.kind]}</span>}
+              <span className="truncate">{escalation.text}</span>
+            </button>
+          </SidebarMenuSubButton>
+        </Row>
+      </SidebarMenuSubItem>
+    </ActionContextMenu>
   )
 }
 
@@ -246,20 +252,24 @@ type DeploymentRowProps = {
 // pipeline names it but no session is running.
 function OperatorRow({ deploymentId, entry, onOpen }: { deploymentId: string; entry: RosterEntry; onOpen: () => void }) {
   const label = entry.session === undefined ? INACTIVE_LABEL : sessionStatus(entry.session)
+  // A running copy is a session to stop or talk to; an idle operator, one to start.
+  const prefill = entry.session === undefined ? { deployment: deploymentId, operator: entry.position } : { deployment: deploymentId, position: entry.position }
   return (
-    <SidebarMenuSubItem>
-      <Row rowKey={rowKeys.operator(deploymentId, entry.position)}>
-        <SidebarMenuSubButton asChild>
-          <button type="button" className={cn('w-full', entry.session === undefined && 'text-muted-foreground')} onClick={onOpen} title={label}>
-            <LeafMark />
-            <ActivityDot session={entry.session} />
-            <span className="truncate font-mono">{entry.position}</span>
-            <CommanderCrown position={entry.position} />
-            <span className="ml-auto flex-none text-label text-muted-foreground">{label}</span>
-          </button>
-        </SidebarMenuSubButton>
-      </Row>
-    </SidebarMenuSubItem>
+    <ActionContextMenu subject="session" prefill={prefill} open={{ label: 'Open its terminal', onOpen }}>
+      <SidebarMenuSubItem>
+        <Row rowKey={rowKeys.operator(deploymentId, entry.position)}>
+          <SidebarMenuSubButton asChild>
+            <button type="button" className={cn('w-full', entry.session === undefined && 'text-muted-foreground')} onClick={onOpen} title={label}>
+              <LeafMark />
+              <ActivityDot session={entry.session} />
+              <span className="truncate font-mono">{entry.position}</span>
+              <CommanderCrown position={entry.position} />
+              <span className="ml-auto flex-none text-label text-muted-foreground">{label}</span>
+            </button>
+          </SidebarMenuSubButton>
+        </Row>
+      </SidebarMenuSubItem>
+    </ActionContextMenu>
   )
 }
 
@@ -274,21 +284,34 @@ function OpenTabButton({ label, onOpen }: { label: string; onOpen: () => void })
 
 // A mission in the deployment: opens the deployment's missions in a tab,
 // and the mission over it.
-function MissionRow({ mission, onOpen }: { mission: Mission; onOpen: () => void }) {
+function MissionRow({ deploymentId, mission, onOpen }: { deploymentId: string; mission: Mission; onOpen: () => void }) {
   const status = MISSION_STATUS_LABELS[mission.status]
   return (
-    <SidebarMenuSubItem>
-      <Row>
-        <SidebarMenuSubButton asChild>
-          <button type="button" className={cn('w-full', mission.status === 'done' && 'text-muted-foreground')} onClick={onOpen} title={mission.title}>
-            <LeafMark />
-            <span className="flex-none font-mono text-label text-muted-foreground">{mission.number}</span>
-            <span className="truncate">{mission.title}</span>
-            <span className="ml-auto flex-none text-label text-muted-foreground">{status}</span>
-          </button>
-        </SidebarMenuSubButton>
-      </Row>
-    </SidebarMenuSubItem>
+    <ActionContextMenu subject="mission" prefill={{ deployment: deploymentId, mission: String(mission.number) }} open={{ label: 'Read it', onOpen }}>
+      <SidebarMenuSubItem>
+        <Row>
+          <SidebarMenuSubButton asChild>
+            <button type="button" className={cn('w-full', mission.status === 'done' && 'text-muted-foreground')} onClick={onOpen} title={mission.title}>
+              <LeafMark />
+              <span className="flex-none font-mono text-label text-muted-foreground">{mission.number}</span>
+              <span className="truncate">{mission.title}</span>
+              <span className="ml-auto flex-none text-label text-muted-foreground">{status}</span>
+            </button>
+          </SidebarMenuSubButton>
+        </Row>
+      </SidebarMenuSubItem>
+    </ActionContextMenu>
+  )
+}
+
+type DeploymentContextMenuProps = { isClosed: boolean; prefill: { deployment: string; folder: string }; open: MenuOpen; children: ReactNode }
+
+// A closed deployment can only be reopened or deleted.
+function DeploymentContextMenu({ isClosed, prefill, open, children }: DeploymentContextMenuProps) {
+  return (
+    <ActionContextMenu subject={isClosed ? 'closedDeployment' : 'deployment'} prefill={prefill} open={open}>
+      <div>{children}</div>
+    </ActionContextMenu>
   )
 }
 
@@ -316,25 +339,30 @@ function DeploymentRow(props: DeploymentRowProps) {
       onDismiss={() => onDismissEscalation(escalation)}
     />
   )
+  const deploymentPrefill = { deployment: snapshot.deployment.id, folder: snapshot.deployment.folder }
+  const openDeployment = { label: 'Open', onOpen: () => onOpenPart('operators') }
+  const menuButton = <ActionMenuButton subject={isClosed ? 'closedDeployment' : 'deployment'} prefill={deploymentPrefill} open={openDeployment} label={snapshot.deployment.name} />
   return (
     <Collapsible asChild className="group/deployment" {...openProps}>
       <SidebarMenuSubItem>
-        <Row rowKey={rowKeys.deployment(snapshot.deployment.id)} action={isClosed ? undefined : <DeploymentMenu deployment={snapshot.deployment} sessions={snapshot.sessions} />}>
-          <CollapsibleTrigger asChild>
-            <SidebarMenuSubButton asChild isActive={selectedKey === `deployment:${snapshot.deployment.id}`}>
-              <button type="button" className={cn('w-full', isClosed && 'text-muted-foreground')}>
-                <Chevron group="deployment" />
-                {isClosed ? <ActivityDot /> : <span className="dot flex-none" style={{ color: workingDotColor(isActive) }} />}
-                <span className="truncate">{snapshot.deployment.name}</span>
-                {waitingCount > 0 ? (
-                  <span className="count ml-auto">{waitingCount}</span>
-                ) : (
-                  <span className="ml-auto flex-none font-mono text-label text-muted-foreground">{pipelineTag(snapshot.deployment.pipeline)}</span>
-                )}
-              </button>
-            </SidebarMenuSubButton>
-          </CollapsibleTrigger>
-        </Row>
+        <DeploymentContextMenu isClosed={isClosed} prefill={deploymentPrefill} open={openDeployment}>
+          <Row rowKey={rowKeys.deployment(snapshot.deployment.id)} action={menuButton}>
+            <CollapsibleTrigger asChild>
+              <SidebarMenuSubButton asChild isActive={selectedKey === `deployment:${snapshot.deployment.id}`}>
+                <button type="button" className={cn('w-full', isClosed && 'text-muted-foreground')}>
+                  <Chevron group="deployment" />
+                  {isClosed ? <ActivityDot /> : <span className="dot flex-none" style={{ color: workingDotColor(isActive) }} />}
+                  <span className="truncate">{snapshot.deployment.name}</span>
+                  {waitingCount > 0 ? (
+                    <span className="count ml-auto">{waitingCount}</span>
+                  ) : (
+                    <span className="ml-auto flex-none font-mono text-label text-muted-foreground">{pipelineTag(snapshot.deployment.pipeline)}</span>
+                  )}
+                </button>
+              </SidebarMenuSubButton>
+            </CollapsibleTrigger>
+          </Row>
+        </DeploymentContextMenu>
         <CollapsibleContent>
           <SidebarMenuSub className={TIGHT_SUBMENU}>
             <Section group="part" rowKey={partKey(OPERATORS_PART)} label="Assigned operators" action={<OpenTabButton label="assigned operators" onOpen={() => onOpenPart('operators')} />} count={roster.length}>
@@ -350,7 +378,7 @@ function DeploymentRow(props: DeploymentRowProps) {
             </Section>
             <Section group="part" rowKey={partKey('missions')} label="Missions" action={<OpenTabButton label="missions" onOpen={() => onOpenPart('missions')} />} count={snapshot.missions.length}>
               {snapshot.missions.map(mission => (
-                <MissionRow key={mission.number} mission={mission} onOpen={() => onOpenMission(mission)} />
+                <MissionRow key={mission.number} deploymentId={snapshot.deployment.id} mission={mission} onOpen={() => onOpenMission(mission)} />
               ))}
             </Section>
             {/* Filled in once mission templates exist. */}
@@ -368,11 +396,23 @@ export function AppSidebar(props: AppSidebarProps) {
   const { onOpenBlockers } = props
   const marks = useMemo<Marks>(() => ({ rows: markedRows(escalations, openRows.isOpen), onOpen: onOpenBlockers }), [escalations, openRows.isOpen, onOpenBlockers])
   const blockerCount = blockersIn(escalations).length
+  const { openMenu } = useActions()
   return (
     <OpenRowsContext value={openRows}>
       <MarksContext value={marks}>
         <Sidebar collapsible="none" className="h-full">
           <SidebarContent>
+            <SidebarGroup className="pb-0">
+              <SidebarMenu>
+                <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
+                  <SidebarMenuButton onClick={openMenu} title="Go to anything, or do something">
+                    <Search className="size-4 flex-none" />
+                    <span className="text-muted-foreground">Go to or do…</span>
+                    <kbd className="ml-auto font-mono text-label text-muted-foreground">⌘K</kbd>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroup>
             <SidebarGroup>
               <SidebarMenu>
                 <SidebarMenuItem className={cn(BOXED, blockerCount > 0 ? 'border-[var(--yellow)]' : BOX_BORDER)}>
@@ -395,7 +435,7 @@ export function AppSidebar(props: AppSidebarProps) {
             <SidebarGroup>
               {/* Inset like a folder's border, so the plus lines up with the folders' buttons. */}
               <div className="border border-transparent px-1">
-                <Row action={<NewProjectDialog onAdded={props.onFolderAdded} />}>
+                <Row action={<AddButton actionId="folder.add" prefill={{}} />}>
                   <SidebarGroupLabel className="label">Local folders</SidebarGroupLabel>
                 </Row>
               </div>
@@ -412,11 +452,8 @@ export function AppSidebar(props: AppSidebarProps) {
                   // stops the work has its own mark.
                   const waitingCount = folderEscalations.filter(escalation => !escalation.isClosed && !BLOCKER_KINDS.includes(escalation.kind)).length
                   const isFolderActive = deployments.some(snapshot => isWorking(snapshot.sessions))
-                  const settingsButton = (
-                    <Button variant="ghost" size="icon-xs" aria-label={`${folder.name}'s settings and setup`} title="Settings and setup" onClick={() => props.onOpenFolder(folder)}>
-                      <Settings className="size-4" />
-                    </Button>
-                  )
+                  const openFolder = { label: 'Open settings and setup', onOpen: () => props.onOpenFolder(folder) }
+                  const folderMenu = <ActionMenuButton subject="folder" prefill={{ folder: folder.path }} open={openFolder} label={folder.name} />
                   return (
                     <Collapsible
                       key={folder.path}
@@ -427,19 +464,23 @@ export function AppSidebar(props: AppSidebarProps) {
                     >
                       {/* A border round each folder, so its whole tree reads as one block. */}
                       <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
-                        <Row rowKey={rowKeys.folder(folder.path)} action={settingsButton}>
-                          <CollapsibleTrigger asChild>
-                            <SidebarMenuButton isActive={selectedKey === `folder:${folder.path}`}>
-                              <Chevron group="folder" />
-                              <span className="dot flex-none" style={{ color: workingDotColor(isFolderActive) }} />
-                              <span className="truncate font-medium">{folder.name}</span>
-                              {waitingCount > 0 && <span className="count ml-auto">{waitingCount}</span>}
-                            </SidebarMenuButton>
-                          </CollapsibleTrigger>
-                        </Row>
+                        <ActionContextMenu subject="folder" prefill={{ folder: folder.path }} open={openFolder}>
+                          <div>
+                            <Row rowKey={rowKeys.folder(folder.path)} action={folderMenu}>
+                              <CollapsibleTrigger asChild>
+                                <SidebarMenuButton isActive={selectedKey === `folder:${folder.path}`}>
+                                  <Chevron group="folder" />
+                                  <span className="dot flex-none" style={{ color: workingDotColor(isFolderActive) }} />
+                                  <span className="truncate font-medium">{folder.name}</span>
+                                  {waitingCount > 0 && <span className="count ml-auto">{waitingCount}</span>}
+                                </SidebarMenuButton>
+                              </CollapsibleTrigger>
+                            </Row>
+                          </div>
+                        </ActionContextMenu>
                         <CollapsibleContent>
                           <SidebarMenuSub className={TIGHT_SUBMENU}>
-                            <Section rowKey={rowKeys.folderSection(folder.path, DEPLOYMENTS_SECTION)} label="Deployments" count={deployments.length + pastDeployments.length} action={<StartDeploymentDialog folder={folder} onStarted={props.onSelectDeployment} />}>
+                            <Section rowKey={rowKeys.folderSection(folder.path, DEPLOYMENTS_SECTION)} label="Deployments" count={deployments.length + pastDeployments.length} action={<AddButton actionId="deployment.start" prefill={{ folder: folder.path }} />}>
                               {[...deployments, ...pastDeployments].map(snapshot => (
                                 <DeploymentRow
                                   key={snapshot.deployment.id}
@@ -454,14 +495,14 @@ export function AppSidebar(props: AppSidebarProps) {
                                 />
                               ))}
                             </Section>
-                            <Section rowKey={rowKeys.folderSection(folder.path, 'pipelines')} label="Pipelines" count={folder.pipelines.length}>
+                            <Section rowKey={rowKeys.folderSection(folder.path, 'pipelines')} label="Pipelines" count={folder.pipelines.length} action={<AddButton actionId="pipeline.add" prefill={{ folder: folder.path }} />}>
                               {folder.pipelines.map(pipeline => (
-                                <SetupRow key={pipeline} name={pipeline} onOpen={() => props.onOpenFolder(folder, 'pipelines')} />
+                                <SetupRow key={pipeline} name={pipeline} folder={folder.path} subject="pipeline" onOpen={() => props.onOpenFolder(folder, 'pipelines')} />
                               ))}
                             </Section>
-                            <Section rowKey={rowKeys.folderSection(folder.path, 'operators')} label="Operators" count={folder.operators.length}>
+                            <Section rowKey={rowKeys.folderSection(folder.path, 'operators')} label="Operators" count={folder.operators.length} action={<AddButton actionId="operator.add" prefill={{ folder: folder.path }} />}>
                               {[...folder.operators].sort(byOperatorOrder).map(operator => (
-                                <SetupRow key={operator} name={operator} onOpen={() => props.onOpenFolder(folder, 'operators')} />
+                                <SetupRow key={operator} name={operator} folder={folder.path} subject="operator" onOpen={() => props.onOpenFolder(folder, 'operators')} />
                               ))}
                             </Section>
                           </SidebarMenuSub>
@@ -474,12 +515,14 @@ export function AppSidebar(props: AppSidebarProps) {
             </SidebarGroup>
             <SidebarGroup className="mt-auto">
               <SidebarMenu>
-                <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
-                  <SidebarMenuButton isActive={selectedKey === CHANNELS_KEY} onClick={props.onOpenChannels}>
-                    <span className="dot flex-none" style={{ color: channelsDotColor(props.channels) }} />
-                    <span className="font-medium">Channels</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                <ActionContextMenu subject="channel" prefill={{}} open={{ label: 'Open', onOpen: props.onOpenChannels }}>
+                  <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
+                    <SidebarMenuButton isActive={selectedKey === CHANNELS_KEY} onClick={props.onOpenChannels}>
+                      <span className="dot flex-none" style={{ color: channelsDotColor(props.channels) }} />
+                      <span className="font-medium">Channels</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </ActionContextMenu>
               </SidebarMenu>
             </SidebarGroup>
           </SidebarContent>

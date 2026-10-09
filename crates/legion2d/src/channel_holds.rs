@@ -1,5 +1,5 @@
-//! Channel messages a switch on "ask" holds for the human: each waits as a
-//! question in its deployment's log until the human answers it. Kept in
+//! Channel messages a switch on "ask" holds for the admin: each waits as a
+//! question in its deployment's log until the admin answers it. Kept in
 //! `channel-holds.json` so a restart doesn't lose them.
 
 use std::{path::Path, sync::Mutex};
@@ -25,7 +25,7 @@ pub enum Held {
 #[serde(rename_all = "camelCase")]
 pub struct Hold {
     pub deployment: String,
-    /// The question entry the human answers.
+    /// The question entry the admin answers.
     pub question: i64,
     pub held: Held,
 }
@@ -34,7 +34,7 @@ pub struct Hold {
 /// once can't lose a hold.
 static HOLDS_FILE: Mutex<()> = Mutex::new(());
 
-/// What the human reads in Escalations.
+/// What the admin reads in Escalations.
 pub fn question_text(held: &Held) -> String {
     match held {
         Held::Out { to, text, .. } => format!(

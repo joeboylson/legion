@@ -35,7 +35,7 @@ const CHOICES: Partial<Record<EscalationKind, readonly Choice[]>> = {
       title: 'Deny it; the operator is told to do something else',
       tone: 'deny',
       press: { key: 'esc' },
-      message: blocker => `The human denied that call (${blocker.text}). Carry on without it.`,
+      message: blocker => `The admin denied that call (${blocker.text}). Carry on without it.`,
     },
   ],
   halted: [{ label: 'Carry on', title: 'Tell it to carry on where it left off', tone: 'go', message: () => 'Carry on with your mission where you left off.' }],

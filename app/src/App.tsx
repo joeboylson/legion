@@ -1,7 +1,10 @@
 // One screen for every Legion: each folder's deployments and escalations on
 // the left; on the right, the pages opened from it, each in a tab.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+
+import { ActionDialog } from '@/components/actions/ActionHost'
+import { ActionsProvider, useActionState } from '@/hooks/useActions'
 
 import { AppSidebar } from '@/components/AppSidebar'
 import { DeploymentPartView } from '@/components/DeploymentPartView'
@@ -19,6 +22,7 @@ import { useLegion } from '@/hooks/useLegion'
 import { useOpenTabs } from '@/hooks/useOpenTabs'
 import { useSidebarWidth } from '@/hooks/useSidebarWidth'
 import type { Deployment } from '@/generated/Deployment'
+import type { GoTo, Prefill } from '@/lib/actions/types'
 import { type DeploymentSnapshot, type Escalation, escalationsIn } from '@/lib/escalations'
 import { blockersIn, OPERATOR_KINDS } from '@/lib/blockers'
 import { readStartingView } from '@/lib/snapshot'
@@ -47,6 +51,7 @@ export function App() {
   const [openQuestionKey, setOpenQuestionKey] = useState<string>()
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(new Set())
   const { show, close } = openTabs
+  const actions = useActionState()
 
   const openPart = (deploymentId: string, part: DeploymentPart) => show({ kind: 'deployment', deploymentId, part })
   const openOperator = (deploymentId: string, position: string) => {
@@ -73,11 +78,40 @@ export function App() {
   const escalations = escalationsIn(legion.snapshots, dismissedKeys)
   const shownTab = activeTab(openTabs.open)
 
+  const goTo = useMemo<GoTo>(
+    () => ({
+      folder: (path, folderTab) => show({ kind: 'folder', path, folderTab: folderTab ?? FOLDER_TABS[0] }),
+      deploymentPart: (deploymentId, part) => show({ kind: 'deployment', deploymentId, part }),
+      mission: (deploymentId, number) => {
+        show({ kind: 'deployment', deploymentId, part: 'missions' })
+        setOpenMission({ deploymentId, number })
+      },
+      session: (deploymentId, position) => {
+        show({ kind: 'deployment', deploymentId, part: 'operators' })
+        setOpenPosition({ deploymentId, position })
+      },
+      blockers: () => show({ kind: 'blockers' }),
+      channels: () => show({ kind: 'channels' }),
+    }),
+    [show],
+  )
+  const actionSources = useMemo(() => ({ folders: legion.folders, snapshots: legion.snapshots, channels: legion.channels, goTo }), [legion.folders, legion.snapshots, legion.channels, goTo])
+  // What the open tab is about, for actions started from the command menu.
+  const here: Prefill = (() => {
+    if (shownTab?.kind === 'folder') return { folder: shownTab.path }
+    if (shownTab?.kind !== 'deployment') return {}
+    const snapshot = findSnapshot(legion.snapshots, shownTab.deploymentId)
+    return snapshot === undefined || snapshot.deployment.closed_ms !== null ? {} : { deployment: snapshot.deployment.id, folder: snapshot.deployment.folder }
+  })()
+
   // Over its table: a waiting session's terminal, a blocked mission, or the
   // item itself, to answer or dismiss.
   const openItemOverTable = (item: Escalation) => {
     if (POSITION_ITEM_KINDS.includes(item.kind) && item.position !== undefined) return setOpenPosition({ deploymentId: item.deploymentId, position: item.position })
     if (item.kind === 'blocked' && item.mission !== undefined) return setOpenMission({ deploymentId: item.deploymentId, number: item.mission })
+    if (item.kind === 'question' && item.questionId !== undefined && !item.isClosed) {
+      return actions.api.runAction('question.answer', { deployment: item.deploymentId, question: String(item.questionId) })
+    }
     setOpenQuestionKey(item.key)
   }
   const openItem = (item: Escalation) => {
@@ -159,55 +193,57 @@ export function App() {
   const isTerminalRunning = terminalSnapshot?.sessions.some(session => session.position === openPosition?.position) ?? false
 
   return (
-    <SidebarProvider className="h-full min-h-0" style={{ '--sidebar-width': `${sidebar.widthPx}px` } as React.CSSProperties}>
-      <AppSidebar
-        folders={legion.folders}
-        snapshots={legion.snapshots}
-        escalations={escalations}
-        channels={legion.channels}
-        selectedKey={selectedRowKey(shownTab)}
-        onFolderAdded={legion.reload}
-        onOpenBlockers={() => show({ kind: 'blockers' })}
-        onOpenChannels={() => show({ kind: 'channels' })}
-        onOpenFolder={(folder, folderTab) => show({ kind: 'folder', path: folder.path, folderTab: folderTab ?? FOLDER_TABS[0] })}
-        onSelectDeployment={deployment => openPart(deployment.id, 'operators')}
-        onOpenOperator={(deployment, position) => openOperator(deployment.id, position)}
-        onOpenPart={(deployment, part) => openPart(deployment.id, part)}
-        onOpenMission={(deployment, mission) => showMission(deployment.id, mission.number)}
-        onOpenEscalation={openItem}
-        onDismissEscalation={dismiss}
-      />
-      {/* Drag to resize the sidebar. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the sidebar"
-        aria-valuenow={sidebar.widthPx}
-        className="w-1 flex-none cursor-col-resize bg-border hover:bg-highlight"
-        onPointerDown={sidebar.startResize}
-      />
-      <SidebarInset className="flex min-h-0 min-w-0 flex-col">
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-          {tabItems.length > 0 && <EditorTabs items={tabItems} activeKey={openTabs.open.activeKey} onActivate={openTabs.activate} onClose={close} />}
-          {shownTab === undefined ? <div className="grid flex-1 place-items-center text-muted-foreground">{emptyMessage}</div> : renderTab(shownTab)}
-        </main>
-        <StatusBar legion={legion} onOpenChannels={() => show({ kind: 'channels' })} />
-      </SidebarInset>
-      <TerminalDialog
-        deploymentId={openPosition?.deploymentId ?? ''}
-        position={isTerminalRunning ? openPosition?.position : undefined}
-        onClose={() => setOpenPosition(undefined)}
-      />
-      <MissionDialog mission={shownMission} onClose={() => setOpenMission(undefined)} />
-      {/* Gone once it's answered, so the dialog closes itself. */}
-      <QuestionDialog
-        question={escalations.find(item => item.key === openQuestionKey)}
-        onClose={() => setOpenQuestionKey(undefined)}
-        onDismiss={item => {
-          dismiss(item)
-          setOpenQuestionKey(undefined)
-        }}
-      />
-    </SidebarProvider>
+    <ActionsProvider value={actions.api}>
+      <SidebarProvider className="h-full min-h-0" style={{ '--sidebar-width': `${sidebar.widthPx}px` } as React.CSSProperties}>
+        <AppSidebar
+          folders={legion.folders}
+          snapshots={legion.snapshots}
+          escalations={escalations}
+          channels={legion.channels}
+          selectedKey={selectedRowKey(shownTab)}
+          onOpenBlockers={() => show({ kind: 'blockers' })}
+          onOpenChannels={() => show({ kind: 'channels' })}
+          onOpenFolder={(folder, folderTab) => show({ kind: 'folder', path: folder.path, folderTab: folderTab ?? FOLDER_TABS[0] })}
+          onSelectDeployment={deployment => openPart(deployment.id, 'operators')}
+          onOpenOperator={(deployment, position) => openOperator(deployment.id, position)}
+          onOpenPart={(deployment, part) => openPart(deployment.id, part)}
+          onOpenMission={(deployment, mission) => showMission(deployment.id, mission.number)}
+          onOpenEscalation={openItem}
+          onDismissEscalation={dismiss}
+        />
+        {/* Drag to resize the sidebar. */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the sidebar"
+          aria-valuenow={sidebar.widthPx}
+          className="w-1 flex-none cursor-col-resize bg-border hover:bg-highlight"
+          onPointerDown={sidebar.startResize}
+        />
+        <SidebarInset className="flex min-h-0 min-w-0 flex-col">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+            {tabItems.length > 0 && <EditorTabs items={tabItems} activeKey={openTabs.open.activeKey} onActivate={openTabs.activate} onClose={close} />}
+            {shownTab === undefined ? <div className="grid flex-1 place-items-center text-muted-foreground">{emptyMessage}</div> : renderTab(shownTab)}
+          </main>
+          <StatusBar legion={legion} onOpenChannels={() => show({ kind: 'channels' })} />
+        </SidebarInset>
+        <TerminalDialog
+          deploymentId={openPosition?.deploymentId ?? ''}
+          position={isTerminalRunning ? openPosition?.position : undefined}
+          onClose={() => setOpenPosition(undefined)}
+        />
+        <MissionDialog mission={shownMission} changeCount={legion.changeCount} onClose={() => setOpenMission(undefined)} />
+        {/* Gone once it's answered, so the dialog closes itself. */}
+        <QuestionDialog
+          question={escalations.find(item => item.key === openQuestionKey)}
+          onClose={() => setOpenQuestionKey(undefined)}
+          onDismiss={item => {
+            dismiss(item)
+            setOpenQuestionKey(undefined)
+          }}
+        />
+        <ActionDialog state={actions} sources={actionSources} here={here} />
+      </SidebarProvider>
+    </ActionsProvider>
   )
 }

@@ -14,8 +14,8 @@ use crate::{
     setup::read_pipeline,
 };
 
-/// What a commander hears when its message waits for the human.
-const HELD_FOR_APPROVAL: &str = "Held for the human to approve. You'll get a message once it's sent or turned down; carry on meanwhile.";
+/// What a commander hears when its message waits for the admin.
+const HELD_FOR_APPROVAL: &str = "Held for the admin to approve. You'll get a message once it's sent or turned down; carry on meanwhile.";
 
 /// A deployment's key on the channels: the machine's name and its ID.
 pub fn channel_key(machine: &str, deployment_id: &str) -> String {
@@ -32,7 +32,7 @@ pub fn arrival_text(from: &ChannelDeployment, text: &str) -> String {
 
 pub fn deployments_text(deployments: &[ChannelDeployment], own_key: &str) -> String {
     if deployments.iter().all(|deployment| deployment.key == own_key) {
-        return "No other teams are on the channels. The human opens or subscribes to a channel to link Legions.".into();
+        return "No other teams are on the channels. The admin opens or subscribes to a channel to link Legions.".into();
     }
     deployments
         .iter()
@@ -110,7 +110,7 @@ impl Daemon {
     }
 
     /// Goes straight out with the send switch on "free"; on "ask" it waits
-    /// for the human.
+    /// for the admin.
     pub fn send_on_channels(&self, deployment_key: &str, to: &str, text: &str) -> Result<Reply, String> {
         let own = self.own_channel_deployment(deployment_key)?;
         let to = to.trim();
@@ -119,7 +119,7 @@ impl Daemon {
         }
         let deployment_id = self.local_deployment_id(&own.key)?;
         match self.channels.switches(&deployment_id).send {
-            ChannelSwitch::Off => Err("the human has turned sending off for this deployment: it can't message other teams".into()),
+            ChannelSwitch::Off => Err("the admin has turned sending off for this deployment: it can't message other teams".into()),
             ChannelSwitch::Free => self.channels.send(own, to, text).map(|_| Reply::Done),
             ChannelSwitch::Ask => {
                 let target = self.channels.reaches(to).ok_or_else(|| format!("no open deployment {to} on the channels; channel_deployments lists who's there"))?;
@@ -135,7 +135,7 @@ impl Daemon {
     }
 
     /// Something from the channels for a deployment here. A message waits
-    /// for the human with the receive switch on "ask"; on "off" it's turned
+    /// for the admin with the receive switch on "ask"; on "off" it's turned
     /// away and its sender told.
     fn take_from_channel(&self, inbound: Inbound) -> Result<(), String> {
         let (key, text) = match inbound {

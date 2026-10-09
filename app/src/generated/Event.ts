@@ -4,4 +4,4 @@ import type { Channels } from "./Channels";
 import type { Entry } from "./Entry";
 import type { SessionInfo } from "./SessionInfo";
 
-export type Event = { "type": "entry", entry: Entry, } | { "type": "session", session: SessionInfo, } | { "type": "channels", channels: Channels, } | { "type": "channel_logged", entry: ChannelLogEntry, };
+export type Event = { "type": "entry", entry: Entry, } | { "type": "session", session: SessionInfo, } | { "type": "channels", channels: Channels, } | { "type": "channel_logged", entry: ChannelLogEntry, } | { "type": "setup_changed", folder: string, };

@@ -1,4 +1,4 @@
-// A question for the human, a decision a session made and carried on with,
+// A question for the admin, a decision a session made and carried on with,
 // or a strategist's suggestion, in a dialog: the whole text, the mission it's
 // about, and room for a proper answer. A decision or suggestion can be
 // dismissed instead.

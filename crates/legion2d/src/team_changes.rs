@@ -45,11 +45,11 @@ pub fn team_fingerprint(team: &Result<Team, String>) -> String {
 pub fn team_change_message(pipeline_name: &str, team: &Result<Team, String>) -> String {
     match team {
         Ok(team) => format!(
-            "The {pipeline_name} pipeline or its operators changed. Route by this from now on, not by what you started with.\n\nThe pipeline table:\n{}\nHow many copies of each operator may run at once: {}.",
+            "Your team changed: its pipeline or its operators. Route by this from now on, not by what you started with.\n\nThe pipeline table:\n{}\nHow many copies of each operator may run at once: {}.",
             team.pipeline_text,
             copy_limits_text(&team.copy_limits)
         ),
-        Err(problem) => format!("The {pipeline_name} pipeline can't be read any more, so starting operators will fail until it's fixed: {problem}"),
+        Err(problem) => format!("Your team ({}) can't be read any more, so starting operators will fail until it's fixed: {problem}", legion2_proto::pipeline_label(pipeline_name)),
     }
 }
 
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn the_commander_hears_the_new_table_and_limits() {
         let text = team_change_message("feature", &team(3));
-        assert!(text.starts_with("The feature pipeline or its operators changed."));
+        assert!(text.starts_with("Your team changed: its pipeline or its operators."));
         assert!(text.contains("operators: [builder]"));
         assert!(text.ends_with("at once: builder 3."));
     }

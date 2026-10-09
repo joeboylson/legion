@@ -100,13 +100,13 @@ pub const TOOLS: &[Tool] = &[
     Tool { name: "note", description: "Add a note to the deployment log.", audience: CREW, arguments: &[required("text", Text, "The note."), ABOUT_MISSION] },
     Tool {
         name: "ask",
-        description: "Ask the human a question you can't settle yourself. The answer comes back as a message.",
+        description: "Ask the admin a question you can't settle yourself. The answer comes back as a message.",
         audience: CREW,
         arguments: &[required("question", Text, "The question, with your recommendation."), ABOUT_MISSION],
     },
     Tool {
         name: "flag_decision",
-        description: "Tell the human about a choice you made that they may want a say in, such as a design choice or a trade-off, without stopping. Carry on with your choice; if the human disagrees, their answer comes back as a message. Use ask instead only when you can't go on without an answer.",
+        description: "Tell the admin about a choice you made that they may want a say in, such as a design choice or a trade-off, without stopping. Carry on with your choice; if the admin disagrees, their answer comes back as a message. Use ask instead only when you can't go on without an answer.",
         audience: CREW,
         arguments: &[required("decision", Text, "What you chose, the other option, and why."), ABOUT_MISSION],
     },
@@ -118,7 +118,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "suggest",
-        description: "Suggest a mission to the human. Only the human creates missions.",
+        description: "Suggest a mission to the admin. Only the admin creates missions.",
         audience: CREW,
         arguments: &[required("text", Text, "What the mission would do, and why.")],
     },
@@ -171,7 +171,7 @@ pub const TOOLS: &[Tool] = &[
     Tool { name: "screen", description: "Read a position's screen.", audience: WATCHERS, arguments: &[required("position", Text, "The position.")] },
     Tool {
         name: "finish",
-        description: "Move the base branch up to a done mission's branch. Anything that doesn't go cleanly goes to the human.",
+        description: "Move the base branch up to a done mission's branch. Anything that doesn't go cleanly goes to the admin.",
         audience: COMMANDER_ONLY,
         arguments: &[MISSION],
     },
@@ -184,9 +184,9 @@ pub const TOOLS: &[Tool] = &[
     Tool { name: "resume", description: "Resume a paused mission.", audience: COMMANDER_ONLY, arguments: &[MISSION, required("note", Text, "What changed.")] },
     Tool {
         name: "answer",
-        description: "Pass the human's answer back to whoever asked, by the question's entry number.",
+        description: "Pass the admin's answer back to whoever asked, by the question's entry number.",
         audience: COMMANDER_ONLY,
-        arguments: &[required("question_entry", Number, "The question's entry number."), required("text", Text, "The human's answer.")],
+        arguments: &[required("question_entry", Number, "The question's entry number."), required("text", Text, "The admin's answer.")],
     },
     Tool {
         name: "postmortem",
@@ -219,7 +219,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "channel_send",
-        description: "Send a message to another team's commander over a channel. The human may have to approve it first: then Legion says it's held and messages you once it's sent or held back. If the other deployment has closed, the message doesn't get through and Legion tells you.",
+        description: "Send a message to another team's commander over a channel. The admin may have to approve it first: then Legion says it's held and messages you once it's sent or held back. If the other deployment has closed, the message doesn't get through and Legion tells you.",
         audience: COMMANDER_ONLY,
         arguments: &[required("to", Text, "The team's key, as channel_deployments lists it."), required("text", Text, "The message.")],
     },

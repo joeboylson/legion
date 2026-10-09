@@ -851,7 +851,7 @@ mod tests {
         subscribing.subscribe(&format!("127.0.0.1:{port}"), &key).unwrap();
         wait_for(&subscribing, |status| status.deployments.len() == 2).await;
 
-        subscribing.turn_back("h/a", "s/b", "the human there said no").unwrap();
+        subscribing.turn_back("h/a", "s/b", "the admin there said no").unwrap();
         assert!(wait_for_line(&host_received, "h/a couldn't reach s/b").await);
         assert!(subscribing.turn_back("x/gone", "s/b", "no").is_err());
         [hosting_folder, subscribing_folder].iter().for_each(|folder| std::fs::remove_dir_all(folder).unwrap());

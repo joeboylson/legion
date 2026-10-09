@@ -17,7 +17,16 @@ export const ACTIVITY_LABELS: Record<Activity, string> = {
 }
 
 // A deployment's pipeline, as its tag reads: pipeline:feature.
-export const pipelineTag = (pipeline: string): string => `pipeline:${pipeline}`
+// What no pipeline is called where a pipeline's name goes; `hub` is its old name.
+export const NO_PIPELINE = 'none'
+const OLD_NO_PIPELINE = 'hub'
+
+export const isNoPipeline = (pipeline: string) => pipeline === NO_PIPELINE || pipeline === OLD_NO_PIPELINE
+
+// How a pipeline's name reads: "no pipeline" when there's none.
+export const pipelineLabel = (pipeline: string): string => (isNoPipeline(pipeline) ? 'no pipeline' : pipeline)
+
+export const pipelineTag = (pipeline: string): string => (isNoPipeline(pipeline) ? 'no pipeline' : `pipeline:${pipeline}`)
 
 // A model's family, as Claude names it: claude-sonnet-5-5 reads "sonnet".
 export const modelFamily = (model: string): string => model.replace(/^claude-/, '').split(/[-[]/)[0] ?? model

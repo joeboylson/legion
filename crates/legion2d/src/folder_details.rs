@@ -7,13 +7,13 @@ use legion2_proto::{DecisionDetail, FolderDetail, OperatorDetail, PipelineDetail
 use crate::{
     constants::DEFAULT_OPERATOR_COPY_LIMIT,
     daemon::Daemon,
-    setup::{operator_names, parse_pipeline, pipeline_names, read_operator, read_settings, validate_pipeline, Operator, Pipeline},
+    setup::{operator_names, parse_pipeline, pipeline_file_text, pipeline_names, read_operator, read_settings, validate_pipeline, Operator, Pipeline},
 };
 
 /// A pipeline as the page shows it, with why Legion can't use it if it can't.
 pub fn describe_pipeline(name: &str, parsed: Result<Pipeline, String>, known_operators: &[String]) -> PipelineDetail {
     match parsed {
-        Err(problem) => PipelineDetail { name: name.into(), operators: vec![], first: None, decisions: vec![], problem: Some(problem) },
+        Err(problem) => PipelineDetail { name: name.into(), operators: vec![], first: None, decisions: vec![], problem: Some(problem), file_text: None },
         Ok(pipeline) => {
             let decisions = pipeline
                 .decisions
@@ -30,7 +30,7 @@ pub fn describe_pipeline(name: &str, parsed: Result<Pipeline, String>, known_ope
                 })
                 .collect();
             let problem = validate_pipeline(&pipeline, known_operators).err();
-            PipelineDetail { name: name.into(), operators: pipeline.operators, first: Some(pipeline.first), decisions, problem }
+            PipelineDetail { name: name.into(), operators: pipeline.operators, first: pipeline.first, decisions, problem, file_text: None }
         }
     }
 }
@@ -65,7 +65,10 @@ fn describe_setup(folder: &Path) -> (Vec<PipelineDetail>, Vec<OperatorDetail>) {
     let known_operators = operator_names(folder);
     let pipelines = pipeline_names(folder)
         .iter()
-        .map(|name| describe_pipeline(name, parse_pipeline(folder, name).map(|(pipeline, _)| pipeline), &known_operators))
+        .map(|name| PipelineDetail {
+            file_text: pipeline_file_text(folder, name),
+            ..describe_pipeline(name, parse_pipeline(folder, name).map(|(pipeline, _)| pipeline), &known_operators)
+        })
         .collect();
     let operators = known_operators.iter().map(|name| describe_operator(name, read_operator(folder, name))).collect();
     (pipelines, operators)

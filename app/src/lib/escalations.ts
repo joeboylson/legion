@@ -1,4 +1,4 @@
-// Escalations: everything sessions have sent up to the human, deployment by
+// Escalations: everything sessions have sent up to the admin, deployment by
 // deployment.
 
 import type { DecisionDetail } from '@/generated/DecisionDetail'

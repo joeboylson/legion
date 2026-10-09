@@ -1,4 +1,4 @@
-// What needs the human before work can go on, and where the sidebar shows
+// What needs the admin before work can go on, and where the sidebar shows
 // it: on the deepest row that can be seen, so a closed folder carries the
 // mark for an operator inside it, and an open tree carries it on the
 // operator itself.

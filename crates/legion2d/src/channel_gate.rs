@@ -1,4 +1,4 @@
-//! The human's say over channel messages: setting a deployment's switches,
+//! The admin's say over channel messages: setting a deployment's switches,
 //! holding a message as a question, and acting on the answer.
 
 use legion2_proto::{ChannelSwitch, EntryKind, NewEntry, Reply, HUMAN, LEGION};
@@ -16,7 +16,7 @@ impl Daemon {
         Ok(Reply::Channels { channels })
     }
 
-    /// Asks the human about a held message; it waits until they answer.
+    /// Asks the admin about a held message; it waits until they answer.
     pub fn hold_for_human(&self, deployment_id: &str, held: Held) -> Result<(), String> {
         let question = NewEntry { kind: EntryKind::Question, mission: None, to: Some(HUMAN.into()), text: question_text(&held), answers: None };
         let asked = self.post_entry(deployment_id, LEGION, question)?;
@@ -37,14 +37,14 @@ impl Daemon {
                     Ok(()) => "it's sent".to_string(),
                     Err(error) => format!("it didn't go: {error}"),
                 };
-                self.tell_commander(deployment_id, format!("The human approved your channel message to {} ({}); {outcome}.", to.name, to.key))
+                self.tell_commander(deployment_id, format!("The admin approved your channel message to {} ({}); {outcome}.", to.name, to.key))
             }
             (Held::Out { to, .. }, false) => {
-                self.tell_commander(deployment_id, format!("The human held back your channel message to {} ({}). Their answer: {answer}", to.name, to.key))
+                self.tell_commander(deployment_id, format!("The admin held back your channel message to {} ({}). Their answer: {answer}", to.name, to.key))
             }
             (Held::In { from, text }, true) => self.tell_commander(deployment_id, arrival_text(&from, &text)),
             (Held::In { from, .. }, false) => self.own_channel_deployment(deployment_id).and_then(|own| {
-                let reason = format!("the human on {} didn't pass it on to {}'s commander. Their answer: {answer}", own.machine, own.name);
+                let reason = format!("the admin on {} didn't pass it on to {}'s commander. Their answer: {answer}", own.machine, own.name);
                 self.channels.turn_back(&from.key, &own.key, &reason)
             }),
         };

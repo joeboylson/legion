@@ -5,11 +5,13 @@ use std::{path::PathBuf, process::Command};
 
 use legion2_proto::NAME;
 
-use crate::arguments::ServiceAction;
-
 pub const LOG_FILE_NAME: &str = "legion2d.log";
 const LAUNCH_AGENTS_FOLDER: &str = "Library/LaunchAgents";
 const LAUNCHCTL: &str = "launchctl";
+/// launchd finishes taking an old service down after bootout returns; a
+/// bootstrap straight after can fail until it has.
+const BOOTSTRAP_TRIES: u32 = 10;
+const BOOTSTRAP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub fn service_label() -> String {
     format!("com.{NAME}.{NAME}d")
@@ -99,7 +101,7 @@ fn plist_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(LAUNCH_AGENTS_FOLDER).join(format!("{}.plist", service_label())))
 }
 
-fn install(claude_command: String, addon_folder: Option<String>) -> Result<String, String> {
+pub fn install(claude_command: String, addon_folder: Option<String>) -> Result<String, String> {
     let program = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|folder| folder.join(format!("{NAME}d"))))
@@ -122,7 +124,17 @@ fn install(claude_command: String, addon_folder: Option<String>) -> Result<Strin
     let domain = user_domain()?;
     // Not loaded yet is fine: this only replaces an older install.
     let _ = run(LAUNCHCTL, &["bootout", &format!("{domain}/{}", service_label())]);
-    run(LAUNCHCTL, &["bootstrap", &domain, &path.to_string_lossy()])?;
+    let plist = path.to_string_lossy().into_owned();
+    (1..=BOOTSTRAP_TRIES)
+        .map(|attempt| {
+            let started = run(LAUNCHCTL, &["bootstrap", &domain, &plist]);
+            if started.is_err() && attempt < BOOTSTRAP_TRIES {
+                std::thread::sleep(BOOTSTRAP_RETRY_DELAY);
+            }
+            started
+        })
+        .find(Result::is_ok)
+        .unwrap_or_else(|| run(LAUNCHCTL, &["bootstrap", &domain, &plist]))?;
     Ok(format!(
         "installed {}; {NAME}d starts now and at every login, and writes to {}. If one was already running by hand, stop it: launchd keeps trying until it can start.",
         path.display(),
@@ -130,7 +142,7 @@ fn install(claude_command: String, addon_folder: Option<String>) -> Result<Strin
     ))
 }
 
-fn remove() -> Result<String, String> {
+pub fn remove() -> Result<String, String> {
     let path = plist_path()?;
     if !path.exists() {
         return Err(format!("no service installed ({} doesn't exist)", path.display()));
@@ -139,13 +151,6 @@ fn remove() -> Result<String, String> {
     run(LAUNCHCTL, &["bootout", &format!("{domain}/{}", service_label())])?;
     std::fs::remove_file(&path).map_err(|error| format!("can't remove {}: {error}", path.display()))?;
     Ok(format!("stopped {NAME}d and removed {}", path.display()))
-}
-
-pub fn run_service_action(action: ServiceAction) -> Result<String, String> {
-    match action {
-        ServiceAction::Install { claude, addon } => install(claude, addon),
-        ServiceAction::Remove => remove(),
-    }
 }
 
 #[cfg(test)]

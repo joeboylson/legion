@@ -12,6 +12,31 @@ pub mod tools;
 /// Every name the new version uses comes from this, so it can run beside
 /// today's Legion and switch to "legion" in one change.
 pub const NAME: &str = "legion2";
+/// Running with no pipeline: every operator in the folder, and the commander
+/// picks who works on a mission next after each step. Named `none` where a
+/// pipeline's name goes, and shown as "no pipeline".
+pub const NO_PIPELINE: &str = "none";
+pub const NO_PIPELINE_LABEL: &str = "no pipeline";
+/// What no pipeline was called before; deployments started then still use it.
+pub const OLD_NO_PIPELINE: &str = "hub";
+
+/// How a deployment's pipeline reads in a sentence: "with no pipeline", or
+/// "on the feature pipeline".
+pub fn pipeline_phrase(name: &str) -> String {
+    match pipeline_label(name) {
+        NO_PIPELINE_LABEL => format!("with {NO_PIPELINE_LABEL}"),
+        named => format!("on the {named} pipeline"),
+    }
+}
+
+/// How a deployment's pipeline reads: "no pipeline" when it has none.
+pub fn pipeline_label(name: &str) -> &str {
+    if name == NO_PIPELINE || name == OLD_NO_PIPELINE {
+        NO_PIPELINE_LABEL
+    } else {
+        name
+    }
+}
 
 /// Where legion2d keeps its data and its socket: `~/.local/share/<NAME>`.
 pub fn data_dir() -> Option<std::path::PathBuf> {
@@ -32,8 +57,10 @@ pub const ENV_POSITION: &str = "LEGION2_POSITION";
 /// Set when the `legion2` command should reach a legion2d elsewhere.
 pub const ENV_SOCKET: &str = "LEGION2_SOCKET";
 
-/// Who the human is in the deployment log.
-pub const HUMAN: &str = "human";
+/// Who the admin is in the deployment log.
+/// You, in the log and as a position: whoever is at the app or the command.
+/// Entries from before it had this name say "human".
+pub const HUMAN: &str = "admin";
 /// Entries Legion writes itself come from this.
 pub const LEGION: &str = NAME;
 pub const COMMANDER: &str = "commander";
@@ -89,6 +116,26 @@ pub enum Command {
     /// Forgets a folder with no open deployments. Its setup, missions and
     /// log stay on disk, so adding it again brings them back.
     FolderRemove { folder: String },
+    /// Adds an operator to the folder: what it does, and how many copies may
+    /// run at once when that isn't the default.
+    OperatorAdd { folder: String, name: String, definition: String, limit: Option<u32> },
+    /// Takes an operator out of the folder; refused while a pipeline names it.
+    OperatorRemove { folder: String, name: String },
+    /// Changes the folder's check command (empty takes it away) and the
+    /// permission mode its sessions start in.
+    SettingsSet { folder: String, check: Option<String>, permission_mode: Option<String> },
+    /// Changes an operator's copies, model ("default" takes it away) and
+    /// permission mode.
+    OperatorSet { folder: String, name: String, limit: Option<u32>, model: Option<String>, permission_mode: Option<String> },
+    /// Replaces what an operator does: its definition.md.
+    OperatorDefine { folder: String, name: String, definition: String },
+    /// Replaces a pipeline's file, once it reads as a pipeline the folder can run.
+    PipelineWrite { folder: String, name: String, text: String },
+    /// Takes a pipeline file out; refused while an open deployment runs it.
+    PipelineRemove { folder: String, name: String },
+    /// Adds a pipeline. In order, each operator passes to the next; otherwise
+    /// it has no set order: the commander picks who goes next.
+    PipelineAdd { folder: String, name: String, operators: Vec<String>, in_order: bool },
     /// Everything about one folder: its settings, pipelines, operators and deployments.
     FolderRead { folder: String },
     DeploymentStart { folder: String, pipeline: String, name: Option<String> },
@@ -97,6 +144,15 @@ pub enum Command {
     DeploymentClose { deployment: String },
     /// Gives the deployment a new name, unique in its folder.
     DeploymentRename { deployment: String, name: String },
+    /// Opens a closed deployment again: its commander starts, and its
+    /// missions and log pick up where they were.
+    DeploymentReopen { deployment: String },
+    /// Deletes a closed deployment: its log, missions and checkouts. Its
+    /// branches stay in git.
+    DeploymentDelete { deployment: String },
+    /// Moves an open deployment to another pipeline (`none` for no
+    /// pipeline). Its commander is told the new team; work under way goes on.
+    DeploymentRepipe { deployment: String, pipeline: String },
     MissionAdd { deployment: String, title: String, body: String },
     MissionList { deployment: String },
     MissionRead { deployment: String, mission: u32 },
@@ -245,6 +301,9 @@ pub enum Event {
     /// The channels changed: one opened or closed, or an end came or went.
     Channels { channels: Channels },
     ChannelLogged { entry: ChannelLogEntry },
+    /// A folder's `.legion2/` setup was edited outside Legion: its operators,
+    /// pipelines or settings may be different.
+    SetupChanged { folder: String },
 }
 
 /// One thing the channels carried or saw on this machine.
@@ -312,7 +371,7 @@ pub struct Channels {
 pub enum ChannelSwitch {
     /// Turned away, and the other side is told.
     Off,
-    /// Held as a question in Escalations until the human answers it.
+    /// Held as a question in Escalations until the admin answers it.
     #[default]
     Ask,
     /// Goes straight through.
@@ -419,6 +478,8 @@ pub struct PipelineDetail {
     pub decisions: Vec<DecisionDetail>,
     /// Why Legion can't use it as written, if it can't.
     pub problem: Option<String>,
+    /// Its file as written; none for no pipeline, which has no file.
+    pub file_text: Option<String>,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
@@ -584,7 +645,7 @@ pub enum EntryKind {
     Suggestion,
     /// A mission's branch made it onto the base branch.
     Finished,
-    /// A choice a session made and carried on with, for the human to
+    /// A choice a session made and carried on with, for the admin to
     /// overrule with an answer if they want.
     Decision,
     /// A heads-up handed to everyone running, such as a callout or a shared

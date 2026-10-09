@@ -35,7 +35,7 @@ impl State {
         let matching: Vec<usize> = (0..self.folders.len()).filter(|&index| self.folders[index].is_named(key)).collect();
         match matching.as_slice() {
             [index] => Ok(*index),
-            [] => Err(format!("no folder {key:?}; add it with `legion2 add <path>`")),
+            [] => Err(format!("no folder {key:?}; set it up with `legion2 setup` inside it")),
             _ => Err(format!("more than one folder matches {key:?}; use its path")),
         }
     }

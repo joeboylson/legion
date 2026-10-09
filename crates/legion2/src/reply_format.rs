@@ -70,7 +70,7 @@ pub fn reply_text(reply: &Reply) -> String {
             format!("{} ({})\npipelines:\n{pipelines}\noperators:\n{operators}", detail.folder.name, detail.folder.path)
         }
         Reply::Folders { folders } => lines(folders, |folder| format!("{}  {}  pipelines: {}", folder.name, folder.path, folder.pipelines.join(", "))),
-        Reply::Deployment { deployment } => format!("deployment {} ({}) started on {}; its commander is starting", deployment.name, deployment.id, deployment.pipeline),
+        Reply::Deployment { deployment } => format!("deployment {} ({}) started {}; its commander is starting", deployment.name, deployment.id, legion2_proto::pipeline_phrase(&deployment.pipeline)),
         Reply::Deployments { deployments } => lines(deployments, |deployment| {
             let closed_note = if deployment.closed_ms.is_some() { "  (closed)" } else { "" };
             format!("{}  {}  {}  {}{closed_note}", deployment.id, deployment.name, deployment.pipeline, deployment.folder)

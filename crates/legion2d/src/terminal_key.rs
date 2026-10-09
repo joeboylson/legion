@@ -1,4 +1,4 @@
-//! Keys the human can press in a session's terminal from outside it.
+//! Keys the admin can press in a session's terminal from outside it.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalKey {

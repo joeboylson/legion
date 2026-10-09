@@ -50,8 +50,11 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE INDEX IF NOT EXISTS entries_by_deployment ON entries(deployment, id);
 CREATE TRIGGER IF NOT EXISTS entries_never_change BEFORE UPDATE ON entries
     BEGIN SELECT RAISE(ABORT, 'deployment log entries never change'); END;
-CREATE TRIGGER IF NOT EXISTS entries_never_removed BEFORE DELETE ON entries
-    BEGIN SELECT RAISE(ABORT, 'deployment log entries are never removed'); END;
+-- A log only goes as a whole, with its deployment, once that's closed.
+DROP TRIGGER IF EXISTS entries_never_removed;
+CREATE TRIGGER IF NOT EXISTS entries_removed_only_when_closed BEFORE DELETE ON entries
+    WHEN (SELECT closed_ms FROM deployments WHERE id = OLD.deployment) IS NULL
+    BEGIN SELECT RAISE(ABORT, 'deployment log entries are only removed with their closed deployment'); END;
 -- Which entries have been handed to a session. Not part of the log.
 CREATE TABLE IF NOT EXISTS delivered_entries (entry INTEGER PRIMARY KEY);
 -- Each mission's own checkout of the repo, on its own branch.
@@ -196,6 +199,32 @@ impl Store {
 
     pub fn rename_deployment(&self, deployment_id: &str, name: &str) -> Result<(), String> {
         self.execute("UPDATE deployments SET name = ?2 WHERE id = ?1", params![deployment_id, name])
+    }
+
+    pub fn set_deployment_pipeline(&self, deployment_id: &str, pipeline: &str) -> Result<(), String> {
+        self.execute("UPDATE deployments SET pipeline = ?2 WHERE id = ?1", params![deployment_id, pipeline])
+    }
+
+    pub fn reopen_deployment(&self, deployment_id: &str) -> Result<(), String> {
+        self.execute("UPDATE deployments SET closed_ms = NULL WHERE id = ?1", params![deployment_id])
+    }
+
+    /// Removes a deployment and everything recorded about it, at once.
+    pub fn delete_deployment(&self, deployment_id: &str) -> Result<(), String> {
+        let transaction = self.database.unchecked_transaction().map_err(database_error)?;
+        [
+            "DELETE FROM parts WHERE mission IN (SELECT number FROM missions WHERE deployment = ?1)",
+            "DELETE FROM worktrees WHERE mission IN (SELECT number FROM missions WHERE deployment = ?1)",
+            "DELETE FROM delivered_entries WHERE entry IN (SELECT id FROM entries WHERE deployment = ?1)",
+            "DELETE FROM entries WHERE deployment = ?1",
+            "DELETE FROM missions WHERE deployment = ?1",
+            "DELETE FROM running_sessions WHERE deployment = ?1",
+            "DELETE FROM deployments WHERE id = ?1",
+        ]
+        .iter()
+        .try_for_each(|sql| transaction.execute(sql, params![deployment_id]).map(|_| ()))
+        .map_err(database_error)?;
+        transaction.commit().map_err(database_error)
     }
 
     pub fn close_deployment(&self, deployment_id: &str, closed_ms: i64) -> Result<(), String> {
@@ -381,6 +410,26 @@ mod tests {
         store.mark_part_merged(3, 2).unwrap();
         let parts: Vec<(u32, bool)> = store.parts(3).unwrap().into_iter().map(|checkout| (checkout.part.number, checkout.part.is_merged)).collect();
         assert_eq!(parts, [(1, false), (2, true)]);
+    }
+
+    #[test]
+    fn deleting_a_deployment_leaves_the_others() {
+        let store = store_with_deployment();
+        let other = Deployment { id: "o".into(), name: "other".into(), folder: String::new(), pipeline: "feature".into(), started_ms: 2, closed_ms: None };
+        store.add_deployment(&other).unwrap();
+        store.add_mission(1, "r", "Gone", "/m/1.md").unwrap();
+        store.add_mission(2, "o", "Kept", "/m/2.md").unwrap();
+        store.add_entry("r", "admin", &note("gone")).unwrap();
+        store.add_entry("o", "admin", &note("kept")).unwrap();
+        assert!(store.delete_deployment("r").is_err(), "an open deployment's log stays");
+        assert_eq!(store.missions("r").unwrap().len(), 1, "and nothing else went either");
+        store.close_deployment("r", 5).unwrap();
+        store.delete_deployment("r").unwrap();
+        assert_eq!(store.deployments().unwrap().iter().map(|deployment| deployment.id.as_str()).collect::<Vec<_>>(), vec!["o"]);
+        assert!(store.missions("r").unwrap().is_empty());
+        assert_eq!(store.missions("o").unwrap().len(), 1);
+        assert_eq!(store.entries("o", &LogFilter::default()).unwrap().len(), 1);
+        assert!(store.entries("r", &LogFilter::default()).unwrap().is_empty());
     }
 
     fn store_with_deployment() -> Store {

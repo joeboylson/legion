@@ -3,6 +3,7 @@
 // copies share a dashed border. Clicking a
 // running one opens its live terminal.
 
+import { ActionContextMenu } from '@/components/actions/ActionMenus'
 import { ActivityDot } from '@/components/ActivityDot'
 import { CommanderCrown } from '@/components/CommanderCrown'
 import { INACTIVE_LABEL, sessionStatus, workLabel } from '@/lib/format'
@@ -10,6 +11,7 @@ import { groupedRoster, type RosterEntry } from '@/lib/roster'
 import { cn } from '@/lib/utils'
 
 type PositionCardsProps = {
+  deploymentId: string
   roster: readonly RosterEntry[]
   openPosition?: string
   onOpen: (position: string) => void
@@ -32,29 +34,40 @@ function InactiveCard({ position }: { position: string }) {
 // The cards' grid, inside a group as well as outside.
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(var(--sidebar),1fr))] gap-3'
 
-type PositionCardProps = { entry: RosterEntry; isOpen: boolean; onOpen: (position: string) => void }
+type PositionCardProps = { deploymentId: string; entry: RosterEntry; isOpen: boolean; onOpen: (position: string) => void }
 
-function PositionCard({ entry: { position, session }, isOpen, onOpen }: PositionCardProps) {
-  if (session === undefined) return <InactiveCard position={position} />
+// Right-click a running card to talk to it or stop it, an inactive one to start it.
+function PositionCard({ deploymentId, entry: { position, session }, isOpen, onOpen }: PositionCardProps) {
+  if (session === undefined) {
+    return (
+      <ActionContextMenu subject="session" prefill={{ deployment: deploymentId, operator: position }}>
+        <div>
+          <InactiveCard position={position} />
+        </div>
+      </ActionContextMenu>
+    )
+  }
   return (
-    <button type="button" onClick={() => onOpen(position)} className={cn(CARD, 'hover:bg-layer-2', isOpen && 'bg-selection')}>
-      <span className="flex items-center gap-2 font-medium">
-        <ActivityDot session={session} />
-        {position}
-        <CommanderCrown position={position} />
-      </span>
-      <span className="text-muted-foreground">
-        {sessionStatus(session)}
-        {workLabel(session) !== undefined && <span className="font-mono"> · {workLabel(session)}</span>}
-      </span>
-      {!session.can_see_state && <span className="text-warning">can't see this session's state</span>}
-    </button>
+    <ActionContextMenu subject="session" prefill={{ deployment: deploymentId, position }} open={{ label: 'Open its terminal', onOpen: () => onOpen(position) }}>
+      <button type="button" onClick={() => onOpen(position)} className={cn(CARD, 'hover:bg-layer-2', isOpen && 'bg-selection')}>
+        <span className="flex items-center gap-2 font-medium">
+          <ActivityDot session={session} />
+          {position}
+          <CommanderCrown position={position} />
+        </span>
+        <span className="text-muted-foreground">
+          {sessionStatus(session)}
+          {workLabel(session) !== undefined && <span className="font-mono"> · {workLabel(session)}</span>}
+        </span>
+        {!session.can_see_state && <span className="text-warning">can't see this session's state</span>}
+      </button>
+    </ActionContextMenu>
   )
 }
 
-export function PositionCards({ roster, openPosition, onOpen }: PositionCardsProps) {
+export function PositionCards({ deploymentId, roster, openPosition, onOpen }: PositionCardsProps) {
   if (roster.length === 0) return <p className="text-muted-foreground">No one is running.</p>
-  const cardFor = (entry: RosterEntry) => <PositionCard key={entry.position} entry={entry} isOpen={entry.position === openPosition} onOpen={onOpen} />
+  const cardFor = (entry: RosterEntry) => <PositionCard key={entry.position} deploymentId={deploymentId} entry={entry} isOpen={entry.position === openPosition} onOpen={onOpen} />
   return (
     <div className={GRID}>
       {groupedRoster(roster).map(({ operator, entries }) =>

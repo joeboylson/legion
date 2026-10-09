@@ -1,7 +1,7 @@
 //! Each mission works in its own git worktree, on its own branch. Finishing
 //! moves the base branch up to it: straight away if the base hasn't moved,
 //! or after replaying the mission's commits and running the folder's check
-//! if it has. Anything that doesn't go cleanly is left for the human.
+//! if it has. Anything that doesn't go cleanly is left for the admin.
 
 use std::{path::Path, process::Command};
 
@@ -76,6 +76,11 @@ pub fn remove_worktree(folder: &Path, worktree_path: &Path, branch: &str) -> Res
     run_git(folder, &["branch", "-D", branch]).map(|_| ())
 }
 
+/// Takes a checkout away, keeping its branch: the commits on it stay in git.
+pub fn drop_worktree(folder: &Path, worktree_path: &Path) -> Result<(), String> {
+    run_git(folder, &["worktree", "remove", "--force", &worktree_path.to_string_lossy()]).map(|_| ())
+}
+
 /// Makes a worktree for a mission, branching from whatever the folder is on.
 pub fn create_worktree(folder: &Path, worktree_path: &Path, branch: &str) -> Result<Worktree, String> {
     let base = current_branch(folder)
@@ -97,7 +102,7 @@ pub enum FinishOutcome {
     /// The commits clash with the moved base in these files. The worktree is
     /// left as it was, for the mission's builder to fix.
     Clash { files: Vec<String> },
-    /// Left for the human, with why.
+    /// Left for the admin, with why.
     NeedsHuman(String),
 }
 

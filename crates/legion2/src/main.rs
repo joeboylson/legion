@@ -1,88 +1,39 @@
-//! The legion2 command. Everything it does goes through legion2d.
+//! The legion2 command. Everything it does goes through legion2d, except
+//! installing the service.
 //!
-//! Inside a session legion2d started, the deployment and position come from the
-//! environment; outside one, say which deployment with --deployment.
+//! Each command does one kind of thing. Whatever it needs and wasn't given
+//! as a flag, it asks for in a terminal; without one, it says which flag is
+//! missing. Inside a session legion2d started, only `mcp` is used.
 
 mod arguments;
+mod ask;
+mod commands;
+mod context;
+mod live;
 mod mcp_server;
-mod plan;
+mod pretty;
 mod reply_format;
 mod service;
 mod time_span;
 
-use std::io::Read;
-
-use clap::Parser;
-use legion2_client::Client;
-use legion2_proto::{Command, Entry, Event, LogFilter, Reply, ServerMessage, NAME};
+use clap::{CommandFactory, Parser};
+use legion2_proto::NAME;
 
 use crate::{
-    arguments::{Action, CommandLine, ExportFormat},
-    plan::{plan_action, Plan},
-    reply_format::{entry_line, entry_markdown, reply_text},
+    arguments::{CommandLine, ServiceChoice, Top},
+    ask::Asker,
+    commands::{
+        channel::ChannelInputs,
+        deploy::DeployInputs,
+        log::LogInputs,
+        mission::MissionInputs,
+        operator::OperatorInputs,
+        pipeline::PipelineInputs,
+        session::SessionInputs,
+        talk::TalkInputs,
+    },
+    context::Context,
 };
-
-fn read_mission_body(action: &Action) -> Result<Option<String>, String> {
-    let Action::New { body, file, .. } = action else { return Ok(None) };
-    match (body, file) {
-        (Some(text), _) => Ok(Some(text.clone())),
-        (None, Some(path)) => std::fs::read_to_string(path).map(Some).map_err(|error| format!("{path}: {error}")),
-        (None, None) => {
-            let mut text = String::new();
-            std::io::stdin().read_to_string(&mut text).map_err(|error| error.to_string())?;
-            Ok(Some(text))
-        }
-    }
-}
-
-fn print_reply(reply: &Reply) {
-    let text = reply_text(reply);
-    if !text.is_empty() {
-        println!("{text}");
-    }
-}
-
-/// Whether a new entry belongs in a followed log.
-fn passes_follow_filter(entry: &Entry, deployment_id: &str, filter: &LogFilter) -> bool {
-    let is_same_deployment = entry.deployment == deployment_id;
-    let is_on_mission = filter.mission.is_none_or(|mission| entry.mission == Some(mission));
-    let involves_position = filter.position.as_ref().is_none_or(|position| &entry.from == position || entry.to.as_ref() == Some(position));
-    let is_wanted_kind = filter.kinds.as_ref().is_none_or(|kinds| kinds.contains(&entry.kind));
-    is_same_deployment && is_on_mission && involves_position && is_wanted_kind
-}
-
-async fn follow_log(client: &mut Client, deployment: String, filter: LogFilter) -> Result<(), String> {
-    let reply = client.ask(Command::Log { deployment: deployment.clone(), filter: filter.clone() }).await?;
-    print_reply(&reply);
-    // Events carry the deployment's ID, and the deployment may have been named.
-    let deployment_id = match client.ask(Command::DeploymentList { folder: None }).await? {
-        Reply::Deployments { deployments } => deployments.into_iter().find(|known| known.id == deployment || known.name == deployment).map(|known| known.id).unwrap_or(deployment),
-        _ => deployment,
-    };
-    client.ask(Command::Watch).await?;
-    loop {
-        let ServerMessage::Event { event: Event::Entry { entry } } = client.next_message().await? else { continue };
-        if passes_follow_filter(&entry, &deployment_id, &filter) {
-            println!("{}", entry_line(&entry));
-        }
-    }
-}
-
-async fn export_log(client: &mut Client, deployment: String, filter: LogFilter, format: ExportFormat, output: Option<String>) -> Result<(), String> {
-    let Reply::Entries { entries } = client.ask(Command::Log { deployment, filter }).await? else { return Err("unexpected reply".into()) };
-    let exported: String = match format {
-        ExportFormat::Jsonl => entries.iter().map(|entry| serde_json::to_string(entry).map(|line| line + "\n")).collect::<Result<_, _>>().map_err(|error| error.to_string())?,
-        ExportFormat::Markdown => entries.iter().map(|entry| entry_markdown(entry) + "\n").collect(),
-    };
-    match output {
-        Some(path) => {
-            std::fs::write(&path, exported).map_err(|error| format!("{path}: {error}"))?;
-            eprintln!("wrote {} entries to {path}", entries.len());
-        }
-        None => print!("{exported}"),
-    }
-    Ok(())
-}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -92,46 +43,55 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), String> {
-    let command_line = CommandLine::parse();
-    let mission_body = read_mission_body(&command_line.action)?;
-    let now_ms = jiff::Timestamp::now().as_millisecond();
-    let plan = plan_action(command_line.action, command_line.deployment, now_ms, mission_body)?;
-    if matches!(plan, Plan::ServeTools) {
-        return mcp_server::serve_tools().await;
-    }
-    if let Plan::Service(action) = plan {
-        println!("{}", service::run_service_action(action)?);
-        return Ok(());
-    }
-    let mut client = Client::connect().await?;
-    match plan {
-        Plan::ServeTools | Plan::Service(_) => Ok(()),
-        Plan::Ask(command) => {
-            print_reply(&client.ask(command).await?);
-            Ok(())
+fn run_service(action: Option<ServiceChoice>, claude: Option<String>, addon: Option<String>, yes: bool) -> Result<(), String> {
+    let ask = Asker::new();
+    match ask.action(action, "legion2 service")? {
+        ServiceChoice::Install => {
+            let claude = ask.text_or_default(claude, "Which Claude command should sessions run?", "claude")?;
+            println!("{}", service::install(claude, addon)?);
         }
-        Plan::Follow { deployment, filter } => follow_log(&mut client, deployment, filter).await,
-        Plan::Export { deployment, filter, format, output } => export_log(&mut client, deployment, filter, format, output).await,
+        ServiceChoice::Remove => {
+            if ask.confirm(yes, &format!("Stop {NAME}d and remove the service? Every session ends."))? {
+                println!("{}", service::remove()?);
+            }
+        }
     }
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use legion2_proto::EntryKind;
-
-    use super::*;
-
-    fn entry(deployment: &str, kind: EntryKind, mission: Option<u32>) -> Entry {
-        Entry { id: 1, deployment: deployment.into(), at_ms: 0, mission, from: "builder".into(), to: None, kind, text: String::new(), answers: None }
+async fn run() -> Result<(), String> {
+    let command_line = CommandLine::parse();
+    // On its own, it lists what it can do, the same as --help.
+    let Some(command) = command_line.command else {
+        return CommandLine::command().print_help().map_err(|error| error.to_string());
+    };
+    match command {
+        Top::Mcp => return mcp_server::serve_tools().await,
+        Top::Service { action, claude, addon, yes } => return run_service(action, claude, addon, yes),
+        _ => {}
     }
-
-    #[test]
-    fn following_keeps_to_the_deployment_and_filter() {
-        let filter = LogFilter { mission: Some(2), kinds: Some(vec![EntryKind::Note]), ..Default::default() };
-        assert!(passes_follow_filter(&entry("r", EntryKind::Note, Some(2)), "r", &filter));
-        assert!(!passes_follow_filter(&entry("other", EntryKind::Note, Some(2)), "r", &filter));
-        assert!(!passes_follow_filter(&entry("r", EntryKind::Note, Some(3)), "r", &filter));
-        assert!(!passes_follow_filter(&entry("r", EntryKind::Done, Some(2)), "r", &filter));
+    let has_named_deployment = command_line.deployment.is_some();
+    let mut ctx = Context::connect(command_line.folder, command_line.deployment).await?;
+    match command {
+        Top::Mcp | Top::Service { .. } => Ok(()),
+        Top::Status { all, watch } => commands::status::run(&mut ctx, all, watch).await,
+        Top::Setup { action, check, mode, yes } => commands::setup::run(&mut ctx, action, check, mode, yes).await,
+        Top::Operator { action, name, text, file, limit, model, mode, yes } => {
+            commands::operator::run(&mut ctx, action, OperatorInputs { name, text, file, limit, model, mode, yes }).await
+        }
+        Top::Pipeline { action, name, operators, route, yes } => commands::pipeline::run(&mut ctx, action, PipelineInputs { name, operators, route, yes }).await,
+        Top::Deploy { action, pipeline, team, name, yes } => commands::deploy::run(&mut ctx, action, DeployInputs { pipeline, team, name, yes }).await,
+        Top::Mission { action, title, text, file, number, watch } => {
+            commands::mission::run(&mut ctx, action, MissionInputs { title, text, file, number, watch }, has_named_deployment).await
+        }
+        Top::Answer { question, text, file } => commands::talk::answer(&mut ctx, question, TalkInputs { text, file }).await,
+        Top::Send { to, text, file } => commands::talk::send(&mut ctx, to, TalkInputs { text, file }).await,
+        Top::Session { action, operator, mission, position, key, yes } => {
+            commands::session::run(&mut ctx, action, SessionInputs { operator, mission, position, key, yes }).await
+        }
+        Top::Log { watch, mission, position, kind, since, export } => commands::log::run(&mut ctx, LogInputs { watch, mission, position, kinds: kind, since, export }).await,
+        Top::Channel { action, port, key, address, send, receive, watch, yes } => {
+            commands::channel::run(&mut ctx, action, ChannelInputs { port, key, address, send, receive, watch, yes }).await
+        }
     }
 }

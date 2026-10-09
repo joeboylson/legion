@@ -1,266 +1,255 @@
-//! The legion2 command's arguments.
+//! The legion2 command's arguments. Each command does one kind of thing; the
+//! word after it picks what to do (it asks when left out), and each input
+//! has one flag. Whatever isn't given is asked for, in a terminal.
 
-use clap::{Parser, Subcommand};
-use legion2_proto::{ChannelSwitch, DEFAULT_CHANNEL_PORT, ENV_DEPLOYMENT};
+use clap::{Parser, Subcommand, ValueEnum};
+use legion2_proto::ENV_DEPLOYMENT;
 
 #[derive(Parser)]
-#[command(name = "legion2", about = "Run Legion: folders, deployments, missions, sessions and the deployment log.")]
+#[command(name = "legion2", about = "Run Legion. Each command asks for what you leave out; q quits live views.")]
 pub struct CommandLine {
-    /// The deployment, by name or ID. Inside a session, its own deployment.
+    /// Another Legion folder than the one you're in, by name or path.
+    #[arg(long, global = true)]
+    pub folder: Option<String>,
+    /// The deployment, by name or ID, when the folder runs more than one.
     #[arg(long, global = true, env = ENV_DEPLOYMENT)]
     pub deployment: Option<String>,
+    /// What to do; every command is listed without one.
     #[command(subcommand)]
-    pub action: Action,
+    pub command: Option<Top>,
 }
 
 #[derive(Subcommand)]
-pub enum Action {
-    /// Check legion2d is running.
-    Ping,
+pub enum Top {
+    /// What's going on in this Legion: deployments, sessions, missions and questions.
+    Status {
+        /// Every Legion folder on this machine, not just this one.
+        #[arg(long)]
+        all: bool,
+        /// Keep it on screen, updated every 2 seconds.
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Set up Legion in this folder, show its setup, or remove it.
+    Setup {
+        action: Option<SetupAction>,
+        /// The command that checks a mission's work, such as `npm test`.
+        #[arg(long)]
+        check: Option<String>,
+        /// The permission mode sessions start in: acceptEdits, auto, bypassPermissions, manual, dontAsk or plan.
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Add, edit, remove or list operators.
+    Operator {
+        action: Option<OperatorAction>,
+        #[arg(long)]
+        name: Option<String>,
+        /// What it does.
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+        /// What it does, from a file.
+        #[arg(long)]
+        file: Option<String>,
+        /// How many copies may run at once.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// opus, sonnet, haiku, or default.
+        #[arg(long)]
+        model: Option<String>,
+        /// The permission mode its sessions start in.
+        #[arg(long)]
+        mode: Option<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Add, edit, remove or list pipelines.
+    Pipeline {
+        action: Option<PipelineAction>,
+        #[arg(long)]
+        name: Option<String>,
+        /// Its operators, comma-separated, in order for an in-order route.
+        #[arg(long, value_delimiter = ',')]
+        operators: Option<Vec<String>>,
+        #[arg(long)]
+        route: Option<Route>,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Start, edit (rename it or change its pipeline), close, reopen or delete a deployment.
+    Deploy {
+        action: Option<DeployAction>,
+        /// The pipeline to run, or for edit to move to; `none` for no pipeline, where the commander picks who goes next.
+        #[arg(long)]
+        pipeline: Option<String>,
+        /// With no pipeline, the team, comma-separated, when it isn't every operator.
+        #[arg(long, value_delimiter = ',')]
+        team: Option<Vec<String>>,
+        /// The deployment's name; for edit, its new name.
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Add, list, read, pause, resume or finish missions.
+    Mission {
+        action: Option<MissionAction>,
+        #[arg(long)]
+        title: Option<String>,
+        /// The mission, or the note for a pause or resume.
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+        /// The same, from a file.
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        number: Option<u32>,
+        /// Keep it on screen, updated every 2 seconds: the list, or one mission's way through its statuses.
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Answer a question waiting on you.
+    Answer {
+        /// The question's entry number.
+        #[arg(long)]
+        question: Option<i64>,
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Message someone on the team.
+    Send {
+        /// A running position, such as commander or builder-2.
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Start, stop or watch a session, or press a key in one.
+    Session {
+        action: Option<SessionAction>,
+        /// For start: the operator, or commander.
+        #[arg(long)]
+        operator: Option<String>,
+        /// For start: the mission to work on.
+        #[arg(long)]
+        mission: Option<u32>,
+        /// A running position, such as builder-2.
+        #[arg(long)]
+        position: Option<String>,
+        /// enter, esc, up, down or tab.
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// The deployment log.
+    Log {
+        /// Keep showing new entries as they land.
+        #[arg(long)]
+        watch: bool,
+        #[arg(long)]
+        mission: Option<u32>,
+        /// Entries from or to this position.
+        #[arg(long)]
+        position: Option<String>,
+        /// Only these kinds, comma-separated, such as question,answer.
+        #[arg(long, value_delimiter = ',')]
+        kind: Vec<String>,
+        /// Only entries this recent: 30m, 2h, 1d.
+        #[arg(long)]
+        since: Option<String>,
+        /// Write it to a file instead: .md for Markdown, anything else for JSON lines.
+        #[arg(long)]
+        export: Option<String>,
+    },
+    /// Link this Legion with others: see, open, close or subscribe to channels, and set switches.
+    Channel {
+        action: Option<ChannelAction>,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        key: Option<String>,
+        /// host:port
+        #[arg(long)]
+        address: Option<String>,
+        /// off, ask or free.
+        #[arg(long)]
+        send: Option<String>,
+        /// off, ask or free.
+        #[arg(long)]
+        receive: Option<String>,
+        #[arg(long)]
+        watch: bool,
+        #[arg(long, short)]
+        yes: bool,
+    },
+    /// Install or remove the background service.
+    Service {
+        action: Option<ServiceChoice>,
+        /// The Claude command sessions run with.
+        #[arg(long)]
+        claude: Option<String>,
+        /// The add-on folder; legion2d's own without it.
+        #[arg(long)]
+        addon: Option<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// Serve Legion's tools to the Claude session legion2d started this in.
     #[command(hide = true)]
     Mcp,
-    /// Add a folder, setting up .legion2/ in it if it has none.
-    Add { path: String },
-    /// List folders.
-    Folders,
-    /// Remove a folder from Legion. Close its deployments first. Its setup, missions and log stay on disk.
-    Remove { folder: String },
-    /// Start a deployment of a folder's pipeline. Its commander starts with it.
-    Deploy {
-        folder: String,
-        pipeline: String,
-        #[arg(long)]
-        name: Option<String>,
-    },
-    /// List deployments.
-    Deployments { folder: Option<String> },
-    /// Give the deployment a new name, unique in its folder.
-    Rename { name: String },
-    /// Close the deployment: every session in it ends, and it isn't brought back.
-    Close,
-    /// Create a mission in the deployment (human only). The body comes from --body, --file or stdin.
-    New {
-        title: String,
-        #[arg(long)]
-        body: Option<String>,
-        #[arg(long, conflicts_with = "body")]
-        file: Option<String>,
-    },
-    /// List the deployment's missions and where each stands.
-    Missions,
-    /// Read a mission.
-    Mission { number: u32 },
-    /// Move the base branch up to a done mission's branch.
-    Finish { mission: u32 },
-    /// Start an operator, or the commander, in the deployment.
-    Start {
-        operator: String,
-        #[arg(long)]
-        mission: Option<u32>,
-    },
-    /// End a position's session.
-    Stop { position: String },
-    /// List running sessions (every deployment's, without --deployment).
-    Sessions,
-    /// Print a session's screen.
-    Screen { position: String },
-    /// Press a key in a session's terminal: enter, esc, up, down or tab.
-    Key { position: String, key: String },
-    /// Message a position in the deployment.
-    Send {
-        to: String,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Add a note to the deployment log.
-    Note {
-        #[arg(long)]
-        mission: Option<u32>,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Ask the human a question.
-    Ask {
-        #[arg(long)]
-        mission: Option<u32>,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Answer a question or decision, by its entry number. The answer goes to whoever sent it.
-    Answer {
-        question: i64,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// List questions and decisions with no answer yet.
-    Questions,
-    /// Hand a mission to the next operator. Tells the commander.
-    Handoff {
-        mission: u32,
-        next: String,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Report a mission done. Tells the commander.
-    Done {
-        mission: u32,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Report a mission blocked. Tells the commander.
-    Blocked {
-        mission: u32,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Pause a mission. Tells whoever holds it.
-    Pause {
-        mission: u32,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Resume a paused mission. Tells the commander.
-    Resume {
-        mission: u32,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Tell the human about a choice made without stopping; they can overrule it with an answer.
-    Flag {
-        #[arg(long)]
-        mission: Option<u32>,
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Call out a one-line heads-up for everyone working in the deployment's folder.
-    Callout {
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// List the folder's callouts, oldest first.
-    Callouts,
-    /// Suggest a mission to the human.
-    Suggest {
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Record gotchas and learnings for the next commander.
-    Postmortem {
-        #[arg(required = true, trailing_var_arg = true)]
-        text: Vec<String>,
-    },
-    /// Show the deployment log.
-    Log {
-        #[command(flatten)]
-        filter: FilterArguments,
-        /// Keep showing new entries as they land.
-        #[arg(long, short)]
-        follow: bool,
-    },
-    /// Write the deployment log, or part of it, to a file.
-    Export {
-        #[command(flatten)]
-        filter: FilterArguments,
-        #[arg(long, value_enum, default_value_t = ExportFormat::Jsonl)]
-        format: ExportFormat,
-        /// The file to write; stdout without it.
-        #[arg(long, short)]
-        output: Option<String>,
-    },
-    /// Run legion2d as a launchd service: it starts at login and comes back if it crashes.
-    Service {
-        #[command(subcommand)]
-        action: ServiceAction,
-    },
-    /// Link this machine's Legion with others: host a channel, or subscribe to one.
-    Channel {
-        #[command(subcommand)]
-        action: ChannelAction,
-    },
 }
 
-#[derive(Subcommand, Clone, Debug, PartialEq)]
-pub enum ChannelAction {
-    /// Host a channel other Legions can subscribe to. Prints the key to give them.
-    Open {
-        #[arg(long, default_value_t = DEFAULT_CHANNEL_PORT)]
-        port: u16,
-        /// The key subscribers give; one is made up without it.
-        #[arg(long)]
-        key: Option<String>,
-    },
-    /// Stop hosting the channel. Subscriptions stay.
-    Close,
-    /// Subscribe to another Legion's channel.
-    Subscribe {
-        /// host:port
-        address: String,
-        #[arg(long)]
-        key: String,
-    },
-    Unsubscribe {
-        /// host:port
-        address: String,
-    },
-    /// Show the hosted channel and the subscriptions, and whether each end is up.
-    Status,
-    /// Set the deployment's switches: off, ask (the human approves each message) or free.
-    Switch {
-        /// Whether its commander's messages go out to other teams.
-        #[arg(long, value_parser = parse_switch)]
-        send: Option<ChannelSwitch>,
-        /// Whether other teams' messages reach its commander.
-        #[arg(long, value_parser = parse_switch)]
-        receive: Option<ChannelSwitch>,
-    },
-    /// Show what the channels carried and saw on this machine, newest last.
-    Log {
-        #[arg(long, default_value_t = 50)]
-        limit: u32,
-    },
+/// An action word: its name on the command line, and how the menu says it.
+pub trait Choice: ValueEnum + Clone + Eq {
+    fn label(&self) -> &'static str;
+    fn every() -> Vec<Self> {
+        Self::value_variants().to_vec()
+    }
+    fn word(&self) -> String {
+        self.to_possible_value().map(|value| value.get_name().to_string()).unwrap_or_default()
+    }
 }
 
-#[derive(Subcommand, Clone, Debug, PartialEq)]
-pub enum ServiceAction {
-    /// Install the service and start it. Its output goes to legion2d.log in Legion's data folder.
-    Install {
-        /// The Claude command legion2d runs sessions with.
-        #[arg(long, default_value = "claude")]
-        claude: String,
-        /// The add-on folder; legion2d's own default without it.
-        #[arg(long)]
-        addon: Option<String>,
-    },
-    /// Stop the service and remove it.
-    Remove,
+macro_rules! choices {
+    ($name:ident { $($variant:ident => $label:expr),+ $(,)? }) => {
+        #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $name { $($variant),+ }
+        impl Choice for $name {
+            fn label(&self) -> &'static str {
+                match self { $($name::$variant => $label),+ }
+            }
+        }
+    };
 }
 
-#[derive(clap::Args, Clone, Default)]
-pub struct FilterArguments {
-    #[arg(long)]
-    pub mission: Option<u32>,
-    /// Entries from or to this position.
-    #[arg(long)]
-    pub position: Option<String>,
-    /// Only these kinds, e.g. --kind question --kind answer.
-    #[arg(long = "kind")]
-    pub kinds: Vec<String>,
-    /// Only entries this recent: 30m, 2h, 1d.
-    #[arg(long)]
-    pub since: Option<String>,
-}
-
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq)]
-pub enum ExportFormat {
-    /// One entry per line, as JSON.
-    Jsonl,
-    Markdown,
-}
-
-fn parse_switch(value: &str) -> Result<ChannelSwitch, String> {
-    [ChannelSwitch::Off, ChannelSwitch::Ask, ChannelSwitch::Free]
-        .into_iter()
-        .find(|switch| switch.as_str() == value)
-        .ok_or_else(|| format!("{value:?}: use off, ask or free"))
-}
+choices!(SetupAction { Init => "Set up this folder, or change its settings", Show => "Show its operators, pipelines and settings", Remove => "Remove this folder from Legion" });
+choices!(OperatorAction { Add => "Add an operator", Edit => "Edit an operator", Remove => "Remove an operator", List => "List the operators" });
+choices!(PipelineAction { Add => "Add a pipeline", Edit => "Edit a pipeline's file", Remove => "Remove a pipeline", List => "List the pipelines" });
+choices!(DeployAction { Start => "Start a deployment", Edit => "Rename a deployment, or change its pipeline", Close => "Close a deployment", Reopen => "Reopen a closed deployment", Delete => "Delete a closed deployment for good" });
+choices!(MissionAction {
+    Add => "Add a mission",
+    List => "List the missions",
+    Read => "Read a mission",
+    Pause => "Pause a mission",
+    Resume => "Resume a paused mission",
+    Finish => "Finish a done mission",
+});
+choices!(SessionAction { Start => "Start a session", Stop => "Stop a session", Watch => "Watch a session's screen", Key => "Press a key in a session" });
+choices!(ChannelAction {
+    Status => "Show the channels",
+    Open => "Host a channel",
+    Close => "Stop hosting the channel",
+    Subscribe => "Subscribe to another Legion's channel",
+    Unsubscribe => "Unsubscribe from a channel",
+    Switch => "Set a deployment's send and receive switches",
+    Log => "Show what the channels carried",
+});
+choices!(ServiceChoice { Install => "Install the service and start it", Remove => "Stop the service and remove it" });
+choices!(Route { Commander => "No set order: after each step the commander picks who goes next", InOrder => "In order: each operator passes to the next" });

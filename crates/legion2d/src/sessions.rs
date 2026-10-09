@@ -49,7 +49,7 @@ pub struct Session {
     /// Set when Legion ends it on purpose, so its end isn't treated as a crash.
     pub is_stopping: bool,
     pub started_at: Instant,
-    /// Whether the human has been told it seems stuck before starting.
+    /// Whether the admin has been told it seems stuck before starting.
     pub is_reported_stuck: bool,
     /// Messages handed to it run as its next turn, which may be after the
     /// one it's in now: whether that next turn only answers heads-ups.

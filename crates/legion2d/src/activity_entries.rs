@@ -1,11 +1,11 @@
-//! Which changes in what a session is doing the human needs to hear about.
+//! Which changes in what a session is doing the admin needs to hear about.
 
 use legion2_proto::{Activity, EntryKind};
 
 const DEFAULT_PERMISSION_REQUEST: &str = "a tool needs permission";
 
 /// The deployment log entry a change calls for, if any: a new permission question,
-/// a new wait on a usage limit, or a halt. Each goes to the human.
+/// a new wait on a usage limit, or a halt. Each goes to the admin.
 pub fn entry_for_activity_change(position: &str, previous: Activity, current: Activity, detail: Option<&str>) -> Option<(EntryKind, String)> {
     if previous == current {
         return None;

@@ -20,6 +20,11 @@ pub const PIPELINE_FILE_EXTENSION: &str = ".yaml";
 /// Where a pipeline ends. A decision can also send work to the commander.
 pub const PIPELINE_END: &str = "done";
 pub const STARTING_PIPELINE_NAME: &str = "feature";
+pub use legion2_proto::{NO_PIPELINE, OLD_NO_PIPELINE};
+/// What the commander and operators read about a pipeline with no decisions.
+const NO_PIPELINE_NOTE: &str = "There's no pipeline: every step goes through the commander. The commander starts whichever operator suits the mission first. When an operator's step is done, it hands off to commander (next: commander). The commander then picks who works on it next, or, once nothing more is needed, tells the operator that did the last step to report the mission done.";
+/// The longest an operator's one-line summary gets in the team's roster.
+const SUMMARY_MAX_CHARS: usize = 140;
 
 /// Claude Code's permission modes (`claude --permission-mode`).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +179,9 @@ pub struct Operator {
 #[serde(deny_unknown_fields)]
 pub struct Pipeline {
     pub operators: Vec<String>,
-    pub first: String,
+    /// Who starts each mission; with none, the commander picks.
+    #[serde(default)]
+    pub first: Option<String>,
     #[serde(default)]
     pub decisions: BTreeMap<String, Vec<Decision>>,
 }
@@ -286,22 +293,229 @@ fn names_in(folder: &Path, want_folders: bool, suffix: &str) -> Vec<String> {
     names
 }
 
+/// Every pipeline the folder can run: its files, and none.
 pub fn pipeline_names(folder: &Path) -> Vec<String> {
-    names_in(&setup_folder(folder).join(PIPELINES_FOLDER_NAME), false, PIPELINE_FILE_EXTENSION)
+    let mut names = names_in(&setup_folder(folder).join(PIPELINES_FOLDER_NAME), false, PIPELINE_FILE_EXTENSION);
+    if !names.iter().any(|name| name == NO_PIPELINE) {
+        names.push(NO_PIPELINE.into());
+        names.sort();
+    }
+    names
 }
 
 pub fn operator_names(folder: &Path) -> Vec<String> {
     names_in(&setup_folder(folder).join(OPERATORS_FOLDER_NAME), true, "")
 }
 
+/// Positions and words that mean something else to Legion.
+const RESERVED_NAMES: &[&str] = &[COMMANDER, legion2_proto::STRATEGIST, legion2_proto::HUMAN, legion2_proto::LEGION, PIPELINE_END];
+
+/// Operator and pipeline names become folder, file and position names:
+/// lowercase letters, digits and dashes.
+pub fn check_name(kind: &str, name: &str) -> Result<(), String> {
+    let is_plain = !name.is_empty() && name.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-');
+    if !is_plain || name.starts_with('-') {
+        return Err(format!("{kind} name {name:?}: use lowercase letters, digits and dashes, like poem-writer"));
+    }
+    if RESERVED_NAMES.contains(&name) {
+        return Err(format!("{name:?} means something else to Legion; pick another {kind} name"));
+    }
+    Ok(())
+}
+
+/// A new operator: its definition, and a copy limit when it isn't the default.
+pub fn add_operator(folder: &Path, name: &str, definition: &str, limit: Option<u32>) -> Result<(), String> {
+    check_name("operator", name)?;
+    let operator_folder = setup_folder(folder).join(OPERATORS_FOLDER_NAME).join(name);
+    if operator_folder.exists() {
+        return Err(format!("{name} is an operator already; edit {}", operator_folder.join(DEFINITION_FILE_NAME).display()));
+    }
+    let definition = definition.trim();
+    if definition.is_empty() {
+        return Err(format!("say what {name} does"));
+    }
+    let heading = if definition.starts_with('#') { String::new() } else { format!("# {name}\n\n") };
+    write_file(&operator_folder.join(DEFINITION_FILE_NAME), &format!("{heading}{definition}\n"))?;
+    match limit {
+        Some(limit) => write_file(&operator_folder.join(OPERATOR_CONFIG_FILE_NAME), &format!("{{\n  \"limit\": {limit}\n}}\n")),
+        None => Ok(()),
+    }
+}
+
+/// Takes an operator out of the folder, unless a pipeline file still names it.
+pub fn remove_operator(folder: &Path, name: &str) -> Result<(), String> {
+    let operator_folder = setup_folder(folder).join(OPERATORS_FOLDER_NAME).join(name);
+    if !operator_folder.is_dir() {
+        return Err(format!("no operator {name} in {}", folder.display()));
+    }
+    let naming: Vec<String> = pipeline_names(folder)
+        .into_iter()
+        .filter(|pipeline| pipeline_path(folder, pipeline).exists())
+        .filter(|pipeline| parse_pipeline(folder, pipeline).is_ok_and(|(read, _)| read.operators.iter().any(|operator| operator == name)))
+        .collect();
+    if !naming.is_empty() {
+        return Err(format!("the {} pipeline names {name}; take it out of {} first", naming.join(" and "), if naming.len() == 1 { "it" } else { "them" }));
+    }
+    fs::remove_dir_all(&operator_folder).map_err(|error| format!("can't remove {}: {error}", operator_folder.display()))
+}
+
+/// Changes the folder's check command and permission mode; an empty check
+/// takes it away. Its name stays: it names where the folder's data lives.
+pub fn set_settings(folder: &Path, check: Option<String>, permission_mode: Option<PermissionMode>) -> Result<(), String> {
+    let settings = read_settings(folder)?;
+    let check = match check {
+        Some(command) if command.trim().is_empty() => None,
+        Some(command) => Some(command.trim().to_string()),
+        None => settings.check,
+    };
+    let changed = Settings { check, permission_mode: permission_mode.or(settings.permission_mode), ..settings };
+    let text = serde_json::to_string_pretty(&changed).map_err(|error| error.to_string())?;
+    write_file(&setup_folder(folder).join(SETTINGS_FILE_NAME), &(text + "\n"))
+}
+
+/// Changes an operator's copies, model and permission mode, keeping the
+/// rest of its operator.json. A model of "default" takes it away.
+pub fn set_operator(folder: &Path, name: &str, limit: Option<u32>, model: Option<String>, permission_mode: Option<PermissionMode>) -> Result<(), String> {
+    let operator_folder = setup_folder(folder).join(OPERATORS_FOLDER_NAME).join(name);
+    if !operator_folder.is_dir() {
+        return Err(format!("no operator {name} in {}", folder.display()));
+    }
+    let config_path = operator_folder.join(OPERATOR_CONFIG_FILE_NAME);
+    let mut config: serde_json::Map<String, serde_json::Value> = match fs::read_to_string(&config_path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|error| format!("{}: {error}", config_path.display()))?,
+        Err(_) => serde_json::Map::new(),
+    };
+    if let Some(limit) = limit {
+        config.insert("limit".into(), limit.into());
+    }
+    match model.as_deref() {
+        Some("default") => {
+            config.remove("model");
+        }
+        Some(model) => {
+            config.insert("model".into(), model.into());
+        }
+        None => {}
+    }
+    if let Some(mode) = permission_mode {
+        config.insert("permissionMode".into(), mode.flag_value().into());
+    }
+    let text = serde_json::to_string_pretty(&config).map_err(|error| error.to_string())?;
+    write_file(&config_path, &(text + "\n"))?;
+    read_operator(folder, name).map(|_| ())
+}
+
+pub fn pipeline_file_text(folder: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(pipeline_path(folder, name)).ok()
+}
+
+/// Replaces what an operator does, keeping its operator.json.
+pub fn define_operator(folder: &Path, name: &str, definition: &str) -> Result<(), String> {
+    let path = setup_folder(folder).join(OPERATORS_FOLDER_NAME).join(name).join(DEFINITION_FILE_NAME);
+    if !path.is_file() {
+        return Err(format!("no operator {name} in {}", folder.display()));
+    }
+    if definition.trim().is_empty() {
+        return Err(format!("say what {name} does"));
+    }
+    write_file(&path, &format!("{}\n", definition.trim_end()))
+}
+
+/// Replaces a pipeline's file, refusing text that isn't a pipeline the
+/// folder can run, so a typo can't stop its deployments.
+pub fn write_pipeline(folder: &Path, name: &str, text: &str) -> Result<(), String> {
+    let path = pipeline_path(folder, name);
+    if !path.is_file() {
+        return Err(format!("no pipeline file {name} in {}", folder.display()));
+    }
+    let pipeline: Pipeline = serde_yaml::from_str(text).map_err(|error| format!("that isn't a pipeline: {error}"))?;
+    validate_pipeline(&pipeline, &operator_names(folder))?;
+    write_file(&path, text)
+}
+
+pub fn remove_pipeline(folder: &Path, name: &str) -> Result<(), String> {
+    let path = pipeline_path(folder, name);
+    if !path.is_file() {
+        let why = if name == NO_PIPELINE { "no pipeline has no file; it's always there".to_string() } else { format!("no pipeline {name} in {}", folder.display()) };
+        return Err(why);
+    }
+    fs::remove_file(&path).map_err(|error| format!("can't remove {}: {error}", path.display()))
+}
+
+/// A pipeline's file. In order, each operator passes to the next and the
+/// last finishes it; otherwise it has no decisions, and the commander picks.
+pub fn pipeline_yaml(operators: &[String], in_order: bool) -> String {
+    let team = format!("operators: [{}]\n", operators.join(", "));
+    if !in_order {
+        return format!("# No set order: with no decisions, every step goes back to the commander,\n# who picks who works on the mission next.\n{team}");
+    }
+    let steps: Vec<String> = operators
+        .iter()
+        .enumerate()
+        .map(|(index, operator)| {
+            let next = operators.get(index + 1).map_or(PIPELINE_END, String::as_str);
+            format!("  {operator}:\n    - condition: its step is done\n      next: {next}\n    - condition: blocked\n      next: {COMMANDER}\n")
+        })
+        .collect();
+    format!("# Each operator passes the mission to the next; the last one finishes it.\n{team}first: {}\ndecisions:\n{}", operators[0], steps.concat())
+}
+
+pub fn add_pipeline(folder: &Path, name: &str, operators: &[String], in_order: bool) -> Result<(), String> {
+    check_name("pipeline", name)?;
+    let path = pipeline_path(folder, name);
+    if path.exists() || name == NO_PIPELINE || name == OLD_NO_PIPELINE {
+        return Err(format!("{name} is a pipeline already; pick another name"));
+    }
+    if operators.is_empty() {
+        return Err("name at least one operator".into());
+    }
+    let known = operator_names(folder);
+    if let Some(missing) = operators.iter().find(|operator| !known.contains(operator)) {
+        return Err(format!("no operator {missing} in {} (it has: {})", folder.display(), known.join(", ")));
+    }
+    write_file(&path, &pipeline_yaml(operators, in_order))
+}
+
+/// An operator's definition in one line: its first line that isn't a heading.
+pub fn operator_summary(definition: &str) -> String {
+    let line = definition.lines().map(str::trim).find(|line| !line.is_empty() && !line.starts_with('#')).unwrap_or("");
+    match line.char_indices().nth(SUMMARY_MAX_CHARS) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
+}
+
+/// A pipeline with no decisions has no set order: every operator hands its
+/// step back to the commander. Its table says so, with who's on the team.
+fn as_commanders_pick(folder: &Path, pipeline: Pipeline, written: &str) -> (Pipeline, String) {
+    let roster: Vec<String> = pipeline
+        .operators
+        .iter()
+        .map(|operator| {
+            let summary = read_operator(folder, operator).map(|read| operator_summary(&read.definition)).unwrap_or_default();
+            format!("- {operator}: {summary}")
+        })
+        .collect();
+    let decisions = pipeline
+        .operators
+        .iter()
+        .map(|operator| (operator.clone(), vec![Decision { condition: "its step is done".into(), next: Next::One(COMMANDER.into()) }]))
+        .collect();
+    let text = format!("{written}{NO_PIPELINE_NOTE}\nThe operators:\n{}\n", roster.join("\n"));
+    (Pipeline { decisions, ..pipeline }, text)
+}
+
 /// Checks a pipeline against the operators the folder has.
 pub fn validate_pipeline(pipeline: &Pipeline, known_operators: &[String]) -> Result<(), String> {
     let is_on_team = |operator: &String| pipeline.operators.contains(operator);
+    if pipeline.operators.is_empty() {
+        return Err(format!("it has no operators; add one with `{NAME} operator add`"));
+    }
     if let Some(missing) = pipeline.operators.iter().find(|operator| !known_operators.contains(operator)) {
         return Err(format!("operator {missing:?} has no folder in .{NAME}/{OPERATORS_FOLDER_NAME}"));
     }
-    if !is_on_team(&pipeline.first) {
-        return Err(format!("first, {:?}, isn't in its operators", pipeline.first));
+    if let Some(first) = pipeline.first.as_ref().filter(|first| !is_on_team(first)) {
+        return Err(format!("first, {first:?}, isn't in its operators"));
     }
     if let Some(stranger) = pipeline.decisions.keys().find(|operator| !is_on_team(operator)) {
         return Err(format!("decisions for {stranger:?}, which isn't in its operators"));
@@ -333,13 +547,22 @@ fn pipeline_path(folder: &Path, name: &str) -> PathBuf {
 }
 
 /// Reads a pipeline without checking it against the folder's operators.
+/// No pipeline needs no file: it's every operator in the folder.
 pub fn parse_pipeline(folder: &Path, name: &str) -> Result<(Pipeline, String), String> {
     let path = pipeline_path(folder, name);
-    let text = fs::read_to_string(&path).map_err(|_| {
-        format!("no pipeline {name:?} in {} (it has: {})", folder.display(), pipeline_names(folder).join(", "))
-    })?;
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(_) if name == NO_PIPELINE || name == OLD_NO_PIPELINE => {
+            let every_operator = Pipeline { operators: operator_names(folder), first: None, decisions: BTreeMap::new() };
+            return Ok(as_commanders_pick(folder, every_operator, ""));
+        }
+        Err(_) => return Err(format!("no pipeline {name:?} in {} (it has: {})", folder.display(), pipeline_names(folder).join(", "))),
+    };
     let pipeline: Pipeline = serde_yaml::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok((pipeline, text))
+    match pipeline.decisions.is_empty() {
+        true => Ok(as_commanders_pick(folder, pipeline, &text)),
+        false => Ok((pipeline, text)),
+    }
 }
 
 /// Reads and checks a pipeline. Returns it with its text as written, which
@@ -464,5 +687,76 @@ mod tests {
     #[test]
     fn unknown_fields_are_refused() {
         assert!(serde_yaml::from_str::<Pipeline>("operators: []\nfirst: x\nextra: 1\n").is_err());
+    }
+
+    fn scratch_folder() -> std::path::PathBuf {
+        let folder = std::env::temp_dir().join(format!("legion2-setup-{}", crate::ids::new_id()));
+        fs::create_dir_all(setup_folder(&folder)).unwrap();
+        folder
+    }
+
+    #[test]
+    fn no_pipeline_is_every_operator_through_the_commander() {
+        let folder = scratch_folder();
+        assert!(read_pipeline(&folder, NO_PIPELINE).is_err(), "no operators, no team");
+        add_operator(&folder, "poem-writer", "# Poem Writer\n\nYou write haiku into text files.", None).unwrap();
+        add_operator(&folder, "editor", "Tightens each poem.", Some(2)).unwrap();
+        let (pipeline, text) = read_pipeline(&folder, NO_PIPELINE).unwrap();
+        assert!(read_pipeline(&folder, OLD_NO_PIPELINE).is_ok(), "deployments started as hub still run");
+        assert_eq!(pipeline.operators, vec!["editor".to_string(), "poem-writer".to_string()]);
+        assert_eq!(pipeline.first, None);
+        assert!(pipeline.decisions.values().all(|decisions| decisions[0].next == Next::One(COMMANDER.into())));
+        assert!(text.contains("every step goes through the commander") && text.contains("- poem-writer: You write haiku into text files."));
+        assert!(pipeline_names(&folder).contains(&NO_PIPELINE.to_string()));
+        assert_eq!(read_operator(&folder, "editor").unwrap().config.limit, Some(2));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_new_pipeline_runs_in_order_or_through_the_commander() {
+        let folder = scratch_folder();
+        ["writer", "editor"].iter().for_each(|name| add_operator(&folder, name, "Does a step.", None).unwrap());
+        let team = vec!["writer".to_string(), "editor".to_string()];
+        add_pipeline(&folder, "poems", &team, true).unwrap();
+        let (in_order, _) = read_pipeline(&folder, "poems").unwrap();
+        assert_eq!(in_order.first.as_deref(), Some("writer"));
+        assert_eq!(in_order.decisions["writer"][0].next, Next::One("editor".into()));
+        assert_eq!(in_order.decisions["editor"][0].next, Next::One(PIPELINE_END.into()));
+        add_pipeline(&folder, "loose", &team, false).unwrap();
+        let (loose, text) = read_pipeline(&folder, "loose").unwrap();
+        assert_eq!((loose.first, loose.operators.len()), (None, 2));
+        assert!(text.contains("every step goes through the commander"));
+        assert!(add_pipeline(&folder, "poems", &team, true).is_err());
+        assert!(add_pipeline(&folder, "bad", &["ghost".to_string()], true).is_err());
+        assert!(remove_operator(&folder, "writer").unwrap_err().contains("names writer"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn names_are_plain_and_not_legions_own() {
+        assert!(check_name("operator", "poem-writer-2").is_ok());
+        assert!(["Poem", "poem writer", "-x", "", "commander", "done"].iter().all(|name| check_name("operator", name).is_err()));
+    }
+
+    #[test]
+    fn a_summary_is_the_first_line_that_isnt_a_heading() {
+        assert_eq!(operator_summary("# Builder\n\nYou build the change.\nMore."), "You build the change.");
+        assert!(operator_summary(&"x".repeat(500)).ends_with('…'));
+    }
+
+
+    #[test]
+    fn a_pipeline_file_is_only_replaced_by_one_that_runs() {
+        let folder = scratch_folder();
+        add_operator(&folder, "poet", "Writes haiku.", None).unwrap();
+        add_pipeline(&folder, "poems", &["poet".to_string()], true).unwrap();
+        assert!(write_pipeline(&folder, "poems", "operators: [ghost]\n").unwrap_err().contains("ghost"));
+        assert!(write_pipeline(&folder, "poems", "not: [a pipeline\n").is_err());
+        write_pipeline(&folder, "poems", "operators: [poet]\n").unwrap();
+        assert_eq!(pipeline_file_text(&folder, "poems").as_deref(), Some("operators: [poet]\n"));
+        define_operator(&folder, "poet", "# Poet\n\nWrites limericks now.").unwrap();
+        assert!(read_operator(&folder, "poet").unwrap().definition.contains("limericks"));
+        assert!(define_operator(&folder, "ghost", "x").is_err());
+        fs::remove_dir_all(&folder).unwrap();
     }
 }

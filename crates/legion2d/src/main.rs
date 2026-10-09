@@ -44,6 +44,8 @@ mod session_restore;
 mod strategist_checks;
 mod sessions;
 mod setup;
+mod setup_commands;
+mod setup_watch;
 mod shared_tools;
 mod stalled_work;
 mod state_lookup;
@@ -64,7 +66,7 @@ use tokio::{
 
 use crate::{
     claude_version::{check_claude_supported, version_label},
-    constants::WAITING_SESSIONS_CHECK_INTERVAL,
+    constants::{SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
     daemon::{Config, Daemon},
     machine_settings::read_machine_settings,
     server::{claim_socket, router},
@@ -155,6 +157,18 @@ async fn run() -> Result<(), String> {
                 ticking_daemon.keep_strategists();
             })
             .await;
+        }
+    });
+
+    let watching_daemon = daemon.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(SETUP_WATCH_INTERVAL);
+        let mut last_look = std::collections::HashMap::new();
+        loop {
+            interval.tick().await;
+            let looking_daemon = watching_daemon.clone();
+            let previous = std::mem::take(&mut last_look);
+            last_look = tokio::task::spawn_blocking(move || looking_daemon.report_setup_changes(&previous)).await.unwrap_or_default();
         }
     });
 
