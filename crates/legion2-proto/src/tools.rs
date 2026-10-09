@@ -219,7 +219,7 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "channel_send",
-        description: "Send a message to another team's commander over a channel. If its deployment has closed, the message doesn't get through and Legion tells you.",
+        description: "Send a message to another team's commander over a channel. The human may have to approve it first: then Legion says it's held and messages you once it's sent or held back. If the other deployment has closed, the message doesn't get through and Legion tells you.",
         audience: COMMANDER_ONLY,
         arguments: &[required("to", Text, "The team's key, as channel_deployments lists it."), required("text", Text, "The message.")],
     },

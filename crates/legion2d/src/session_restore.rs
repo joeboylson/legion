@@ -13,27 +13,32 @@ use crate::{
     store::RunningSession,
 };
 
-const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the deployment was cut off; Legion is starting again every operator that was on a mission, under the same name, as the machine has room. Read the deployment log and the missions with your tools, and carry on from there.";
+const LEGION_RESTARTED_COMMANDER_PROMPT: &str = "Legion restarted, and you with it. Every session in the deployment was cut off; Legion is starting again, under the same name and as the machine has room, the operator holding each started mission and every operator that was on a handed-off one. Operators that had finished their step on a started mission don't come back: start any of them again if the work still needs them. Read the deployment log and the missions with your tools, and carry on from there.";
 
 pub fn restarted_operator_prompt(mission: u32, part: Option<u32>) -> String {
     let on_part = part.map(|number| format!(", on part {number}")).unwrap_or_default();
     format!("Legion restarted while you were on mission {mission}{on_part}. Read its deployment log entries with the log tool (mission {mission}) and carry on.")
 }
 
-/// Who comes back: every operator recorded as running on a mission, and any
-/// mission holder not recorded (from before Legion kept the record). An
-/// operator with no mission was only waiting, so the commander can start it
-/// again when there's work.
+/// Who comes back. On a started mission, only its holder: the operators that
+/// finished their step on it would only wake to find nothing to do, and each
+/// start takes the holder, so the holder starts last and keeps it. On any
+/// other mission (handed off, paused), every operator recorded on it, since
+/// one may be mid-work without holding it. An operator with no mission was
+/// only waiting, so the commander can start it again when there's work.
 pub fn sessions_to_restore(deployment_id: &str, recorded: &[RunningSession], held_missions: &[(String, u32)]) -> Vec<PendingRestore> {
-    let from_record = recorded.iter().filter(|session| session.position != COMMANDER).filter_map(|session| {
-        session.mission.map(|mission| PendingRestore { deployment: deployment_id.to_string(), position: session.position.clone(), mission, part: session.part })
-    });
-    let recorded_positions: Vec<&str> = recorded.iter().map(|session| session.position.as_str()).collect();
-    let from_holders = held_missions
+    let held_mission_numbers: Vec<u32> = held_missions.iter().map(|(_, mission)| *mission).collect();
+    let on_other_missions = recorded
         .iter()
-        .filter(|(holder, _)| holder != COMMANDER && !recorded_positions.contains(&holder.as_str()))
-        .map(|(holder, mission)| PendingRestore { deployment: deployment_id.to_string(), position: holder.clone(), mission: *mission, part: None });
-    from_record.chain(from_holders).collect()
+        .filter(|session| session.position != COMMANDER)
+        .filter_map(|session| session.mission.map(|mission| (session, mission)))
+        .filter(|(_, mission)| !held_mission_numbers.contains(mission))
+        .map(|(session, mission)| PendingRestore { deployment: deployment_id.to_string(), position: session.position.clone(), mission, part: session.part });
+    let holders = held_missions.iter().filter(|(holder, _)| holder != COMMANDER).map(|(holder, mission)| {
+        let part = recorded.iter().find(|session| &session.position == holder && session.mission == Some(*mission)).and_then(|session| session.part);
+        PendingRestore { deployment: deployment_id.to_string(), position: holder.clone(), mission: *mission, part }
+    });
+    on_other_missions.chain(holders).collect()
 }
 
 fn note(to: Option<&str>, mission: Option<u32>, text: String) -> NewEntry {
@@ -142,6 +147,13 @@ mod tests {
         let running = [recorded("builder", Some(1), None)];
         let held = [("builder".to_string(), 1), ("parser-tester-4".to_string(), 3)];
         assert_eq!(sessions_to_restore("r", &running, &held), [restore("builder", 1, None), restore("parser-tester-4", 3, None)]);
+    }
+
+    #[test]
+    fn on_a_started_mission_only_its_holder_comes_back_and_last() {
+        let running = [recorded("spec-reader", Some(35), None), recorded("shipper-2", Some(35), None), recorded("pattern-checker", Some(35), Some(2)), recorded("integrator", Some(36), None)];
+        let held = [("pattern-checker".to_string(), 35)];
+        assert_eq!(sessions_to_restore("r", &running, &held), [restore("integrator", 36, None), restore("pattern-checker", 35, Some(2))]);
     }
 
     #[test]

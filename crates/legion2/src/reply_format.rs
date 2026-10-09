@@ -118,7 +118,9 @@ fn channels_text(channels: &Channels) -> String {
         let state = if subscription.is_up { "up".to_string() } else { format!("down: {}", subscription.problem.as_deref().unwrap_or("connecting")) };
         format!("subscribed to {}{host}: {state}", subscription.address)
     });
-    [hosted, subscriptions].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n")
+    let switches = lines(&channels.switches, |set| format!("deployment {}: send {}, receive {}", set.deployment, set.send.as_str(), set.receive.as_str()));
+    let switches_text = if switches.is_empty() { String::new() } else { format!("{switches}\nevery other deployment: send ask, receive ask") };
+    [hosted, subscriptions, switches_text].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
 fn part_line(part: &Part) -> String {

@@ -2,15 +2,38 @@
 
 use legion2_proto::{Entry, EntryKind, NewEntry, COMMANDER, HUMAN, NAME};
 
-use crate::constants::delivery_prefix;
+use crate::{constants::delivery_prefix, naming::operator_of_position};
 
 /// What routing needs to know from the deployment log. The caller looks it up.
 #[derive(Default)]
 pub struct RoutingFacts {
     /// For an answer: who sent the question or decision it answers, and on which mission.
     pub question: Option<(String, Option<u32>)>,
+    /// For an answer: the question's mission is finished. The answer is kept
+    /// in the log but goes to no one: whoever holds the asker's position now
+    /// works on something else.
+    pub question_mission_is_done: bool,
     /// For a pause: who holds the mission now.
     pub mission_holder: Option<String>,
+    /// For a message to an operator's bare name: the copy working the
+    /// sender's mission, when that's another copy.
+    pub mission_copy: Option<String>,
+}
+
+/// An operator's bare name is one particular copy (`shipper`), often on
+/// another mission than the sender's. A message about a mission goes to the
+/// copy working it instead. A numbered copy (`shipper-2`) is taken as meant.
+pub fn copy_on_mission(to: &str, mission: Option<u32>, sessions: &[(String, Option<u32>)]) -> Option<String> {
+    let mission = mission?;
+    let is_bare_name = operator_of_position(to) == to;
+    let named_is_on_it = sessions.iter().any(|(position, on)| position == to && *on == Some(mission));
+    if !is_bare_name || named_is_on_it {
+        return None;
+    }
+    sessions
+        .iter()
+        .find(|(position, on)| operator_of_position(position) == to && *on == Some(mission))
+        .map(|(position, _)| position.clone())
 }
 
 /// Fills in who an entry goes to, or says why it can't be added.
@@ -24,12 +47,16 @@ pub fn route_entry(entry: NewEntry, facts: RoutingFacts) -> Result<NewEntry, Str
     }
     match entry.kind {
         EntryKind::Message if entry.to.is_none() => Err("a message needs someone to go to".into()),
-        EntryKind::Message => Ok(entry),
+        EntryKind::Message => Ok(match facts.mission_copy {
+            Some(copy) => NewEntry { to: Some(copy), ..entry },
+            None => entry,
+        }),
         EntryKind::Answer => {
             let question_number = entry.answers.ok_or("an answer needs the question it answers")?;
             let (asker, question_mission) =
                 facts.question.ok_or_else(|| format!("entry {question_number} isn't a question or decision in this deployment"))?;
-            Ok(NewEntry { to: Some(asker), mission: entry.mission.or(question_mission), ..entry })
+            let to = if facts.question_mission_is_done { None } else { Some(asker) };
+            Ok(NewEntry { to, mission: entry.mission.or(question_mission), ..entry })
         }
         EntryKind::Handoff | EntryKind::Done | EntryKind::Blocked | EntryKind::Resumed => {
             Ok(NewEntry { to: Some(COMMANDER.into()), ..entry })
@@ -138,6 +165,30 @@ mod tests {
     #[test]
     fn legions_own_entries_are_refused() {
         assert!(route_entry(new_entry(EntryKind::SessionStarted), RoutingFacts::default()).is_err());
+    }
+
+    #[test]
+    fn an_answer_on_a_finished_mission_is_logged_but_goes_to_no_one() {
+        let mut answer = new_entry(EntryKind::Answer);
+        answer.answers = Some(7);
+        let facts = RoutingFacts { question: Some(("shipper-3".into(), Some(30))), question_mission_is_done: true, ..Default::default() };
+        let routed = route_entry(answer, facts).unwrap();
+        assert_eq!(routed.to, None);
+        assert_eq!(routed.mission, Some(1));
+    }
+
+    #[test]
+    fn a_message_to_a_bare_name_goes_to_the_copy_on_the_mission() {
+        let sessions = [("shipper".to_string(), Some(28)), ("shipper-2".to_string(), Some(29)), ("shipper-3".to_string(), Some(30))];
+        assert_eq!(copy_on_mission("shipper", Some(29), &sessions), Some("shipper-2".into()));
+        assert_eq!(copy_on_mission("shipper", Some(28), &sessions), None);
+        assert_eq!(copy_on_mission("shipper-3", Some(29), &sessions), None);
+        assert_eq!(copy_on_mission("shipper", None, &sessions), None);
+        assert_eq!(copy_on_mission("shipper", Some(31), &sessions), None);
+        let mut message = new_entry(EntryKind::Message);
+        message.to = Some("shipper".into());
+        let facts = RoutingFacts { mission_copy: Some("shipper-2".into()), ..Default::default() };
+        assert_eq!(route_entry(message, facts).unwrap().to.as_deref(), Some("shipper-2"));
     }
 
     #[test]

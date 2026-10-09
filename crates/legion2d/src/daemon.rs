@@ -292,6 +292,7 @@ impl Daemon {
             Command::Watch => Ok(Reply::Done),
             Command::FolderAdd { path } => self.add_folder(&path),
             Command::FolderList => Ok(self.list_folders()),
+            Command::FolderRemove { folder } => self.remove_folder(&folder),
             Command::FolderRead { folder } => self.describe_folder(&folder),
             Command::DeploymentStart { folder, pipeline, name } => self.start_deployment(&folder, &pipeline, name),
             Command::DeploymentList { folder } => Ok(self.list_deployments(folder.as_deref())),
@@ -325,6 +326,7 @@ impl Daemon {
             Command::ChannelDeployments { deployment } => self.list_channel_deployments(&deployment),
             Command::ChannelDescribe { deployment, text } => self.describe_on_channels(&deployment, &text),
             Command::ChannelSend { deployment, to, text } => self.send_on_channels(&deployment, &to, &text),
+            Command::ChannelSwitch { deployment, send, receive } => self.set_channel_switches(&deployment, send, receive),
             Command::ChannelLog { limit } => Ok(Reply::ChannelLog { entries: self.channels.log(limit) }),
         }
     }

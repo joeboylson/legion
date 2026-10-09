@@ -32,6 +32,13 @@ impl Stall {
     }
 }
 
+/// Whether a session on a handed-off mission is working it: busy now, or it
+/// took a turn since the handoff and paused (a long run in the background).
+/// A session that handed the mission on took its last turn before.
+pub fn works_on_mission(is_busy: bool, turn_started_ms: Option<i64>, handed_off_at_ms: Option<i64>) -> bool {
+    is_busy || turn_started_ms.zip(handed_off_at_ms).is_some_and(|(turn, handoff)| turn >= handoff)
+}
+
 /// The stalls in one deployment. `first_has_room`: the pipeline's first
 /// operator has a free or idle copy to start on a waiting mission.
 pub fn stalls(missions: &[MissionView], first_has_room: bool, now_ms: i64) -> Vec<Stall> {
@@ -64,6 +71,14 @@ mod tests {
 
     fn mission(number: u32, status: MissionStatus, handed_off_at_ms: Option<i64>, is_being_worked: bool) -> MissionView {
         MissionView { number, status, handed_off_at_ms, is_being_worked }
+    }
+
+    #[test]
+    fn a_session_paused_since_the_handoff_still_works_the_mission() {
+        assert!(works_on_mission(true, None, Some(100)));
+        assert!(works_on_mission(false, Some(150), Some(100)));
+        assert!(!works_on_mission(false, Some(50), Some(100)));
+        assert!(!works_on_mission(false, None, Some(100)));
     }
 
     #[test]

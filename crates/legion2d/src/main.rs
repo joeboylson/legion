@@ -7,6 +7,8 @@
 mod access;
 mod callouts;
 mod channel_delivery;
+mod channel_gate;
+mod channel_holds;
 mod channel_log;
 mod channel_routes;
 mod channel_settings;

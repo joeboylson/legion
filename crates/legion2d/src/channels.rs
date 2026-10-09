@@ -16,7 +16,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use legion2_proto::{ChannelDeployment, ChannelEnd, ChannelLogEntry, ChannelLogKind, Channels, Event, HostedChannel, Subscription, LEGION};
+use legion2_proto::{ChannelDeployment, ChannelEnd, ChannelLogEntry, ChannelLogKind, ChannelSwitch, Channels, DeploymentSwitches, Event, HostedChannel, Subscription, LEGION};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
     net::{
@@ -162,7 +162,7 @@ impl Shared {
                 Subscription { address: subscription.address.clone(), is_up: state.is_up, host_machine: state.host_machine, problem: state.problem }
             })
             .collect();
-        Channels { hosted, subscriptions, deployments: live.directory.clone() }
+        Channels { machine: self.machine.clone(), hosted, subscriptions, deployments: live.directory.clone(), switches: live.settings.switches.clone() }
     }
 
     /// Adds to the channel log, and tells everyone watching.
@@ -285,6 +285,20 @@ impl ChannelManager {
         self.shared.live.lock().unwrap().descriptions.get(key).cloned()
     }
 
+    pub fn switches(&self, deployment: &str) -> DeploymentSwitches {
+        self.shared.live.lock().unwrap().settings.switches_for(deployment)
+    }
+
+    pub fn set_switches(&self, deployment: &str, send: Option<ChannelSwitch>, receive: Option<ChannelSwitch>) -> Result<Channels, String> {
+        self.save(|settings| settings.with_switches(deployment, send, receive))?;
+        Ok(self.status())
+    }
+
+    /// Whether `key` is an open deployment the channels can reach now.
+    pub fn reaches(&self, key: &str) -> Option<ChannelDeployment> {
+        self.shared.live.lock().unwrap().directory.iter().find(|deployment| deployment.key == key).cloned()
+    }
+
     pub fn describe(&self, key: &str, text: &str) {
         self.shared.live.lock().unwrap().descriptions.insert(key.to_string(), text.trim().to_string());
     }
@@ -336,6 +350,32 @@ impl ChannelManager {
                 Ok(())
             }
             _ => Err(format!("the channel to {to} just went down; try again shortly")),
+        }
+    }
+
+    /// Tells `sender`, a deployment anywhere on the channels, that its
+    /// message to `here` didn't get through and why. It arrives as a notice,
+    /// past the sender's switches.
+    pub fn turn_back(&self, sender: &str, here: &str, reason: &str) -> Result<(), String> {
+        let back = WireMessage::Undeliverable { from: sender.to_string(), to: here.to_string(), text: String::new(), reason: reason.to_string() };
+        let live = self.shared.live.lock().unwrap();
+        let route = route_from_here(sender, &live.local_keys(), &live.subscribers_reach(), &live.hosts_reach());
+        let sent = match &route {
+            Route::Host(address) => live.subscriptions.get(address).and_then(|state| state.outbox.as_ref()).is_some_and(|outbox| outbox.send(back).is_ok()),
+            Route::Subscriber(address) => live.subscribers.get(address).is_some_and(|subscriber| subscriber.outbox.send(back).is_ok()),
+            Route::Here | Route::Nowhere => false,
+        };
+        drop(live);
+        match route {
+            Route::Here => {
+                self.shared.hand_over(Inbound::Undelivered { from: sender.to_string(), to: here.to_string(), reason: reason.to_string() });
+                Ok(())
+            }
+            _ if sent => {
+                self.shared.note(LogLine::new(ChannelLogKind::Undelivered, reason).between(sender.to_string(), here.to_string()));
+                Ok(())
+            }
+            _ => Err(format!("{sender} can't be reached on the channels to tell it")),
         }
     }
 
@@ -795,6 +835,25 @@ mod tests {
 
         subscribing.send(deployment("s/b"), "h/a", "hello").unwrap();
         assert!(wait_for_line(&subscriber_received, "s/b couldn't reach h/a").await);
+        [hosting_folder, subscribing_folder].iter().for_each(|folder| std::fs::remove_dir_all(folder).unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_message_turned_back_reaches_its_sender_as_a_notice() {
+        let (hosting, hosting_folder) = manager();
+        let (subscribing, subscribing_folder) = manager();
+        let host_received = recorder(&hosting, &["h/a"]);
+        let _subscriber_received = recorder(&subscribing, &["s/b"]);
+        hosting.set_local(vec![deployment("h/a")]);
+        subscribing.set_local(vec![deployment("s/b")]);
+        let port = free_port();
+        let key = hosting.open(port, None).unwrap().hosted.unwrap().key;
+        subscribing.subscribe(&format!("127.0.0.1:{port}"), &key).unwrap();
+        wait_for(&subscribing, |status| status.deployments.len() == 2).await;
+
+        subscribing.turn_back("h/a", "s/b", "the human there said no").unwrap();
+        assert!(wait_for_line(&host_received, "h/a couldn't reach s/b").await);
+        assert!(subscribing.turn_back("x/gone", "s/b", "no").is_err());
         [hosting_folder, subscribing_folder].iter().for_each(|folder| std::fs::remove_dir_all(folder).unwrap());
     }
 

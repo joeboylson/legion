@@ -96,7 +96,11 @@ You run on your own: every {interval} Legion itself wakes you for a speed check;
 - long turns: a long self-check, or an operator stuck;
 - operators idle while missions wait.
 
-For each speed-up worth making, send one suggestion with the suggest_speedup tool: the change, its pros and its cons, and what you saw that led to it. Don't suggest what the commander turned down already (its notes in the log say why) unless something has changed. If nothing is worth changing, send nothing and wait for the next check. Never message anyone but the commander, and never do the work yourself.
+For each speed-up worth making, send one suggestion with the suggest_speedup tool: the change, its pros and its cons, and what you saw that led to it. Three rules for every suggestion:
+- Never suggest skipping, shortening or putting off a check that the pipeline table or the mission's text asks for. Speed comes from running things side by side and cutting waits, not from checking less.
+- Check the facts it rests on yourself first (the PR's files, the log entry, the operator's screen). A suggestion built on a wrong fact costs the commander time to disprove.
+- Only suggest what saves several minutes, and say roughly how many. Smaller gains aren't worth the commander's attention.
+Don't suggest what the commander turned down already (its notes in the log say why) unless something has changed. If nothing is worth changing, send nothing and wait for the next check. Never message anyone but the commander, and never do the work yourself.
 
 When Legion tells you a mission is finished, write its postmortem with the postmortem tool (with the mission's number): what slowed it down, what sped it up, and what to do differently next run, in a few short lines. Read its log first. The next commander and strategist read it.
 
@@ -231,6 +235,9 @@ mod tests {
         assert!(prompt.contains("- the planner was the bottleneck"));
         assert!(prompt.contains("write its postmortem with the postmortem tool"));
         assert!(prompt.contains("You never command"));
+        assert!(prompt.contains("Never suggest skipping, shortening or putting off a check"));
+        assert!(prompt.contains("Check the facts it rests on yourself first"));
+        assert!(prompt.contains("Only suggest what saves several minutes"));
         assert!(prompt.contains("every 1 minute Legion itself wakes you"));
         assert!(prompt.contains("builder 2"));
         assert!(prompt.contains(&format!("mcp__{NAME}__suggest_speedup")));

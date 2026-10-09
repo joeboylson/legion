@@ -12,6 +12,8 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import type { ChannelLogEntry } from '@/generated/ChannelLogEntry'
 import type { ChannelLogKind } from '@/generated/ChannelLogKind'
 import type { Channels } from '@/generated/Channels'
+import type { ChannelSwitch } from '@/generated/ChannelSwitch'
+import type { DeploymentSwitches } from '@/generated/DeploymentSwitches'
 import { clockTime } from '@/lib/format'
 import { askFor } from '@/lib/legion'
 import { partiesIn, partyColors, type PartyColors } from '@/lib/party-colors'
@@ -126,10 +128,55 @@ function Table({ headings, children }: { headings: readonly string[]; children: 
   )
 }
 
+const SWITCH_LABELS: Record<ChannelSwitch, string> = { off: 'Off', ask: 'Ask me', free: 'Free' }
+const SWITCHES: readonly ChannelSwitch[] = ['off', 'ask', 'free']
+const isChannelSwitch = (value: string): value is ChannelSwitch => (SWITCHES as readonly string[]).includes(value)
+
+type Direction = 'send' | 'receive'
+const DIRECTION_TITLES: Record<Direction, string> = {
+  send: "Whether this team's commander can message other teams",
+  receive: "Whether other teams' messages reach this team's commander",
+}
+
+// One of a team's switches. "Ask me" holds each message in Escalations
+// until you answer it.
+function SwitchSelect({ deploymentId, direction, value }: { deploymentId: string; direction: Direction; value: ChannelSwitch }) {
+  const [problem, setProblem] = useState<string>()
+  const change = (next: string) => {
+    if (!isChannelSwitch(next)) return
+    const command = { type: 'channel_switch', deployment: deploymentId, send: null, receive: null, [direction]: next } as const
+    askFor('channels', command)
+      .then(() => setProblem(undefined))
+      .catch((error: unknown) => setProblem(String(error)))
+  }
+  return (
+    <Select value={value} onValueChange={change}>
+      <SelectTrigger size="sm" aria-label={DIRECTION_TITLES[direction]} title={problem ?? DIRECTION_TITLES[direction]} className={cn(problem !== undefined && 'text-danger')}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {SWITCHES.map(choice => (
+          <SelectItem key={choice} value={choice}>
+            {SWITCH_LABELS[choice]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+// A team on this machine: its deployment's ID, and its switches as set.
+const ownSwitches = (channels: Channels, teamKey: string): DeploymentSwitches | undefined => {
+  const prefix = `${channels.machine}/`
+  if (!teamKey.startsWith(prefix)) return undefined
+  const deployment = teamKey.slice(prefix.length)
+  return channels.switches.find(set => set.deployment === deployment) ?? { deployment, send: 'ask', receive: 'ask' }
+}
+
 function TeamsTable({ channels, colors }: { channels: Channels; colors: PartyColors }) {
   if (channels.deployments.length === 0) return <p className="m-0 text-muted-foreground">No teams reachable.</p>
   return (
-    <Table headings={['Team', 'Machine', 'Folder', 'Pipeline', 'What it does']}>
+    <Table headings={['Team', 'Machine', 'Folder', 'Pipeline', 'Send', 'Receive', 'What it does']}>
         {channels.deployments.map(team => (
           <tr key={team.key}>
             <td>
@@ -142,6 +189,20 @@ function TeamsTable({ channels, colors }: { channels: Channels; colors: PartyCol
             <td className="font-mono" title={team.operators.join(' → ')}>
               {team.pipeline}
             </td>
+            {(['send', 'receive'] as const).map(direction => {
+              const switches = ownSwitches(channels, team.key)
+              return (
+                <td key={direction}>
+                  {switches === undefined ? (
+                    <span className="text-muted-foreground" title="Set on its own machine">
+                      —
+                    </span>
+                  ) : (
+                    <SwitchSelect deploymentId={switches.deployment} direction={direction} value={switches[direction]} />
+                  )}
+                </td>
+              )
+            })}
             <td className={team.description === null ? 'text-muted-foreground' : undefined}>{team.description ?? 'No description yet.'}</td>
           </tr>
         ))}

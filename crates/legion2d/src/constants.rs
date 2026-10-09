@@ -58,6 +58,7 @@ pub const CHANNEL_SILENCE_LIMIT: Duration = Duration::from_secs(25);
 pub const CHANNEL_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 pub const CHANNELS_FILE_NAME: &str = "channels.json";
 pub const CHANNEL_LOG_FILE_NAME: &str = "channel-log.jsonl";
+pub const CHANNEL_HOLDS_FILE_NAME: &str = "channel-holds.json";
 pub const WAITING_SESSIONS_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 /// A session whose add-on hasn't reported by now is likely stuck on a
 /// question shown before the add-on loads, such as whether to trust the folder.

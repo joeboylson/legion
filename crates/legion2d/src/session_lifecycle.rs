@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use legion2_proto::{role_of_position, EntryKind, LogFilter, NewEntry, Role, COMMANDER, HUMAN, LEGION, STRATEGIST};
 
 use crate::{
-    stalled_work::{stall_reminder, stalls, MissionView, Stall},
+    stalled_work::{stall_reminder, stalls, works_on_mission, MissionView, Stall},
     session_commands::{is_busy, StartRequest},
     setup::{read_operator, read_pipeline},
     check_ins::{check_in_request, is_check_in_due},
@@ -202,11 +202,14 @@ impl Daemon {
                         .into_iter()
                         .map(|mission| {
                             let handoffs = LogFilter { mission: Some(mission.number), kinds: Some(vec![EntryKind::Handoff]), ..Default::default() };
+                            let handed_off_at_ms = folder.store.entries(deployment_id, &handoffs).ok().and_then(|entries| entries.last().map(|entry| entry.at_ms));
                             MissionView {
                                 number: mission.number,
                                 status: mission.status,
-                                handed_off_at_ms: folder.store.entries(deployment_id, &handoffs).ok().and_then(|entries| entries.last().map(|entry| entry.at_ms)),
-                                is_being_worked: deployment_sessions.iter().any(|session| session.mission == Some(mission.number) && is_busy(session.activity)),
+                                handed_off_at_ms,
+                                is_being_worked: deployment_sessions.iter().any(|session| {
+                                    session.mission == Some(mission.number) && works_on_mission(is_busy(session.activity), session.turn_started_ms, handed_off_at_ms)
+                                }),
                             }
                         })
                         .collect();

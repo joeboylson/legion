@@ -48,6 +48,7 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
         Action::Mcp => return Ok(Plan::ServeTools),
         Action::Add { path } => Command::FolderAdd { path },
         Action::Folders => Command::FolderList,
+        Action::Remove { folder } => Command::FolderRemove { folder },
         Action::Deploy { folder, pipeline, name } => Command::DeploymentStart { folder, pipeline, name },
         Action::Deployments { folder } => Command::DeploymentList { folder },
         Action::Close => Command::DeploymentClose { deployment: needs_deployment()? },
@@ -94,6 +95,7 @@ pub fn plan_action(action: Action, deployment: Option<String>, now_ms: i64, miss
             ChannelAction::Subscribe { address, key } => Command::ChannelSubscribe { address, key },
             ChannelAction::Unsubscribe { address } => Command::ChannelUnsubscribe { address },
             ChannelAction::Status => Command::ChannelStatus,
+            ChannelAction::Switch { send, receive } => Command::ChannelSwitch { deployment: needs_deployment()?, send, receive },
             ChannelAction::Log { limit } => Command::ChannelLog { limit },
         },
     };
@@ -124,6 +126,8 @@ mod tests {
     #[test]
     fn folder_commands_dont() {
         assert!(matches!(asked(plan_action(Action::Folders, None, 0, None).unwrap()), Command::FolderList));
+        let remove = Action::Remove { folder: "app".into() };
+        assert!(matches!(asked(plan_action(remove, None, 0, None).unwrap()), Command::FolderRemove { folder } if folder == "app"));
     }
 
     #[test]

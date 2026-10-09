@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use legion2_proto::{ChannelSwitch, DeploymentSwitches};
 use serde::{Deserialize, Serialize};
 
 use crate::constants::CHANNELS_FILE_NAME;
@@ -12,6 +13,8 @@ use crate::constants::CHANNELS_FILE_NAME;
 pub struct ChannelSettings {
     pub hosted: Option<HostedSettings>,
     pub subscriptions: Vec<SubscriptionSettings>,
+    /// Only deployments with a switch changed from "ask".
+    pub switches: Vec<DeploymentSwitches>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -32,16 +35,34 @@ impl ChannelSettings {
     /// A subscription to an address already subscribed to replaces it.
     pub fn with_subscription(&self, subscription: SubscriptionSettings) -> ChannelSettings {
         let others: Vec<SubscriptionSettings> = self.subscriptions.iter().filter(|existing| existing.address != subscription.address).cloned().collect();
-        ChannelSettings { hosted: self.hosted.clone(), subscriptions: others.into_iter().chain([subscription]).collect() }
+        ChannelSettings { subscriptions: others.into_iter().chain([subscription]).collect(), ..self.clone() }
     }
 
     pub fn without_subscription(&self, address: &str) -> ChannelSettings {
         let kept = self.subscriptions.iter().filter(|existing| existing.address != address).cloned().collect();
-        ChannelSettings { hosted: self.hosted.clone(), subscriptions: kept }
+        ChannelSettings { subscriptions: kept, ..self.clone() }
     }
 
     pub fn with_hosted(&self, hosted: Option<HostedSettings>) -> ChannelSettings {
-        ChannelSettings { hosted, subscriptions: self.subscriptions.clone() }
+        ChannelSettings { hosted, ..self.clone() }
+    }
+
+    pub fn switches_for(&self, deployment: &str) -> DeploymentSwitches {
+        self.switches.iter().find(|known| known.deployment == deployment).cloned().unwrap_or(DeploymentSwitches {
+            deployment: deployment.to_string(),
+            send: ChannelSwitch::default(),
+            receive: ChannelSwitch::default(),
+        })
+    }
+
+    /// Changes the switches given and keeps the other; a deployment back on
+    /// "ask" for both is dropped from the list.
+    pub fn with_switches(&self, deployment: &str, send: Option<ChannelSwitch>, receive: Option<ChannelSwitch>) -> ChannelSettings {
+        let current = self.switches_for(deployment);
+        let changed = DeploymentSwitches { send: send.unwrap_or(current.send), receive: receive.unwrap_or(current.receive), ..current };
+        let is_default = changed.send == ChannelSwitch::default() && changed.receive == ChannelSwitch::default();
+        let others = self.switches.iter().filter(|known| known.deployment != deployment).cloned();
+        ChannelSettings { switches: others.chain((!is_default).then_some(changed)).collect(), ..self.clone() }
     }
 }
 
@@ -77,8 +98,21 @@ mod tests {
     #[test]
     fn unsubscribing_keeps_the_rest_and_the_hosted_channel() {
         let hosted = Some(HostedSettings { port: 4620, key: "k".into() });
-        let settings = ChannelSettings { hosted: hosted.clone(), subscriptions: vec![subscription("a:1", "x"), subscription("b:2", "y")] };
-        assert_eq!(settings.without_subscription("a:1"), ChannelSettings { hosted, subscriptions: vec![subscription("b:2", "y")] });
+        let settings = ChannelSettings { hosted: hosted.clone(), subscriptions: vec![subscription("a:1", "x"), subscription("b:2", "y")], switches: vec![] };
+        assert_eq!(settings.without_subscription("a:1"), ChannelSettings { hosted, subscriptions: vec![subscription("b:2", "y")], switches: vec![] });
+    }
+
+    #[test]
+    fn switches_start_on_ask_and_change_one_at_a_time() {
+        let settings = ChannelSettings::default();
+        assert_eq!((settings.switches_for("d").send, settings.switches_for("d").receive), (ChannelSwitch::Ask, ChannelSwitch::Ask));
+        let send_free = settings.with_switches("d", Some(ChannelSwitch::Free), None);
+        assert_eq!((send_free.switches_for("d").send, send_free.switches_for("d").receive), (ChannelSwitch::Free, ChannelSwitch::Ask));
+        let receive_off = send_free.with_switches("d", None, Some(ChannelSwitch::Off));
+        assert_eq!((receive_off.switches_for("d").send, receive_off.switches_for("d").receive), (ChannelSwitch::Free, ChannelSwitch::Off));
+        assert_eq!(receive_off.switches_for("other").send, ChannelSwitch::Ask);
+        let back_to_ask = receive_off.with_switches("d", Some(ChannelSwitch::Ask), Some(ChannelSwitch::Ask));
+        assert!(back_to_ask.switches.is_empty());
     }
 
     #[test]

@@ -86,6 +86,9 @@ pub enum Command {
     /// Adds a folder, setting up `.legion2/` in it if it has none.
     FolderAdd { path: String },
     FolderList,
+    /// Forgets a folder with no open deployments. Its setup, missions and
+    /// log stay on disk, so adding it again brings them back.
+    FolderRemove { folder: String },
     /// Everything about one folder: its settings, pipelines, operators and deployments.
     FolderRead { folder: String },
     DeploymentStart { folder: String, pipeline: String, name: Option<String> },
@@ -149,6 +152,9 @@ pub enum Command {
     /// What the channels carried and saw on this machine, newest last; the
     /// latest `limit` entries.
     ChannelLog { limit: u32 },
+    /// Sets whichever of a deployment's channel switches are given, and
+    /// replies with the channels, every deployment's switches included.
+    ChannelSwitch { deployment: String, send: Option<ChannelSwitch>, receive: Option<ChannelSwitch> },
     /// Sends events from now on, for as long as the connection stays open.
     Watch,
 }
@@ -287,10 +293,48 @@ pub enum ChannelLogKind {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct Channels {
+    /// This machine's name, as the other ends see it.
+    pub machine: String,
     pub hosted: Option<HostedChannel>,
     pub subscriptions: Vec<Subscription>,
     /// Every open deployment reachable over the channels, this machine's too.
     pub deployments: Vec<ChannelDeployment>,
+    /// This machine's deployments that have had a switch changed, by ID.
+    /// Any other deployment has both switches on "ask".
+    pub switches: Vec<DeploymentSwitches>,
+}
+
+/// Whether a commander's messages go out to other teams (send), and whether
+/// other teams' messages reach it (receive).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelSwitch {
+    /// Turned away, and the other side is told.
+    Off,
+    /// Held as a question in Escalations until the human answers it.
+    #[default]
+    Ask,
+    /// Goes straight through.
+    Free,
+}
+
+impl ChannelSwitch {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChannelSwitch::Off => "off",
+            ChannelSwitch::Ask => "ask",
+            ChannelSwitch::Free => "free",
+        }
+    }
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DeploymentSwitches {
+    pub deployment: String,
+    pub send: ChannelSwitch,
+    pub receive: ChannelSwitch,
 }
 
 /// An open deployment as the channels know it.

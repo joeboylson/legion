@@ -1,7 +1,7 @@
 //! The legion2 command's arguments.
 
 use clap::{Parser, Subcommand};
-use legion2_proto::{DEFAULT_CHANNEL_PORT, ENV_DEPLOYMENT};
+use legion2_proto::{ChannelSwitch, DEFAULT_CHANNEL_PORT, ENV_DEPLOYMENT};
 
 #[derive(Parser)]
 #[command(name = "legion2", about = "Run Legion: folders, deployments, missions, sessions and the deployment log.")]
@@ -24,6 +24,8 @@ pub enum Action {
     Add { path: String },
     /// List folders.
     Folders,
+    /// Remove a folder from Legion. Close its deployments first. Its setup, missions and log stay on disk.
+    Remove { folder: String },
     /// Start a deployment of a folder's pipeline. Its commander starts with it.
     Deploy {
         folder: String,
@@ -203,6 +205,15 @@ pub enum ChannelAction {
     },
     /// Show the hosted channel and the subscriptions, and whether each end is up.
     Status,
+    /// Set the deployment's switches: off, ask (the human approves each message) or free.
+    Switch {
+        /// Whether its commander's messages go out to other teams.
+        #[arg(long, value_parser = parse_switch)]
+        send: Option<ChannelSwitch>,
+        /// Whether other teams' messages reach its commander.
+        #[arg(long, value_parser = parse_switch)]
+        receive: Option<ChannelSwitch>,
+    },
     /// Show what the channels carried and saw on this machine, newest last.
     Log {
         #[arg(long, default_value_t = 50)]
@@ -245,4 +256,11 @@ pub enum ExportFormat {
     /// One entry per line, as JSON.
     Jsonl,
     Markdown,
+}
+
+fn parse_switch(value: &str) -> Result<ChannelSwitch, String> {
+    [ChannelSwitch::Off, ChannelSwitch::Ask, ChannelSwitch::Free]
+        .into_iter()
+        .find(|switch| switch.as_str() == value)
+        .ok_or_else(|| format!("{value:?}: use off, ask or free"))
 }

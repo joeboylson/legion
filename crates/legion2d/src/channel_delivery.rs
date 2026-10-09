@@ -5,13 +5,17 @@
 
 use std::sync::{Arc, Weak};
 
-use legion2_proto::{ChannelDeployment, EntryKind, NewEntry, Reply, COMMANDER};
+use legion2_proto::{ChannelDeployment, ChannelSwitch, EntryKind, NewEntry, Reply, COMMANDER};
 
 use crate::{
+    channel_holds::Held,
     channels::Inbound,
     daemon::Daemon,
     setup::read_pipeline,
 };
+
+/// What a commander hears when its message waits for the human.
+const HELD_FOR_APPROVAL: &str = "Held for the human to approve. You'll get a message once it's sent or turned down; carry on meanwhile.";
 
 /// A deployment's key on the channels: the machine's name and its ID.
 pub fn channel_key(machine: &str, deployment_id: &str) -> String {
@@ -87,7 +91,7 @@ impl Daemon {
         self.channels.set_local(self.channel_deployments_here());
     }
 
-    fn own_channel_deployment(&self, deployment_key: &str) -> Result<ChannelDeployment, String> {
+    pub fn own_channel_deployment(&self, deployment_key: &str) -> Result<ChannelDeployment, String> {
         let deployment_id = self.state.lock().unwrap().find_open_deployment(deployment_key)?.1.id;
         let key = channel_key(self.channels.machine(), &deployment_id);
         self.channel_deployments_here().into_iter().find(|deployment| deployment.key == key).ok_or_else(|| format!("deployment {deployment_key} isn't open"))
@@ -105,30 +109,58 @@ impl Daemon {
         Ok(Reply::Done)
     }
 
+    /// Goes straight out with the send switch on "free"; on "ask" it waits
+    /// for the human.
     pub fn send_on_channels(&self, deployment_key: &str, to: &str, text: &str) -> Result<Reply, String> {
         let own = self.own_channel_deployment(deployment_key)?;
+        let to = to.trim();
         if own.key == to {
             return Err("that's your own deployment".into());
         }
-        self.channels.send(own, to.trim(), text)?;
-        Ok(Reply::Done)
+        let deployment_id = self.local_deployment_id(&own.key)?;
+        match self.channels.switches(&deployment_id).send {
+            ChannelSwitch::Off => Err("the human has turned sending off for this deployment: it can't message other teams".into()),
+            ChannelSwitch::Free => self.channels.send(own, to, text).map(|_| Reply::Done),
+            ChannelSwitch::Ask => {
+                let target = self.channels.reaches(to).ok_or_else(|| format!("no open deployment {to} on the channels; channel_deployments lists who's there"))?;
+                self.hold_for_human(&deployment_id, Held::Out { from: own, to: target, text: text.to_string() })?;
+                Ok(Reply::Text { text: HELD_FOR_APPROVAL.into() })
+            }
+        }
     }
 
-    /// Something from the channels for a deployment here.
+    /// The ID of a deployment on this machine, from its channel key.
+    pub fn local_deployment_id(&self, key: &str) -> Result<String, String> {
+        key.strip_prefix(&format!("{}/", self.channels.machine())).map(str::to_string).ok_or_else(|| format!("{key} isn't on this machine"))
+    }
+
+    /// Something from the channels for a deployment here. A message waits
+    /// for the human with the receive switch on "ask"; on "off" it's turned
+    /// away and its sender told.
     fn take_from_channel(&self, inbound: Inbound) -> Result<(), String> {
-        let machine = self.channels.machine().to_string();
-        let local_id = |key: &str| key.strip_prefix(&format!("{machine}/")).map(str::to_string).ok_or_else(|| format!("{key} isn't on this machine"));
         let (key, text) = match inbound {
-            Inbound::Message { to, from, text } => (to, arrival_text(&from, &text)),
+            Inbound::Message { to, from, text } => {
+                let deployment_id = self.local_deployment_id(&to)?;
+                self.state.lock().unwrap().find_open_deployment(&deployment_id)?;
+                match self.channels.switches(&deployment_id).receive {
+                    ChannelSwitch::Off => return Err("this team has turned off messages from other teams".into()),
+                    ChannelSwitch::Ask => return self.hold_for_human(&deployment_id, Held::In { from, text }),
+                    ChannelSwitch::Free => (to, arrival_text(&from, &text)),
+                }
+            }
             Inbound::Undelivered { from, to, reason } => (from, format!("Your channel message to {to} didn't get through: {reason}")),
             Inbound::Gone { here, gone } => {
                 (here, format!("{} ({}), a team you've been talking to over the channel, is gone: its deployment closed or its Legion went away. Messages to it won't get through.", gone.name, gone.key))
             }
         };
-        let deployment_id = local_id(&key)?;
-        self.state.lock().unwrap().find_open_deployment(&deployment_id)?;
+        let deployment_id = self.local_deployment_id(&key)?;
+        self.tell_commander(&deployment_id, text)
+    }
+
+    pub fn tell_commander(&self, deployment_id: &str, text: String) -> Result<(), String> {
+        self.state.lock().unwrap().find_open_deployment(deployment_id)?;
         let entry = NewEntry { kind: EntryKind::Message, mission: None, to: Some(COMMANDER.into()), text, answers: None };
-        self.post_entry(&deployment_id, legion2_proto::LEGION, entry).map(|_| ())
+        self.post_entry(deployment_id, legion2_proto::LEGION, entry).map(|_| ())
     }
 }
 
