@@ -1,4 +1,4 @@
-// Talking to legion2d, the same way from every screen whether the app runs
+// Talking to legiond, the same way from every screen whether the app runs
 // in its own window or in a browser tab.
 
 import type { Command } from '@/generated/Command'
@@ -18,7 +18,7 @@ type ReplyOf<Kind extends Reply['type']> = Extract<Reply, { type: Kind }>
 // Asks, and checks the reply is the kind expected.
 export const askFor = async <Kind extends Reply['type']>(kind: Kind, command: Command): Promise<ReplyOf<Kind>> => {
   const reply = await askLegion(command)
-  if (reply.type !== kind) throw new Error(`legion2d answered ${reply.type}, not ${kind}`)
+  if (reply.type !== kind) throw new Error(`legiond answered ${reply.type}, not ${kind}`)
   return reply as ReplyOf<Kind>
 }
 

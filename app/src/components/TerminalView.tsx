@@ -1,4 +1,4 @@
-// A session's live terminal: legion2d's copy of its screen, redrawn as it
+// A session's live terminal: legiond's copy of its screen, redrawn as it
 // changes, with every keystroke typed straight into the session except Esc,
 // which would stop Claude's turn: it closes the dialog instead. What scrolled
 // off the top sits above it, and the wheel scrolls through both.
@@ -8,7 +8,7 @@ import { useEffect, useRef } from 'react'
 
 import { askFor, askLegion } from '@/lib/legion'
 
-// legion2d's terminals are this size (TERMINAL_ROWS and TERMINAL_COLUMNS).
+// legiond's terminals are this size (TERMINAL_ROWS and TERMINAL_COLUMNS).
 const TERMINAL_ROWS = 40
 const TERMINAL_COLUMNS = 120
 const REDRAW_INTERVAL_MS = 233

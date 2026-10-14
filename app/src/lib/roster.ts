@@ -6,10 +6,10 @@ import type { SessionInfo } from '@/generated/SessionInfo'
 // A position, and its session if one is running. No session: inactive.
 export type RosterEntry = { position: string; session?: SessionInfo }
 
-// Mirrors COMMANDER in legion2-proto.
+// Mirrors COMMANDER in legion-proto.
 export const COMMANDER = 'commander'
 
-// Mirrors legion2d's naming.rs: builder-2 is a copy of builder.
+// Mirrors legiond's naming.rs: builder-2 is a copy of builder.
 const COPY_SUFFIX = /-\d+$/
 
 export const operatorOfPosition = (position: string): string => position.replace(COPY_SUFFIX, '')

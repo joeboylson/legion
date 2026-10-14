@@ -3,7 +3,7 @@ import type { Activity } from "./Activity";
 
 export type SessionInfo = { deployment: string, position: string, mission: number | null, activity: Activity, 
 /**
- * False when the add-on is a version legion2d doesn't know.
+ * False when the add-on is a version legiond doesn't know.
  */
 can_see_state: boolean, 
 /**

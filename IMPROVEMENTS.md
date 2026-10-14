@@ -1,6 +1,6 @@
 # Improvements to try next run
 
-Found while running the `hello-legion2` test rounds. Newest at the bottom.
+Found while running the `hello-legion` test rounds. Newest at the bottom.
 
 - **End operators the pipeline can't reach again.** Once the work has moved
   past them for good (the planner, once building has started), end them
@@ -44,10 +44,10 @@ Found while running the `hello-legion2` test rounds. Newest at the bottom.
 - **Operators don't hear the human's decisions.** The tester and reviewer both
   asked to undo a change the human had asked for. The commander should pass
   the human's decisions to everyone on the mission.
-- **legion2d doesn't start on its own after a reboot.** The plan says it
+- **legiond doesn't start on its own after a reboot.** The plan says it
   starts when the machine starts and brings open deployments back; nothing
   sets that up yet (a launchd agent on macOS, a systemd user unit on Linux).
-  (Done for macOS: `legion2 service install`. Linux still needs a systemd unit.)
+  (Done for macOS: `legion service install`. Linux still needs a systemd unit.)
 - **A folder that isn't in git gets no protection.** Missions there work
   straight in the folder, so two at once can overwrite each other and nothing
   is committed. Legion should run them one at a time there, or offer to set
@@ -70,13 +70,13 @@ Found while running the `hello-legion2` test rounds. Newest at the bottom.
 ## From the rogers-demo run (temp_plus_platform, 2026-10-06)
 
 Reported by the session running it. "Built, not installed" means the code
-is written and tested, but legion2d hasn't been reinstalled with it yet.
+is written and tested, but legiond hasn't been reinstalled with it yet.
 
 - **One copy per mission.** The check that stops a second copy starting on a
   mission another copy holds also stops two copies from sharing the work, so
   work had to be split into one mission per bill. (Built, not installed:
   parts let copies share one mission, each on its own part.)
-- **A restart loses operators.** After a legion2d restart, only the
+- **A restart loses operators.** After a legiond restart, only the
   commander and each mission's holder came back. The other operators on
   those missions (3 bill-verifiers, a db-checker) lost their work and had to
   be started by hand. (Done: every operator on a mission comes back, as the
@@ -121,18 +121,18 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
 - **No rules for answering permission prompts.** There's no way to approve
   or deny operators' prompts by rule (approve local, deny staging), so the
   human has to watch screens.
-- **No Legion tools in the human's own Claude session.** `legion2 mcp` only
-  serves sessions legion2d started; the human gets just the command line.
-- **legion2d isn't a service.** No launchd agent and no default log file; it
-  needs a manual start after every reboot. (Done: `legion2 service install`.)
+- **No Legion tools in the human's own Claude session.** `legion mcp` only
+  serves sessions legiond started; the human gets just the command line.
+- **legiond isn't a service.** No launchd agent and no default log file; it
+  needs a manual start after every reboot. (Done: `legion service install`.)
 - **Pipelines can't express rounds.** Conditions had to say "round 1" and
   "round 2" in plain text. (Already installed: a step's `next` can be a
   list, such as `[security-reviewer, docs-writer]`; those operators work at
   once and the commander waits for all of them. Rounds aren't covered.)
 - **Operators can't write a shared tools folder.** They can't write in
-  `.legion2/`, so the team made `legion-tools/` with a README index. (Built,
+  `.legion/`, so the team made `legion-tools/` with a README index. (Built,
   not installed: the `share_tool` tool has Legion copy a tool into
-  `.legion2/tools/` and tell everyone, so operators don't need to write
+  `.legion/tools/` and tell everyone, so operators don't need to write
   there.)
 - **The commander doesn't push for speed.** Every speed-up was found by the
   human: running bill-making alongside the baseline round, one checker per
@@ -220,7 +220,7 @@ is written and tested, but legion2d hasn't been reinstalled with it yet.
   interrupt a long turn" above.)
 - **A new folder stalls on Claude's "trust this folder?" question.** The
   commander and strategist sat on it for 3 minutes on the first run in
-  `ref/hello-legion2`. Legion could offer to answer it when the folder is
+  `ref/hello-legion`. Legion could offer to answer it when the folder is
   added.
 - **Proof checks go much faster with the strategist on.** It suggested 15
   speed-ups; the commander took 10, mostly starting review and re-proof of

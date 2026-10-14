@@ -1,12 +1,12 @@
 {
-  "name": "legion2-app",
+  "name": "legion-app",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "types": "cd .. && TS_RS_EXPORT_DIR=\"$PWD/app/src/generated\" cargo test -p legion2-proto --features typescript",
+    "types": "cd .. && TS_RS_EXPORT_DIR=\"$PWD/app/src/generated\" cargo test -p legion-proto --features typescript",
     "app": "cargo tauri dev",
     "bundle": "cargo tauri build",
     "doctor": "react-doctor --verbose -y --no-score",

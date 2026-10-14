@@ -20,7 +20,7 @@ import { askFor } from '@/lib/legion'
 import { partiesIn, partyColors, type PartyColors } from '@/lib/party-colors'
 import { cn } from '@/lib/utils'
 
-// The newest entries read at once; older ones stay in legion2d's log file.
+// The newest entries read at once; older ones stay in legiond's log file.
 const LOG_LIMIT = 500
 
 const KIND_LABELS: Record<ChannelLogKind, string> = {
@@ -270,7 +270,7 @@ export function ChannelsPage({ channels, changeCount }: { channels?: Channels; c
       .catch((error: unknown) => setProblem(String(error)))
   }, [changeCount])
 
-  if (channels === undefined) return <p className="p-4 text-muted-foreground">This legion2d is older than channels; restart it with the new version.</p>
+  if (channels === undefined) return <p className="p-4 text-muted-foreground">This legiond is older than channels; restart it with the new version.</p>
 
   const colors = partyColors(partiesIn(channels, entries))
   // Names from the teams reachable now, then from the log for those gone.

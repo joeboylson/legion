@@ -250,7 +250,7 @@ function PickInOrderStep({ prompt, choices = [], onAnswer, onBack }: StepProps) 
   )
 }
 
-// Loads a step's list or starting text, which may need legion2d. A list
+// Loads a step's list or starting text, which may need legiond. A list
 // with one choice is picked for you, as in the CLI.
 function useStepData(step: Step | undefined, filled: readonly Filled[], sources: Sources, onOnlyChoice: (filledNow: readonly Filled[], key: string, value: string, label: string) => void) {
   const [data, setData] = useState<{ key: string; choices?: Choice[]; initial?: string; problem?: string }>()

@@ -1,0 +1,12 @@
+[package]
+name = "legion-client"
+version = "0.1.0"
+edition = "2021"
+description = "Talking to legiond over its WebSocket: shared by the legion command and the app."
+
+[dependencies]
+futures-util = "0.3"
+legion-proto = { path = "../legion-proto" }
+serde_json = "1"
+tokio = { version = "1", features = ["net"] }
+tokio-tungstenite = "0.28"

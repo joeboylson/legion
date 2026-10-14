@@ -1,5 +1,5 @@
 // An action is what the CLI calls a command and its action word: a list of
-// steps that each fill one answer, then a run that sends them to legion2d.
+// steps that each fill one answer, then a run that sends them to legiond.
 // Steps already answered (by what was clicked, or by the open tab) are
 // skipped, the way a flag skips a prompt.
 

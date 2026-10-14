@@ -2052,7 +2052,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
-name = "legion2"
+name = "legion"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -2061,18 +2061,18 @@ dependencies = [
  "console",
  "crossterm",
  "jiff",
- "legion2-client",
- "legion2-proto",
+ "legion-client",
+ "legion-proto",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
-name = "legion2-app"
+name = "legion-app"
 version = "0.1.0"
 dependencies = [
- "legion2-client",
- "legion2-proto",
+ "legion-client",
+ "legion-proto",
  "serde",
  "tauri",
  "tauri-build",
@@ -2080,18 +2080,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "legion2-client"
+name = "legion-client"
 version = "0.1.0"
 dependencies = [
  "futures-util",
- "legion2-proto",
+ "legion-proto",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.28.0",
 ]
 
 [[package]]
-name = "legion2-proto"
+name = "legion-proto"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -2100,11 +2100,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "legion2d"
+name = "legiond"
 version = "0.1.0"
 dependencies = [
  "axum",
- "legion2-proto",
+ "legion-proto",
  "portable-pty",
  "rusqlite",
  "serde",

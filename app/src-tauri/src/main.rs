@@ -1,13 +1,13 @@
-//! The Legion app's back end: passes the screen's requests to legion2d, and
-//! streams legion2d's events back to the screen. Both connections come back
-//! by themselves when legion2d restarts.
+//! The Legion app's back end: passes the screen's requests to legiond, and
+//! streams legiond's events back to the screen. Both connections come back
+//! by themselves when legiond restarts.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::time::Duration;
 
-use legion2_client::Client;
-use legion2_proto::{Command, Event, Reply, ServerMessage};
+use legion_client::Client;
+use legion_proto::{Command, Event, Reply, ServerMessage};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
@@ -20,8 +20,8 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 struct RequestConnection(Mutex<Option<Client>>);
 
 /// Debug builds only: where to save what the screen looks like, so it can
-/// be checked without a person looking. Set LEGION2_SNAPSHOT_DIR to turn it on.
-const SNAPSHOT_FOLDER_ENV: &str = "LEGION2_SNAPSHOT_DIR";
+/// be checked without a person looking. Set LEGION_SNAPSHOT_DIR to turn it on.
+const SNAPSHOT_FOLDER_ENV: &str = "LEGION_SNAPSHOT_DIR";
 /// The built page the snapshot's stylesheets and fonts come from.
 const BUILT_PAGE_FOLDER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dist");
 
@@ -31,11 +31,11 @@ fn snapshot_folder() -> Option<std::path::PathBuf> {
     is_debug_build.then(|| folder.into())
 }
 
-/// Debug builds only: LEGION2_OPEN=<deployment>[/<position>] opens that deployment (and
+/// Debug builds only: LEGION_OPEN=<deployment>[/<position>] opens that deployment (and
 /// that position's terminal) at start, so a snapshot can show it. With
 /// snapshots on, a file in the snapshot folder says the same and is read on
 /// every reload, so the view can change without relaunching the app.
-const OPEN_AT_START_ENV: &str = "LEGION2_OPEN";
+const OPEN_AT_START_ENV: &str = "LEGION_OPEN";
 const OPEN_AT_START_FILE_NAME: &str = "open.txt";
 
 #[derive(serde::Serialize, Debug, PartialEq)]
@@ -89,16 +89,16 @@ async fn legion_request(command: Command, connection: tauri::State<'_, RequestCo
     if held.is_none() {
         *held = Some(Client::connect().await?);
     }
-    let client = held.as_mut().ok_or("not connected to legion2d")?;
+    let client = held.as_mut().ok_or("not connected to legiond")?;
     let outcome = client.ask(command).await;
     if outcome.is_err() {
-        // Reconnect next time, in case legion2d restarted.
+        // Reconnect next time, in case legiond restarted.
         *held = None;
     }
     outcome
 }
 
-/// Follows legion2d's events for as long as the app runs, reconnecting
+/// Follows legiond's events for as long as the app runs, reconnecting
 /// whenever the connection drops.
 async fn stream_events(app: AppHandle) {
     loop {
@@ -115,7 +115,7 @@ async fn stream_events(app: AppHandle) {
             Ok::<(), String>(())
         };
         if let Err(problem) = watched.await {
-            eprintln!("legion2 app: {problem}");
+            eprintln!("legion app: {problem}");
         }
         let _ = app.emit(CONNECTION_CHANNEL, false);
         tokio::time::sleep(RECONNECT_DELAY).await;

@@ -40,7 +40,7 @@ function MissionContent({ mission, changeCount }: { mission: Mission; changeCoun
     askFor('mission', { type: 'mission_read', deployment: mission.deployment, mission: mission.number })
       .then(reply => {
         setBody(reply.body)
-        // A legion2d older than parts sends none.
+        // A legiond older than parts sends none.
         setParts(reply.parts ?? [])
       })
       .catch((error: unknown) => setBody(`Couldn't read the mission: ${String(error)}`))

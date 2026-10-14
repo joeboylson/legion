@@ -31,7 +31,7 @@ export const msUntilCarryOn = (windows: readonly RateLimitWindow[], nowMs: numbe
   return Math.max(0, latestReset - nowMs) + CARRY_ON_DELAY_AFTER_RESET_MS
 }
 
-// What legion2d is told about the wait.
+// What legiond is told about the wait.
 export const limitDetail = (windows: readonly RateLimitWindow[]): string =>
   exhaustedWindows(windows)
     .map(window => `${window.kind} resets ${window.resetsAt ?? 'at an unknown time'}`)

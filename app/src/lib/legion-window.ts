@@ -1,4 +1,4 @@
-// The Tauri window's way to legion2d: through the app's back end
+// The Tauri window's way to legiond: through the app's back end
 // (src-tauri/src/main.rs), which holds the connection.
 
 import { invoke } from '@tauri-apps/api/core'

@@ -1,6 +1,6 @@
-// A browser tab's way to legion2d: its WebSocket, on the same local address
+// A browser tab's way to legiond: its WebSocket, on the same local address
 // that served the page. One connection carries every request and, once it
-// asks to watch, every event. It comes back by itself when legion2d
+// asks to watch, every event. It comes back by itself when legiond
 // restarts, so the tab can stay open.
 
 import type { Event } from '@/generated/Event'
@@ -12,7 +12,7 @@ import type { LegionConnection, StopListening } from './legion-connection'
 
 // The same wait as the window's back end.
 const RECONNECT_DELAY_MS = 2000
-// Owned by legion2d (WEBSOCKET_ROUTE).
+// Owned by legiond (WEBSOCKET_ROUTE).
 const WEBSOCKET_PATH = '/ws'
 const WATCH_REQUEST_ID = 'watch'
 
@@ -55,9 +55,9 @@ const connect = (): Promise<WebSocket> => {
       opening = undefined
       const lost = [...waiting.values()]
       waiting.clear()
-      lost.forEach(request => request.reject(new Error('lost the connection to legion2d')))
+      lost.forEach(request => request.reject(new Error('lost the connection to legiond')))
       tellConnection(false)
-      reject(new Error("can't reach legion2d"))
+      reject(new Error("can't reach legiond"))
       setTimeout(() => void connect().catch(() => undefined), RECONNECT_DELAY_MS)
     }
   })

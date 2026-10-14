@@ -1,5 +1,5 @@
-// How the screens reach legion2d, whichever way the app runs: in its Tauri
-// window, or in a browser tab served by legion2d itself.
+// How the screens reach legiond, whichever way the app runs: in its Tauri
+// window, or in a browser tab served by legiond itself.
 
 import type { Command } from '@/generated/Command'
 import type { Event } from '@/generated/Event'

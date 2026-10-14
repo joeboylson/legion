@@ -1,19 +1,19 @@
 # Test cases
 
 End-to-end tests to run by hand, after the 10-operator build in
-`hello-legion2`. Each says what to set up, what to do, and what has to be
+`hello-legion`. Each says what to set up, what to do, and what has to be
 true for it to pass.
 
 ## 1. Two teams talking over a channel
 
 **Waiting on:** channels, and reaching a host from another machine. Neither
-is built in legion2 yet; see "Channels" in `docs/tauri-rewrite.md`.
+is built in legion yet; see "Channels" in `docs/tauri-rewrite.md`.
 
 **Setup**
 
-- One host machine running `legion2d`.
+- One host machine running `legiond`.
 - A **local team**: a folder on the host, with a deployment running.
-- A **remote team**: a folder on a second machine, with its own `legion2d`
+- A **remote team**: a folder on a second machine, with its own `legiond`
   and a deployment running. The app on the host reaches it over SSH or a
   private network.
 - One channel, with both deployments added to it.
@@ -28,7 +28,7 @@ is built in legion2 yet; see "Channels" in `docs/tauri-rewrite.md`.
 5. With **Receive** on "ask me", pass it on to the remote commander from
    Escalations.
 6. Let the remote team answer. Set both switches to "free" and repeat.
-7. Stop the remote `legion2d`. Start it again.
+7. Stop the remote `legiond`. Start it again.
 
 **Passes when**
 

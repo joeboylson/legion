@@ -1,5 +1,5 @@
 {
-  "name": "legion2-addon",
+  "name": "legion-addon",
   "version": "0.1.0",
-  "description": "Reports a Legion session's state to legion2d and hands it its messages."
+  "description": "Reports a Legion session's state to legiond and hands it its messages."
 }

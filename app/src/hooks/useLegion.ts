@@ -1,5 +1,5 @@
 // Everything the screen shows, kept current: loaded once, then again
-// whenever legion2d reports a change.
+// whenever legiond reports a change.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -19,7 +19,7 @@ export type LegionData = {
   folders: Folder[]
   snapshots: DeploymentSnapshot[]
   // The channel this machine hosts and the ones it subscribes to; none
-  // from a legion2d older than channels.
+  // from a legiond older than channels.
   channels?: Channels
   problem?: string
   // Bumps on every change, for views that load their own data.
@@ -71,7 +71,7 @@ const loadDeploymentSnapshot = async (
   }
 }
 
-// A legion2d older than channels may never answer the channel request, so
+// A legiond older than channels may never answer the channel request, so
 // it's given up on after a while rather than holding up everything else.
 const CHANNELS_WAIT_MS = 2000
 

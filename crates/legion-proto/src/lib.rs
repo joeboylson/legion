@@ -1,0 +1,773 @@
+//! The messages legiond and its clients send each other over its WebSocket.
+//!
+//! A client sends a [`Request`]: an ID it picks and a [`Command`]. legiond
+//! answers with a [`ServerMessage::Reply`] carrying the same ID. A client
+//! that sent [`Command::Watch`] also gets [`ServerMessage::Event`]s as things
+//! happen, without asking.
+
+use serde::{Deserialize, Serialize};
+
+pub mod tools;
+
+/// Every name the new version uses comes from this, so it can run beside
+/// today's Legion and switch to "legion" in one change.
+pub const NAME: &str = "legion";
+/// Running with no pipeline: every operator in the folder, and the commander
+/// picks who works on a mission next after each step. Named `none` where a
+/// pipeline's name goes, and shown as "no pipeline".
+pub const NO_PIPELINE: &str = "none";
+pub const NO_PIPELINE_LABEL: &str = "no pipeline";
+/// What no pipeline was called before; deployments started then still use it.
+pub const OLD_NO_PIPELINE: &str = "hub";
+
+/// How a deployment's pipeline reads in a sentence: "with no pipeline", or
+/// "on the feature pipeline".
+pub fn pipeline_phrase(name: &str) -> String {
+    match pipeline_label(name) {
+        NO_PIPELINE_LABEL => format!("with {NO_PIPELINE_LABEL}"),
+        named => format!("on the {named} pipeline"),
+    }
+}
+
+/// How a deployment's pipeline reads: "no pipeline" when it has none.
+pub fn pipeline_label(name: &str) -> &str {
+    if name == NO_PIPELINE || name == OLD_NO_PIPELINE {
+        NO_PIPELINE_LABEL
+    } else {
+        name
+    }
+}
+
+/// Where legiond keeps its data and its socket: `~/.local/share/<NAME>`.
+pub fn data_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(std::path::PathBuf::from(home).join(".local/share").join(NAME))
+}
+
+/// The one address legiond listens on. Only this machine can reach it;
+/// another machine forwards it over SSH.
+pub fn socket_path() -> Option<std::path::PathBuf> {
+    Some(data_dir()?.join(format!("{NAME}d.sock")))
+}
+
+/// Set in every session legiond starts, so the `legion` command run inside
+/// it knows which deployment and position it speaks for.
+pub const ENV_DEPLOYMENT: &str = "LEGION_DEPLOYMENT";
+pub const ENV_POSITION: &str = "LEGION_POSITION";
+/// Set when the `legion` command should reach a legiond elsewhere.
+pub const ENV_SOCKET: &str = "LEGION_SOCKET";
+
+/// Who the admin is in the deployment log.
+/// You, in the log and as a position: whoever is at the app or the command.
+/// Entries from before it had this name say "human".
+pub const HUMAN: &str = "admin";
+/// Entries Legion writes itself come from this.
+pub const LEGION: &str = NAME;
+pub const COMMANDER: &str = "commander";
+/// The position that watches a deployment for ways to go faster and
+/// suggests them to the commander. It never commands.
+pub const STRATEGIST: &str = "strategist";
+
+/// What a position may do, from its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Commander,
+    Strategist,
+    Operator,
+}
+
+pub fn role_of_position(position: &str) -> Role {
+    match position {
+        COMMANDER => Role::Commander,
+        STRATEGIST => Role::Strategist,
+        _ => Role::Operator,
+    }
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Request {
+    pub id: String,
+    /// The deployment and position the caller speaks for, when it's a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<Caller>,
+    pub command: Command,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Caller {
+    pub deployment: String,
+    pub position: String,
+}
+
+/// Where other Legions subscribe to a channel a machine hosts, unless
+/// another port is given.
+pub const DEFAULT_CHANNEL_PORT: u16 = 4620;
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Command {
+    Ping,
+    /// Adds a folder, setting up `.legion/` in it if it has none.
+    FolderAdd { path: String },
+    FolderList,
+    /// Forgets a folder with no open deployments. Its setup, missions and
+    /// log stay on disk, so adding it again brings them back.
+    FolderRemove { folder: String },
+    /// Adds an operator to the folder: what it does, and how many copies may
+    /// run at once when that isn't the default.
+    OperatorAdd { folder: String, name: String, definition: String, limit: Option<u32> },
+    /// Takes an operator out of the folder; refused while a pipeline names it.
+    OperatorRemove { folder: String, name: String },
+    /// Changes the folder's check command (empty takes it away) and the
+    /// permission mode its sessions start in.
+    SettingsSet { folder: String, check: Option<String>, permission_mode: Option<String> },
+    /// Changes an operator's copies, model ("default" takes it away) and
+    /// permission mode.
+    OperatorSet { folder: String, name: String, limit: Option<u32>, model: Option<String>, permission_mode: Option<String> },
+    /// Replaces what an operator does: its definition.md.
+    OperatorDefine { folder: String, name: String, definition: String },
+    /// Replaces a pipeline's file, once it reads as a pipeline the folder can run.
+    PipelineWrite { folder: String, name: String, text: String },
+    /// Takes a pipeline file out; refused while an open deployment runs it.
+    PipelineRemove { folder: String, name: String },
+    /// Adds a pipeline. In order, each operator passes to the next; otherwise
+    /// it has no set order: the commander picks who goes next.
+    PipelineAdd { folder: String, name: String, operators: Vec<String>, in_order: bool },
+    /// Everything about one folder: its settings, pipelines, operators and deployments.
+    FolderRead { folder: String },
+    DeploymentStart { folder: String, pipeline: String, name: Option<String> },
+    DeploymentList { folder: Option<String> },
+    /// Ends every session in the deployment; it isn't brought back after a restart.
+    DeploymentClose { deployment: String },
+    /// Gives the deployment a new name, unique in its folder.
+    DeploymentRename { deployment: String, name: String },
+    /// Opens a closed deployment again: its commander starts, and its
+    /// missions and log pick up where they were.
+    DeploymentReopen { deployment: String },
+    /// Deletes a closed deployment: its log, missions and checkouts. Its
+    /// branches stay in git.
+    DeploymentDelete { deployment: String },
+    /// Moves an open deployment to another pipeline (`none` for no
+    /// pipeline). Its commander is told the new team; work under way goes on.
+    DeploymentRepipe { deployment: String, pipeline: String },
+    MissionAdd { deployment: String, title: String, body: String },
+    MissionList { deployment: String },
+    MissionRead { deployment: String, mission: u32 },
+    /// Moves the base branch up to a done mission's branch, replaying it
+    /// and running the folder's check first if the base has moved on.
+    MissionFinish { deployment: String, mission: u32 },
+    /// Starts an operator, or the commander, in the deployment.
+    /// `part`: one part of a split mission, worked in its own checkout.
+    SessionStart { deployment: String, operator: String, mission: Option<u32>, part: Option<u32> },
+    SessionStop { deployment: String, position: String },
+    SessionList { deployment: Option<String> },
+    Screen { deployment: String, position: String },
+    Key { deployment: String, position: String, key: String },
+    /// Types straight into a session's terminal, as the app's live terminal does.
+    Input { deployment: String, position: String, text: String },
+    /// Adds an entry to the deployment log. Messages, handoffs and answers addressed
+    /// to a position are handed to its session.
+    Post { deployment: String, entry: NewEntry },
+    Log { deployment: String, filter: LogFilter },
+    /// Copies a tool into the folder's shared tools, where every mission sees
+    /// it at once, and tells everyone running in the deployment about it.
+    ToolShare { deployment: String, file: String, summary: String },
+    /// Splits a mission's current step into parts that can be worked at the
+    /// same time, each in its own checkout branched from the mission's.
+    MissionSplit { deployment: String, mission: u32, parts: Vec<String> },
+    /// A part is done: Legion merges it into the mission's branch.
+    PartFinish { deployment: String, mission: u32, part: u32, note: String },
+    /// A one-line heads-up for everyone: kept in the folder's callouts and
+    /// told to everyone running.
+    Callout { deployment: String, text: String },
+    /// The folder's callouts, oldest first.
+    CalloutList { deployment: String },
+    /// The folder's shared tools, or one tool's text when `tool` names it.
+    ToolboxRead { deployment: String, tool: Option<String> },
+    /// Hosts a channel on this machine: other Legions subscribe to it at
+    /// this machine's address and `port`, giving the same `key`. With no key,
+    /// one is made up. Replaces a channel already hosted.
+    ChannelOpen { port: u16, key: Option<String> },
+    /// Stops hosting the channel; subscriptions stay.
+    ChannelClose,
+    /// Subscribes to another Legion's channel at `address` (host:port).
+    ChannelSubscribe { address: String, key: String },
+    ChannelUnsubscribe { address: String },
+    /// The channel this machine hosts, and the ones it subscribes to.
+    ChannelStatus,
+    /// The deployments reachable over channels, each with what it can do.
+    ChannelDeployments { deployment: String },
+    /// What this deployment's team is and can do, for the others on the channels.
+    ChannelDescribe { deployment: String, text: String },
+    /// A message to another deployment's commander, by the key the
+    /// deployment list gives it.
+    ChannelSend { deployment: String, to: String, text: String },
+    /// What the channels carried and saw on this machine, newest last; the
+    /// latest `limit` entries.
+    ChannelLog { limit: u32 },
+    /// Sets whichever of a deployment's channel switches are given, and
+    /// replies with the channels, every deployment's switches included.
+    ChannelSwitch { deployment: String, send: Option<ChannelSwitch>, receive: Option<ChannelSwitch> },
+    /// Sends events from now on, for as long as the connection stays open.
+    Watch,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NewEntry {
+    pub kind: EntryKind,
+    #[serde(default)]
+    pub mission: Option<u32>,
+    #[serde(default)]
+    pub to: Option<String>,
+    pub text: String,
+    /// For an answer: the question entry it answers.
+    #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
+    pub answers: Option<i64>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct LogFilter {
+    #[serde(default)]
+    pub mission: Option<u32>,
+    /// Entries from or to this position.
+    #[serde(default)]
+    pub position: Option<String>,
+    #[serde(default)]
+    pub kinds: Option<Vec<EntryKind>>,
+    /// Milliseconds since 1970.
+    #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
+    pub since_ms: Option<i64>,
+    /// Questions and decisions that have no answer yet, only.
+    #[serde(default)]
+    pub open_questions: bool,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerMessage {
+    Reply { id: String, #[serde(flatten)] outcome: Outcome },
+    Event { event: Event },
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Ok(Reply),
+    Error(String),
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Reply {
+    Pong { version: String },
+    Done,
+    Folder { folder: Folder, created_setup: bool },
+    Folders { folders: Vec<Folder> },
+    FolderDetail { detail: FolderDetail },
+    Deployment { deployment: Deployment },
+    Deployments { deployments: Vec<Deployment> },
+    Mission { mission: Mission, body: String, parts: Vec<Part> },
+    Parts { parts: Vec<Part> },
+    Missions { missions: Vec<Mission> },
+    Session { session: SessionInfo },
+    Sessions { sessions: Vec<SessionInfo> },
+    /// `text` is the screen as plain text; `ansi` redraws it, colors and
+    /// cursor included, in a terminal view.
+    /// `history` is what scrolled off the top, oldest first, as plain text.
+    Screen { text: String, ansi: String, history: String },
+    Entry { entry: Entry },
+    Entries { entries: Vec<Entry> },
+    /// Plain text to show as it is.
+    Text { text: String },
+    Channels { channels: Channels },
+    ChannelLog { entries: Vec<ChannelLogEntry> },
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Event {
+    Entry { entry: Entry },
+    Session { session: SessionInfo },
+    /// The channels changed: one opened or closed, or an end came or went.
+    Channels { channels: Channels },
+    ChannelLogged { entry: ChannelLogEntry },
+    /// A folder's `.legion/` setup was edited outside Legion: its operators,
+    /// pipelines or settings may be different.
+    SetupChanged { folder: String },
+}
+
+/// One thing the channels carried or saw on this machine.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChannelLogEntry {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub id: u64,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub at_ms: i64,
+    pub kind: ChannelLogKind,
+    /// The machine at the other end, or the one the deployment is on.
+    pub machine: Option<String>,
+    /// Deployment keys, for messages.
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub text: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelLogKind {
+    /// A commander here sent a message.
+    Sent,
+    /// A message reached a commander here.
+    Delivered,
+    /// The host passed a message on between two other Legions.
+    PassedOn,
+    /// A message didn't get through.
+    Undelivered,
+    ChannelOpened,
+    ChannelClosed,
+    /// A Legion subscribed to the channel hosted here, or dropped off it.
+    SubscriberJoined,
+    SubscriberLeft,
+    /// This machine's subscription to another's channel came up or went down.
+    SubscriptionUp,
+    SubscriptionDown,
+    /// A team became reachable over the channels, or stopped being.
+    TeamAppeared,
+    TeamGone,
+}
+
+/// The channel this machine hosts, if any, and the ones it subscribes to.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct Channels {
+    /// This machine's name, as the other ends see it.
+    pub machine: String,
+    pub hosted: Option<HostedChannel>,
+    pub subscriptions: Vec<Subscription>,
+    /// Every open deployment reachable over the channels, this machine's too.
+    pub deployments: Vec<ChannelDeployment>,
+    /// This machine's deployments that have had a switch changed, by ID.
+    /// Any other deployment has both switches on "ask".
+    pub switches: Vec<DeploymentSwitches>,
+}
+
+/// Whether a commander's messages go out to other teams (send), and whether
+/// other teams' messages reach it (receive).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelSwitch {
+    /// Turned away, and the other side is told.
+    Off,
+    /// Held as a question in Escalations until the admin answers it.
+    #[default]
+    Ask,
+    /// Goes straight through.
+    Free,
+}
+
+impl ChannelSwitch {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChannelSwitch::Off => "off",
+            ChannelSwitch::Ask => "ask",
+            ChannelSwitch::Free => "free",
+        }
+    }
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DeploymentSwitches {
+    pub deployment: String,
+    pub send: ChannelSwitch,
+    pub receive: ChannelSwitch,
+}
+
+/// An open deployment as the channels know it.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChannelDeployment {
+    /// Unique across linked Legions: the machine's name and the deployment's ID.
+    pub key: String,
+    pub machine: String,
+    pub name: String,
+    /// The folder's name.
+    pub folder: String,
+    pub pipeline: String,
+    pub operators: Vec<String>,
+    /// What the team is and can do, in its commander's words.
+    pub description: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HostedChannel {
+    pub port: u16,
+    /// What a subscriber gives to be let in.
+    pub key: String,
+    /// The Legions subscribed and checking in now.
+    pub subscribers: Vec<ChannelEnd>,
+    /// Why it isn't taking subscribers, such as the port being in use.
+    pub problem: Option<String>,
+}
+
+/// A Legion at the other end of a channel.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ChannelEnd {
+    /// The machine's name, as it gave it.
+    pub machine: String,
+    pub address: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Subscription {
+    /// host:port
+    pub address: String,
+    /// Connected, let in, and heard from within the last check.
+    pub is_up: bool,
+    /// The hosting machine's name, once it has answered.
+    pub host_machine: Option<String>,
+    /// Why it's down, while it is.
+    pub problem: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Folder {
+    pub path: String,
+    pub name: String,
+    pub pipelines: Vec<String>,
+    pub operators: Vec<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FolderDetail {
+    pub folder: Folder,
+    /// The command that checks a mission's work, if any.
+    pub check: Option<String>,
+    pub permission_mode: Option<String>,
+    /// Where its missions, worktrees and deployment log live, outside the repo.
+    pub outside_folder: String,
+    pub pipelines: Vec<PipelineDetail>,
+    pub operators: Vec<OperatorDetail>,
+    pub deployments: Vec<Deployment>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PipelineDetail {
+    pub name: String,
+    pub operators: Vec<String>,
+    pub first: Option<String>,
+    pub decisions: Vec<DecisionDetail>,
+    /// Why Legion can't use it as written, if it can't.
+    pub problem: Option<String>,
+    /// Its file as written; none for no pipeline, which has no file.
+    pub file_text: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DecisionDetail {
+    pub operator: String,
+    pub condition: String,
+    pub next: String,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OperatorDetail {
+    pub name: String,
+    pub definition: String,
+    pub model: Option<String>,
+    pub copy_limit: u32,
+    pub permission_mode: Option<String>,
+    pub allowed_tools: Vec<String>,
+    pub disallowed_tools: Vec<String>,
+    /// Why Legion can't read it, if it can't.
+    pub problem: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Deployment {
+    pub id: String,
+    pub name: String,
+    pub folder: String,
+    pub pipeline: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub started_ms: i64,
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
+    pub closed_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Mission {
+    pub number: u32,
+    pub deployment: String,
+    pub title: String,
+    pub file: String,
+    pub status: MissionStatus,
+    /// Who holds it now, if anyone.
+    pub holder: Option<String>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionStatus {
+    Waiting,
+    Started,
+    HandedOff,
+    Paused,
+    Blocked,
+    Done,
+}
+
+/// One part of a split mission: a piece of its current step, worked in its
+/// own checkout and merged back into the mission's branch when done.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    pub mission: u32,
+    pub number: u32,
+    pub brief: String,
+    pub is_merged: bool,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SessionInfo {
+    pub deployment: String,
+    pub position: String,
+    pub mission: Option<u32>,
+    pub activity: Activity,
+    /// False when the add-on is a version legiond doesn't know.
+    pub can_see_state: bool,
+    /// What the session is waiting on, for a permission question.
+    pub detail: Option<String>,
+    /// It hasn't started in time: it's likely waiting on a question shown
+    /// before the add-on loads, such as whether to trust the folder.
+    pub is_stuck_starting: bool,
+    /// The model it runs, as Claude names it; known once its add-on reports.
+    pub model: Option<String>,
+    /// How full its conversation is, in percent; known once its add-on reports.
+    pub context_percent: Option<u8>,
+    /// The part of its mission it works on, if the mission is split.
+    pub part: Option<u32>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Activity {
+    Starting,
+    Idle,
+    Busy,
+    Permission,
+    /// Hit its usage limit; the add-on tells it to carry on once it resets.
+    Limited,
+    /// A person stopped its turn (Esc, or a deny, in its terminal); it waits
+    /// to be told what to do next.
+    Halted,
+    Ended,
+}
+
+impl Activity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Activity::Starting => "starting",
+            Activity::Idle => "idle",
+            Activity::Busy => "busy",
+            Activity::Permission => "waiting on a permission question",
+            Activity::Limited => "waiting for its usage limit to reset",
+            Activity::Halted => "halted, waiting to be told what to do next",
+            Activity::Ended => "ended",
+        }
+    }
+}
+
+/// One event in a deployment. Entries are only ever added.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Entry {
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub id: i64,
+    pub deployment: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number"))]
+    pub at_ms: i64,
+    pub mission: Option<u32>,
+    pub from: String,
+    pub to: Option<String>,
+    pub kind: EntryKind,
+    pub text: String,
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
+    pub answers: Option<i64>,
+}
+
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    DeploymentStarted,
+    DeploymentClosed,
+    MissionAdded,
+    SessionStarted,
+    SessionEnded,
+    Permission,
+    Message,
+    Note,
+    Question,
+    Answer,
+    Handoff,
+    Done,
+    Blocked,
+    Paused,
+    Resumed,
+    Postmortem,
+    Suggestion,
+    /// A mission's branch made it onto the base branch.
+    Finished,
+    /// A choice a session made and carried on with, for the admin to
+    /// overrule with an answer if they want.
+    Decision,
+    /// A heads-up handed to everyone running, such as a callout or a shared
+    /// tool. No reply is wanted.
+    Announcement,
+}
+
+impl EntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntryKind::DeploymentStarted => "deployment_started",
+            EntryKind::DeploymentClosed => "deployment_closed",
+            EntryKind::MissionAdded => "mission_added",
+            EntryKind::SessionStarted => "session_started",
+            EntryKind::SessionEnded => "session_ended",
+            EntryKind::Permission => "permission",
+            EntryKind::Message => "message",
+            EntryKind::Note => "note",
+            EntryKind::Question => "question",
+            EntryKind::Answer => "answer",
+            EntryKind::Handoff => "handoff",
+            EntryKind::Done => "done",
+            EntryKind::Blocked => "blocked",
+            EntryKind::Paused => "paused",
+            EntryKind::Resumed => "resumed",
+            EntryKind::Postmortem => "postmortem",
+            EntryKind::Suggestion => "suggestion",
+            EntryKind::Finished => "finished",
+            EntryKind::Decision => "decision",
+            EntryKind::Announcement => "announcement",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<EntryKind> {
+        serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+    }
+
+    /// Kinds handed to the session of the position they're addressed to.
+    pub fn is_delivered(self) -> bool {
+        matches!(
+            self,
+            EntryKind::MissionAdded
+                | EntryKind::Message
+                | EntryKind::Answer
+                | EntryKind::Handoff
+                | EntryKind::Done
+                | EntryKind::Blocked
+                | EntryKind::Paused
+                | EntryKind::Resumed
+                | EntryKind::Announcement
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip<T: Serialize + for<'de> Deserialize<'de>>(value: &T) -> T {
+        serde_json::from_str(&serde_json::to_string(value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn replies_carry_their_request_id_and_outcome() {
+        let reply = ServerMessage::Reply { id: "7".into(), outcome: Outcome::Ok(Reply::Done) };
+        let json = serde_json::to_value(&reply).unwrap();
+        assert_eq!(json["type"], "reply");
+        assert_eq!(json["id"], "7");
+        assert!(matches!(round_trip(&reply), ServerMessage::Reply { outcome: Outcome::Ok(Reply::Done), .. }));
+    }
+
+    #[test]
+    fn errors_come_back_as_text() {
+        let reply = ServerMessage::Reply { id: "1".into(), outcome: Outcome::Error("no deployment".into()) };
+        assert!(matches!(round_trip(&reply), ServerMessage::Reply { outcome: Outcome::Error(text), .. } if text == "no deployment"));
+    }
+
+    #[test]
+    fn commands_are_tagged_by_type() {
+        let request = Request { id: "1".into(), from: None, command: Command::MissionFinish { deployment: "r".into(), mission: 3 } };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["command"]["type"], "mission_finish");
+        assert!(json.get("from").is_none());
+        assert!(matches!(round_trip(&request).command, Command::MissionFinish { mission: 3, .. }));
+    }
+
+    #[test]
+    fn every_entry_kind_names_itself_the_way_it_serializes() {
+        let kinds = [
+            EntryKind::DeploymentStarted,
+            EntryKind::DeploymentClosed,
+            EntryKind::MissionAdded,
+            EntryKind::SessionStarted,
+            EntryKind::SessionEnded,
+            EntryKind::Permission,
+            EntryKind::Message,
+            EntryKind::Note,
+            EntryKind::Question,
+            EntryKind::Answer,
+            EntryKind::Handoff,
+            EntryKind::Done,
+            EntryKind::Blocked,
+            EntryKind::Paused,
+            EntryKind::Resumed,
+            EntryKind::Postmortem,
+            EntryKind::Suggestion,
+            EntryKind::Finished,
+            EntryKind::Decision,
+            EntryKind::Announcement,
+        ];
+        for kind in kinds {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+            assert_eq!(EntryKind::parse(kind.as_str()), Some(kind));
+        }
+        assert_eq!(EntryKind::parse("gossip"), None);
+    }
+
+    #[test]
+    fn only_addressed_work_is_delivered() {
+        assert!(EntryKind::Handoff.is_delivered());
+        assert!(!EntryKind::Note.is_delivered());
+        assert!(!EntryKind::Question.is_delivered());
+    }
+}

@@ -1,10 +1,10 @@
-# Handoff: legion2
+# Handoff: legion
 
 Where the rewrite stands, for the next session. Updated 2026-10-08 (afternoon).
 
 ## Read first
 
-- [docs/legion2.md](docs/legion2.md): how legion2 works.
+- [docs/legion.md](docs/legion.md): how legion works.
 - [docs/tauri-rewrite.md](docs/tauri-rewrite.md): the design, and why. Step 5
   (channels, then reaching another machine) is now half done: see below.
 - [IMPROVEMENTS.md](IMPROVEMENTS.md): what to fix or try next.
@@ -20,11 +20,11 @@ Where the rewrite stands, for the next session. Updated 2026-10-08 (afternoon).
   Doctor (`npm run doctor`) must be clean. Never run Prettier: the repo has
   no config and it rewrites files in the wrong style.
 - **After any change under `app/`, run `npm run build` in `app/`.** Joe uses
-  the browser version (legion2d serves `app/dist` at http://127.0.0.1:4610).
+  the browser version (legiond serves `app/dist` at http://127.0.0.1:4610).
 - Commit or push only when asked.
-- **Never restart legion2d without asking.** To update it: `cargo build
-  --release -p legion2 -p legion2d`, copy both to `~/.local/bin` under a new
-  name and `mv` them over, then `legion2 service install --claude
+- **Never restart legiond without asking.** To update it: `cargo build
+  --release -p legion -p legiond`, copy both to `~/.local/bin` under a new
+  name and `mv` them over, then `legion service install --claude
   ~/.local/bin/claude`. That restarts it and cuts every session; operators on
   missions come back fresh.
 - No screen reading in the product: use Claude Code's built-ins (the add-on's
@@ -35,21 +35,21 @@ Where the rewrite stands, for the next session. Updated 2026-10-08 (afternoon).
 
 ## What's running
 
-- **legion2d**: launchd service, built from this branch (with all the
-  uncommitted work below), log at `~/.local/share/legion2/legion2d.log`.
+- **legiond**: launchd service, built from this branch (with all the
+  uncommitted work below), log at `~/.local/share/legion/legiond.log`.
 - **Every session Legion starts gets `HINDSIGHT_NO_CAPTURE=1`**
   (`constants.rs`, set in `sessions.rs`), so the Hindsight session miner
   skips them.
 - **A channel**: this machine hosts one on port 4620 and subscribes to
   itself (`127.0.0.1:4620`), so deployments here message each other the way
-  two machines would. `legion2 channel status` / `log`. Settings in
-  `~/.local/share/legion2/channels.json`, log in `channel-log.jsonl`.
+  two machines would. `legion channel status` / `log`. Settings in
+  `~/.local/share/legion/channels.json`, log in `channel-log.jsonl`.
 - **Deployments**:
   - `v2-q4` (temp_plus_platform, pipeline `v2-q4-ship-it`): the fast V2 Q4
     ticket team. Use it for all Q4 tickets. Missions 10–26 are finished.
-  - `test-3` (ref/hello-legion2) and `docs-1` (ref/hello-docs): the channel
+  - `test-3` (ref/hello-legion) and `docs-1` (ref/hello-docs): the channel
     test pair. Idle.
-- Test folders in `ref/` (git-ignored here): `hello-legion2` (auto mode),
+- Test folders in `ref/` (git-ignored here): `hello-legion` (auto mode),
   `hello-manual` (manual mode, every tool asks: good for blocker tests),
   `hello-docs` (a writer → editor docs team).
 
@@ -58,23 +58,23 @@ Where the rewrite stands, for the next session. Updated 2026-10-08 (afternoon).
 - `031f82f` blockers from Claude Code's own signals.
 - `3c36833` app: tabs, deployment tree, Blockers page.
 - Channels (host/subscribe over TCP, directory, relayed messages, the
-  channel log, the Channels tab), `legion2 rename`, `finish` without git,
+  channel log, the Channels tab), `legion rename`, `finish` without git,
   quieter commander/operator prompts, and `HINDSIGHT_NO_CAPTURE=1` on
   every session. Commander tools: `channel_deployments`,
-  `channel_describe`, `channel_send`; CLI `legion2 channel
+  `channel_describe`, `channel_send`; CLI `legion channel
   open|close|subscribe|unsubscribe|status|log`.
 
 ## Blockers (how they work now)
 
 - Detection, all from Claude Code built-ins: a permission question when the
   add-on's `tool.check` returns "ask" in a mode where a person answers
-  (legion2d passes `LEGION_PERMISSION_MODE`); **halted** when a turn ends
+  (legiond passes `LEGION_PERMISSION_MODE`); **halted** when a turn ends
   "aborted", or ends right after a call refused at the dialog. Claude's
   `PermissionRequest` and permission notifications never reach a hooks
   module: don't rely on them.
 - Answers: Allow types "1"; Deny presses Esc then sends a carry-on message;
   Carry on sends a message. A halted session carries on by itself after 30 s.
-  legion2d marks a session busy as soon as it passes on an answering key.
+  legiond marks a session busy as soon as it passes on an answering key.
 - Not solved: the "trust this folder?" start question (pressing keys blind
   is unsafe: the highlighted choice is "No, exit"), and a flagged command's
   blocker shows only Claude's reason, not the command.
@@ -82,7 +82,7 @@ Where the rewrite stands, for the next session. Updated 2026-10-08 (afternoon).
 ## temp_plus_platform: the `v2-q4-ship-it` pipeline
 
 Goal: PRs that need nothing from the human but the merge. Files in
-`temp_plus_platform/.legion2/` (not a git repo; a backup of the pre-tuning
+`temp_plus_platform/.legion/` (not a git repo; a backup of the pre-tuning
 version is in this session's scratchpad only).
 
 - `spec-reader` → `shipper` → `pattern-checker` → `opie-reviewer`.

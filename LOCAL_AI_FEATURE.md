@@ -34,12 +34,12 @@ A plain call only sends text and gets text back. The operator couldn't read file
 
 The harness could be OpenCode, Pi or anything else, so legion's tools can't be tied to Claude Code.
 
-They nearly aren't already. Each session gets legion's tools from a small tool server (`legion2` started with its tools subcommand). The server knows who's calling from three settings: the deployment, the position, and the address of legion2d. See `legion_tools_config` in `crates/legion2d/src/session_arguments.rs`. The server speaks MCP, the standard way AI programs plug in outside tools.
+They nearly aren't already. Each session gets legion's tools from a small tool server (`legion` started with its tools subcommand). The server knows who's calling from three settings: the deployment, the position, and the address of legiond. See `legion_tools_config` in `crates/legiond/src/session_arguments.rs`. The server speaks MCP, the standard way AI programs plug in outside tools.
 
-Two ways in, both ending at the same legion2d:
+Two ways in, both ending at the same legiond:
 
 1. **MCP**, for harnesses that support it (Claude Code, OpenCode, Goose, Codex). They point at the same tool server.
-2. **Plain commands**, for harnesses that can only run shell commands (Pi doesn't support MCP out of the box). These don't exist yet. For example `legion2 handoff --to reviewer "..."` and `legion2 ask "..."`, using the same three settings.
+2. **Plain commands**, for harnesses that can only run shell commands (Pi doesn't support MCP out of the box). These don't exist yet. For example `legion handoff --to reviewer "..."` and `legion ask "..."`, using the same three settings.
 
 ### What does change for each harness
 
@@ -78,7 +78,7 @@ Sources: [morphllm](https://www.morphllm.com/agent-client-protocol), [mcp.direct
 
 These are sketches. The OpenCode and Pi flags still need checking against each tool's docs.
 
-### Harness templates: `.legion2/harnesses/<name>.json`
+### Harness templates: `.legion/harnesses/<name>.json`
 
 Legion fills in the `{blanks}` and runs the command.
 
@@ -130,9 +130,9 @@ Pi, using plain commands:
 }
 ```
 
-`tools` says which way in the harness uses: `mcp` gets the tool server, and `commands` gets the three settings as environment variables so it can call `legion2 handoff`, `legion2 ask` and the rest.
+`tools` says which way in the harness uses: `mcp` gets the tool server, and `commands` gets the three settings as environment variables so it can call `legion handoff`, `legion ask` and the rest.
 
-### Models: `.legion2/legion.json`
+### Models: `.legion/legion.json`
 
 ```json
 {
@@ -146,7 +146,7 @@ Pi, using plain commands:
 }
 ```
 
-### Operators: `.legion2/operators/<name>/operator.json`
+### Operators: `.legion/operators/<name>/operator.json`
 
 An operator picks one of the named models. The harness comes with it.
 
@@ -165,12 +165,12 @@ Running only on local models then means every operator, and the commander, picks
 The session calls this through legion's tools, either by MCP or as a plain command:
 
 ```
-legion2 report working  "running the db checks"
-legion2 report done     "handed off to reviewer"
-legion2 report stuck    "stack won't start; asked the commander"
+legion report working  "running the db checks"
+legion report done     "handed off to reviewer"
+legion report stuck    "stack won't start; asked the commander"
 ```
 
-(`legion2 status` is already taken by the command that shows what's going on, hence `report`.)
+(`legion status` is already taken by the command that shows what's going on, hence `report`.)
 
 ## Running models on the Spark
 

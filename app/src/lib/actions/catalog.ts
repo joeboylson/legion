@@ -1,5 +1,5 @@
 // Every action the app can take, the same ones and in the same order as the
-// legion2 command: one per command and action word, each a list of steps.
+// legion command: one per command and action word, each a list of steps.
 
 import type { Command } from '@/generated/Command'
 import type { Mission } from '@/generated/Mission'
@@ -174,7 +174,7 @@ const post = (deployment: string, kind: 'paused' | 'resumed' | 'answer' | 'messa
   askLegion({ type: 'post', deployment, entry: { kind, mission: extra.mission ?? null, to: extra.to ?? null, text, answers: extra.answers ?? null } })
 
 export const ACTIONS: readonly Action[] = [
-  // Folders: `legion2 setup`.
+  // Folders: `legion setup`.
   {
     id: 'folder.add',
     group: 'Folder',
@@ -184,7 +184,7 @@ export const ACTIONS: readonly Action[] = [
     run: async (answers, sources) => {
       const { folder, created_setup } = await askFor('folder', { type: 'folder_add', path: textOf(answers.path).trim() })
       sources.goTo.folder(folder.path)
-      return created_setup ? `Set up .legion2/ in ${folder.name}; commit it so others get it.` : `Added ${folder.name}.`
+      return created_setup ? `Set up .legion/ in ${folder.name}; commit it so others get it.` : `Added ${folder.name}.`
     },
   },
   {
@@ -338,7 +338,7 @@ export const ACTIONS: readonly Action[] = [
     steps: [folderStep(), filePipelineStep, confirmStep('Remove it')],
     run: (answers, sources) => send({ type: 'pipeline_remove', folder: folderPath(answers, sources), name: textOf(answers.pipeline) }, 'Removed.'),
   },
-  // Deployments: `legion2 deploy`.
+  // Deployments: `legion deployment`.
   {
     id: 'deployment.start',
     group: 'Deploy',
@@ -505,7 +505,7 @@ export const ACTIONS: readonly Action[] = [
     steps: [deploymentStep(), missionStep('No mission is done yet.', mission => mission.status === 'done')],
     run: (answers) => send({ type: 'mission_finish', deployment: textOf(answers.deployment), mission: Number(answers.mission) }, 'Finished.'),
   },
-  // Talking to the team: `legion2 answer` and `legion2 send`.
+  // Talking to the team: `legion answer` and `legion send`.
   {
     id: 'question.answer',
     group: 'Answer',

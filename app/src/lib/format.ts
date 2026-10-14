@@ -5,7 +5,7 @@ import type { Entry } from '@/generated/Entry'
 import type { MissionStatus } from '@/generated/MissionStatus'
 import type { SessionInfo } from '@/generated/SessionInfo'
 
-// Mirrors Activity::label in legion2-proto, shortened for cards.
+// Mirrors Activity::label in legion-proto, shortened for cards.
 export const ACTIVITY_LABELS: Record<Activity, string> = {
   starting: 'starting',
   idle: 'idle',

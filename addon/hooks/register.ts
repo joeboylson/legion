@@ -2,17 +2,17 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { CARRY_ON_PROMPT, limitDetail, msUntilCarryOn, type RateLimitWindow } from './usage-limits'
 
-// Reports this session's state to legion2d, hands the session the messages
-// legion2d holds for it, and tells it to carry on once a usage limit resets.
-// legion2d starts the session with LEGION_ADDON_SOCKET and
+// Reports this session's state to legiond, hands the session the messages
+// legiond holds for it, and tells it to carry on once a usage limit resets.
+// legiond starts the session with LEGION_ADDON_SOCKET and
 // LEGION_ADDON_SESSION set, and LEGION_PERMISSION_MODE when the folder sets
-// one (names owned by legion2d's constants.rs);
-// without them, in a session legion2d didn't start, the add-on does nothing.
+// one (names owned by legiond's constants.rs);
+// without them, in a session legiond didn't start, the add-on does nothing.
 
-// legion2d checks this against the versions it knows (KNOWN_ADDON_VERSIONS).
+// legiond checks this against the versions it knows (KNOWN_ADDON_VERSIONS).
 const ADDON_VERSION = '1'
 const INBOX_POLL_MS = 1000
-const LEGION_HOST = 'http://legion2d'
+const LEGION_HOST = 'http://legiond'
 // Modes in which Claude, not a person, settles an ask: auto's checker, or
 // a mode that never asks. In any other (manual, the default) an ask is a
 // question on screen waiting for a person.
@@ -30,7 +30,7 @@ type Link = {
   sessionId?: string
   lastReported: string
   rateLimits: readonly RateLimitWindow[]
-  // How full the conversation is, in percent; legion2d hands it over past
+  // How full the conversation is, in percent; legiond hands it over past
   // its clearAt.
   contextPercent?: number
   carryOnTimer?: { cancel: () => void }
@@ -43,7 +43,7 @@ type Link = {
   isLastCallRefused: boolean
 }
 
-// Module state: the add-on's one link to legion2d, rebuilt on each load.
+// Module state: the add-on's one link to legiond, rebuilt on each load.
 const link: Link = { lastReported: '', rateLimits: [], isAskedOfPerson: true, isLastCallRefused: false }
 
 const isLinked = (): boolean => link.socketPath !== undefined && link.sessionId !== undefined
@@ -60,7 +60,7 @@ async function postToLegion($: EngineInterface, body: Record<string, unknown>) {
       body: JSON.stringify(body),
     })
   } catch {
-    // legion2d isn't listening (restarting, say); the next report catches it up.
+    // legiond isn't listening (restarting, say); the next report catches it up.
   }
 }
 
@@ -82,7 +82,7 @@ async function deliverMessages($: EngineInterface) {
     const { messages } = JSON.parse(response.text) as { messages: string[] }
     for (const text of messages) await $.prompt.submit({ text, asUser: true })
   } catch {
-    // legion2d isn't listening; try again next tick.
+    // legiond isn't listening; try again next tick.
   }
 }
 
@@ -143,7 +143,7 @@ export const register: Register = on => {
     }
     const waitMs = e.reason === 'error' ? msUntilCarryOn(link.rateLimits, Date.now()) : undefined
     if (waitMs === undefined) {
-      // legion2d passes on what an operator wrote if it reported nothing.
+      // legiond passes on what an operator wrote if it reported nothing.
       await reportActivity($, 'idle', undefined, e.answer)
       return next(e)
     }

@@ -1,0 +1,17 @@
+[package]
+name = "legion"
+version = "0.1.0"
+edition = "2021"
+description = "The legion command: talks to legiond."
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+cliclack = "0.5.6"
+comfy-table = "8.0.1"
+console = "0.16.6"
+crossterm = "0.29"
+jiff = "0.2"
+legion-client = { path = "../legion-client" }
+legion-proto = { path = "../legion-proto" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "net", "io-std", "io-util", "time"] }

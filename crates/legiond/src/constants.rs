@@ -1,0 +1,130 @@
+//! Values only legiond uses. Values its clients share live in legion-proto.
+
+use std::time::Duration;
+
+use legion_proto::NAME;
+
+/// The first Claude Code with add-ons.
+pub const MINIMUM_CLAUDE_VERSION: ClaudeVersion = ClaudeVersion { major: 2, minor: 1, patch: 287 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClaudeVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+/// Add-on versions this program understands. The add-on owns its own copy
+/// (ADDON_VERSION in addon/hooks/register.ts): it's TypeScript, so it can't
+/// import this.
+pub const KNOWN_ADDON_VERSIONS: &[&str] = &["1"];
+
+/// The add-on reads these (the names are spelled out in register.ts too).
+pub const ADDON_SOCKET_ENV: &str = "LEGION_ADDON_SOCKET";
+pub const ADDON_SESSION_ENV: &str = "LEGION_ADDON_SESSION";
+/// The session's permission mode, so the add-on knows whether an ask waits on
+/// a person (manual) or on Claude's own checker (auto). Unset: Claude's default.
+pub const ADDON_PERMISSION_MODE_ENV: &str = "LEGION_PERMISSION_MODE";
+
+/// Started from inside a Claude session, these mark the new one as its
+/// child, which turns off saving its transcript (and so resuming it).
+pub const CHILD_SESSION_MARKERS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT"];
+
+/// Set on every session Legion starts, so Hindsight's session miner skips
+/// them: they're the team's work, not a person's.
+pub const HINDSIGHT_NO_CAPTURE: (&str, &str) = ("HINDSIGHT_NO_CAPTURE", "1");
+
+/// Skills turned on in claude.ai stay out of Legion's sessions, and their
+/// screens show no tips or suggested next prompts: no one types there.
+pub const SESSION_SETTINGS_JSON: &str = r#"{"syncClaudeAiSkills": false, "spinnerTipsEnabled": false, "promptSuggestionEnabled": false}"#;
+
+pub const TERMINAL_TYPE: &str = "xterm-256color";
+pub const TERMINAL_ROWS: u16 = 40;
+pub const TERMINAL_COLUMNS: u16 = 120;
+/// How many lines that scrolled off the top of a session's screen are kept,
+/// for scrolling back in the app.
+pub const TERMINAL_HISTORY_LINES: usize = 2000;
+pub const TERMINAL_READ_BUFFER_BYTES: usize = 8192;
+
+pub const DEFAULT_MAX_BUSY_SESSIONS: usize = 6;
+pub const DEFAULT_PERMISSION_TIMEOUT_MINUTES: u64 = 30;
+/// Where a browser opens the app: http://127.0.0.1:<port>. 0 turns it off.
+pub const DEFAULT_WEB_PORT: u16 = 4610;
+pub const SECONDS_PER_MINUTE: u64 = 60;
+/// A hosted channel listens on every network this machine is on, so other
+/// machines can reach it; the key keeps out anyone who doesn't have it.
+pub const CHANNEL_LISTEN_ADDRESS: &str = "0.0.0.0";
+/// How often a subscriber checks in, and how long either end waits to hear
+/// back before calling the other end down.
+pub const CHANNEL_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+pub const CHANNEL_SILENCE_LIMIT: Duration = Duration::from_secs(25);
+pub const CHANNEL_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+pub const CHANNELS_FILE_NAME: &str = "channels.json";
+pub const CHANNEL_LOG_FILE_NAME: &str = "channel-log.jsonl";
+pub const CHANNEL_HOLDS_FILE_NAME: &str = "channel-holds.json";
+/// How often each folder's .legion/ setup is checked for edits.
+pub const SETUP_WATCH_INTERVAL: Duration = Duration::from_secs(2);
+pub const WAITING_SESSIONS_CHECK_INTERVAL: Duration = Duration::from_secs(15);
+/// A session whose add-on hasn't reported by now is likely stuck on a
+/// question shown before the add-on loads, such as whether to trust the folder.
+pub const SESSION_START_GRACE: Duration = Duration::from_secs(60);
+pub const MAX_WORKAROUND_ATTEMPTS: u32 = 3;
+/// How long an operator works before the commander is asked to look in on
+/// it, and again each time after.
+pub const OPERATOR_CHECK_IN_INTERVAL_MS: i64 = 5 * 60 * 1000;
+/// How long a handed-off mission may sit with no one on it before the
+/// commander is told: long enough for it to start or message the next one.
+pub const STALL_GRACE_MS: i64 = 30 * 1000;
+pub const DEFAULT_OPERATOR_COPY_LIMIT: u32 = 1;
+/// Under the data folder: each session's system prompt, as Claude reads it.
+pub const PROMPTS_FOLDER_NAME: &str = "prompts";
+
+/// How full (in percent) a conversation may get before its session hands
+/// over to a fresh one, unless legion.json or operator.json says otherwise.
+pub const DEFAULT_CLEAR_AT_PERCENT: u8 = 30;
+/// Backstop for a session that doesn't hand over: Claude Code summarizes the
+/// conversation this many points past clearAt, never past the cap.
+pub const AUTOCOMPACT_POINTS_PAST_CLEAR_AT: u8 = 10;
+pub const AUTOCOMPACT_PERCENT_CAP: u8 = 95;
+/// Claude Code reads its summarize-at percentage from this.
+pub const AUTOCOMPACT_PERCENT_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
+/// A commander that ends by itself again this soon after a restart is left down.
+pub const COMMANDER_RESTART_GAP_MS: i64 = 10 * 60 * 1000;
+/// How often the strategist checks, unless legion.json says otherwise.
+pub const DEFAULT_STRATEGIST_CHECK_MINUTES: u32 = 10;
+/// The strategist isn't started again sooner than this after it last
+/// started, so one that keeps ending doesn't start over and over.
+pub const STRATEGIST_RESTART_GAP_MS: i64 = 10 * 60 * 1000;
+/// It looks and suggests; it never changes files.
+pub const STRATEGIST_DISALLOWED_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
+/// The strategist writes one per finished mission, so keep a few more than one run's worth.
+pub const RECENT_POSTMORTEM_COUNT: usize = 6;
+pub const EVENT_BUFFER_SIZE: usize = 1024;
+
+pub const MISSION_SLUG_MAX_LENGTH: usize = 40;
+pub const MISSION_BRANCH_PREFIX: &str = "mission/";
+pub const CHECK_OUTPUT_TAIL_LINES: usize = 15;
+
+pub const FOLDERS_FOLDER_NAME: &str = "folders";
+pub const MISSIONS_FOLDER_NAME: &str = "missions";
+pub const WORKTREES_FOLDER_NAME: &str = "worktrees";
+pub const DATABASE_FILE_NAME: &str = "legion.db";
+pub const FOLDER_REGISTRY_FILE_NAME: &str = "folders.json";
+pub const MACHINE_SETTINGS_FILE_NAME: &str = "settings.json";
+
+pub const ADDON_STATE_ROUTE: &str = "/sessions/{id}/state";
+pub const ADDON_INBOX_ROUTE: &str = "/sessions/{id}/inbox";
+pub const WEBSOCKET_ROUTE: &str = "/ws";
+
+/// Every message legiond hands a session starts with this.
+pub fn delivery_prefix() -> String {
+    format!("[{NAME}]")
+}
+
+/// The legion subcommand that serves Legion's tools to a session.
+pub const LEGION_TOOLS_SUBCOMMAND: &str = "mcp";
+
+/// Lets a session use every one of Legion's tools without asking each time.
+pub fn legion_tools_rule() -> String {
+    format!("mcp__{NAME}")
+}

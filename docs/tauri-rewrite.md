@@ -380,38 +380,25 @@ repos start fresh on the new version.
    machine-wide limit, the permission timeout, restarts, usage limits, and
    sessions stuck before they start. Tested end to end with Haiku sessions.
 3. Legion's tools inside Claude: the commander and operators drive the deployment.
-   **Done**: every session gets Legion's tools (served by `legion2 mcp`),
-   each role sees only its own, and legion2d still checks every call.
+   **Done**: every session gets Legion's tools (served by `legion mcp`),
+   each role sees only its own, and legiond still checks every call.
 4. The app: the main screen, live terminals, "Escalations". **Done** for this
    machine: Tauri with React and shadcn in the house style, connected to
-   legion2d. Debug builds can save what the screen looks like
-   (`LEGION2_SNAPSHOT_DIR`) and open a deployment at start (`LEGION2_OPEN`).
-   Since then, from test runs (see `docs/legion2.md` for how each works):
+   legiond. Debug builds can save what the screen looks like
+   (`LEGION_SNAPSHOT_DIR`) and open a deployment at start (`LEGION_OPEN`).
+   Since then, from test runs (see `docs/legion.md` for how each works):
    operators idle between handoffs, handing over a full conversation
    (`clearAt`), 5-minute check-ins, stalled-work reminders, steps that send
    work to several operators at once, a shared toolbox (`share_tool`),
    clashes at the finish going back to the builder, splitting a mission into
    parts, and in the app a live graph of the squad. Installed with
-   `~/.local/bin/legion2d` since 2026-10-06; what's built but not installed
+   `~/.local/bin/legiond` since 2026-10-06; what's built but not installed
    yet is in `HANDOFF.md`.
 5. Channels, then reaching another machine over SSH or a private network.
 
-**While it's being built, it stays apart from today's Legion.** Everything
-gets its own name until the switch:
-
-| Today's Legion                  | The new one while it's built |
-|---------------------------------|------------------------------|
-| `legion` command                | `legion2`                    |
-| `~/.local/share/legion/`        | `~/.local/share/legion2/`    |
-| `.legion/` in a repo            | `.legion2/`                  |
-| Legion's tools in Claude: `legion` | `legion2`                 |
-
-- The name is one setting in the Rust code, so switching is one change.
-- Testing happens only in throwaway repos, never one a current squad works in.
-- The new program only accepts connections from its own machine and never
-  touches tmux, so running squads can't be affected.
-- When it's ready, the names go back to `legion` and the old version is
-  removed.
+**While it was built, it stayed apart from the tmux version** under the name
+`legion2` (`legion2d`, `~/.local/share/legion2/`, `.legion2/`). It has since
+taken back the name `legion`, and the tmux version is gone.
 
 ## How today's features carry over
 

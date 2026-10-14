@@ -1,4 +1,4 @@
-// Debug builds with LEGION2_SNAPSHOT_DIR set: after the screen settles,
+// Debug builds with LEGION_SNAPSHOT_DIR set: after the screen settles,
 // save the page as rendered and where every element sits, so the layout can
 // be checked without a person looking.
 
@@ -82,7 +82,7 @@ const saveSnapshot = async (): Promise<void> => {
 
 export type StartingView = { deployment: string; position: string | null }
 
-// Debug builds: the deployment (and position) LEGION2_OPEN names, to open at start.
+// Debug builds: the deployment (and position) LEGION_OPEN names, to open at start.
 // Only the app's window has a back end to ask; a browser tab opens as usual.
 export const readStartingView = async (): Promise<StartingView | undefined> =>
   isInAppWindow() ? ((await invoke<StartingView | null>('starting_view')) ?? undefined) : undefined
