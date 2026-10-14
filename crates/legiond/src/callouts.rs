@@ -10,6 +10,7 @@ use legion_proto::{EntryKind, NewEntry, Reply};
 use crate::{
     daemon::Daemon,
     git::{commit_paths, is_git_repo},
+    prompts::ToolNaming,
     setup::setup_folder,
     store::now_ms,
 };
@@ -56,7 +57,7 @@ pub fn read_callouts(folder: &Path) -> Vec<String> {
 }
 
 /// What every session is told about callouts: the newest ones, and when to make one.
-pub fn callouts_section(callouts: &[String]) -> String {
+pub fn callouts_section(callouts: &[String], naming: &ToolNaming) -> String {
     let newest = &callouts[callouts.len().saturating_sub(CALLOUTS_SHOWN)..];
     let listed = match newest {
         [] => "None yet.".to_string(),
@@ -66,7 +67,8 @@ pub fn callouts_section(callouts: &[String]) -> String {
         "Callouts, the team's heads-ups from earlier work, newest last:
 {listed}
 
-When you learn something everyone working here should know (a gotcha, a slow or flaky command, a file not to touch, a setting that matters), call it out with the callout tool in one short line, like a kitchen calling out \"behind\". Not for status or progress: those go in handoffs and notes."
+When you learn something everyone working here should know (a gotcha, a slow or flaky command, a file not to touch, a setting that matters), call it out with {callout_tool} in one short line, like a kitchen calling out \"behind\". Not for status or progress: those go in handoffs and notes.",
+        callout_tool = naming.mention("callout"),
     )
 }
 
@@ -151,11 +153,11 @@ mod tests {
     #[test]
     fn the_section_shows_only_the_newest() {
         let many: Vec<String> = (1..=CALLOUTS_SHOWN + 5).map(|number| format!("callout {number}")).collect();
-        let section = callouts_section(&many);
+        let section = callouts_section(&many, &ToolNaming::claude());
         assert!(!section.contains("- callout 5\n") && section.contains("- callout 6\n"));
         assert!(section.contains(&format!("- callout {}", CALLOUTS_SHOWN + 5)));
-        assert!(callouts_section(&[]).contains("None yet."));
-        assert!(callouts_section(&[]).contains("callout tool"));
+        assert!(callouts_section(&[], &ToolNaming::claude()).contains("None yet."));
+        assert!(callouts_section(&[], &ToolNaming::claude()).contains("callout tool"));
     }
 
     #[test]
