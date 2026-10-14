@@ -32,6 +32,7 @@ mod machine_settings;
 mod mission_commands;
 mod mission_parts;
 mod mission_status;
+mod model_choice;
 mod naming;
 mod permission_answers;
 mod prompts;
