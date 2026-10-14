@@ -139,7 +139,7 @@ const DIRECTION_TITLES: Record<Direction, string> = {
   receive: "Whether other teams' messages reach this team's commander",
 }
 
-// One of a team's switches. "Ask me" holds each message in Escalations
+// One of a team's channel permissions. "Ask me" holds each message in Escalations
 // until you answer it.
 function SwitchSelect({ deploymentId, direction, value }: { deploymentId: string; direction: Direction; value: ChannelSwitch }) {
   const [problem, setProblem] = useState<string>()
@@ -166,7 +166,7 @@ function SwitchSelect({ deploymentId, direction, value }: { deploymentId: string
   )
 }
 
-// A team on this machine: its deployment's ID, and its switches as set.
+// A team on this machine: its deployment's ID, and its permissions as set.
 const ownSwitches = (channels: Channels, teamKey: string): DeploymentSwitches | undefined => {
   const prefix = `${channels.machine}/`
   if (!teamKey.startsWith(prefix)) return undefined

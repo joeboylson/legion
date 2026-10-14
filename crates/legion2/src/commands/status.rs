@@ -33,7 +33,7 @@ async fn folder_status(ctx: &mut Context, detail: &FolderDetail) -> Result<Strin
     let open = open_deployments(detail);
     if open.is_empty() {
         return Ok(format!(
-            "{}\n\nNo deployment is running. Start one with `{NAME} deploy`, or add a mission with `{NAME} mission add` and it'll help.\n\n{}",
+            "{}\n\nNo deployment is running. Start one with `{NAME} deployment start`, or add a mission with `{NAME} mission add` and it'll help.\n\n{}",
             heading(detail),
             operators_table(detail)
         ));

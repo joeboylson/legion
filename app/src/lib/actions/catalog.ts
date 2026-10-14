@@ -13,7 +13,6 @@ import type { Action, Answers, Choice, Sources, Step } from './types'
 
 // The deployment list's choice for starting a new one first.
 export const NEW_DEPLOYMENT = '\u0000new'
-const NO_MISSION = 'none'
 const KEEP = 'keep'
 
 const PERMISSION_MODES: readonly Choice[] = [
@@ -433,9 +432,9 @@ export const ACTIONS: readonly Action[] = [
     run: (answers) => send({ type: 'deployment_delete', deployment: textOf(answers.deployment) }, 'Deleted.'),
   },
   {
-    id: 'deployment.switches',
+    id: 'deployment.permissions',
     group: 'Channel',
-    label: 'Set a deployment’s channel switches',
+    label: 'Set a deployment’s channel permissions',
     subjects: ['deployment', 'channel'],
     steps: [
       deploymentStep(),
@@ -539,7 +538,7 @@ export const ACTIONS: readonly Action[] = [
   {
     id: 'session.send',
     group: 'Send',
-    label: 'Send someone a message',
+    label: 'Send an operator a message',
     subjects: ['session', 'deployment'],
     steps: [deploymentStep(snapshot => snapshot.sessions.length > 0), positionStep('Who to?'), longText('message', answers => `Message for ${textOf(answers.position)}`, 'Please check the failing test first.')],
     run: async (answers) => {
@@ -548,40 +547,6 @@ export const ACTIONS: readonly Action[] = [
     },
   },
   // Sessions.
-  {
-    id: 'session.start',
-    group: 'Session',
-    label: 'Start a session',
-    subjects: ['session', 'deployment'],
-    steps: [
-      deploymentStep(),
-      {
-        key: 'operator',
-        kind: 'pick',
-        prompt: 'Start whom?',
-        empty: '',
-        choices: (answers, sources) => [
-          { value: COMMANDER, label: COMMANDER, hint: 'leads the deployment' },
-          ...(snapshotOf(sources, textOf(answers.deployment))?.pipelineOperators ?? []).map(operator => ({ value: operator, label: operator })),
-        ],
-      },
-      {
-        key: 'mission',
-        kind: 'pick',
-        prompt: 'On which mission?',
-        when: answers => answers.operator !== COMMANDER,
-        empty: '',
-        choices: (answers, sources) => [
-          { value: NO_MISSION, label: 'No mission', hint: 'it waits for one' },
-          ...(snapshotOf(sources, textOf(answers.deployment))?.missions ?? []).filter(mission => mission.status !== 'done').map(mission => ({ value: String(mission.number), label: `#${mission.number} ${mission.title}` })),
-        ],
-      },
-    ],
-    run: (answers) => {
-      const mission = answers.mission === undefined || answers.mission === NO_MISSION ? null : Number(answers.mission)
-      return send({ type: 'session_start', deployment: textOf(answers.deployment), operator: textOf(answers.operator), mission, part: null }, 'Starting.')
-    },
-  },
   {
     id: 'session.stop',
     group: 'Session',

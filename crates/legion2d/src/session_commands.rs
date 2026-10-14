@@ -348,7 +348,7 @@ impl Daemon {
         let mut state = self.state.lock().unwrap();
         let (_, deployment) = state.find_deployment(deployment_key)?;
         let session = state.session_in_deployment(&deployment.id, position)?;
-        Ok(Reply::Screen { text: session.screen_text(), ansi: session.screen_ansi() })
+        Ok(Reply::Screen { text: session.screen_text(), ansi: session.screen_ansi(), history: session.screen_history() })
     }
 
     pub fn type_input(&self, deployment_key: &str, position: &str, text: &str) -> Result<Reply, String> {

@@ -99,7 +99,7 @@ impl Daemon {
             may_restart
         };
         if !may_restart {
-            let text = "the commander ended by itself again soon after a restart, so Legion left it down. Start it with `legion2 session start --operator commander`.";
+            let text = "the commander ended by itself again soon after a restart, so Legion left it down. Close the deployment and reopen it to bring it back: `legion2 deployment close`, then `legion2 deployment reopen`.";
             self.post_legion_entry(&session.deployment, entry(EntryKind::Note, Some(HUMAN), None, text.into()));
             return;
         }

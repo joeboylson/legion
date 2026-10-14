@@ -91,7 +91,7 @@ impl Context {
         let detail = self.folder().await?;
         let open = open_deployments(&detail);
         let items = open.iter().map(|deployment| item(deployment.id.clone(), &deployment.name, &deployment.pipeline)).collect();
-        let empty = format!("no deployment is running in {}: start one with `{NAME} deploy`", detail.folder.name);
+        let empty = format!("no deployment is running in {}: start one with `{NAME} deployment start`", detail.folder.name);
         let id = self.ask.pick(None, "Which deployment?", items, "--deployment", &empty)?;
         open.into_iter().find(|deployment| deployment.id == id).ok_or_else(|| format!("no deployment {id}"))
     }

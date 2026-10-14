@@ -252,23 +252,26 @@ type DeploymentRowProps = {
 // pipeline names it but no session is running.
 function OperatorRow({ deploymentId, entry, onOpen }: { deploymentId: string; entry: RosterEntry; onOpen: () => void }) {
   const label = entry.session === undefined ? INACTIVE_LABEL : sessionStatus(entry.session)
-  // A running copy is a session to stop or talk to; an idle operator, one to start.
-  const prefill = entry.session === undefined ? { deployment: deploymentId, operator: entry.position } : { deployment: deploymentId, position: entry.position }
+  const row = (
+    <SidebarMenuSubItem>
+      <Row rowKey={rowKeys.operator(deploymentId, entry.position)}>
+        <SidebarMenuSubButton asChild>
+          <button type="button" className={cn('w-full', entry.session === undefined && 'text-muted-foreground')} onClick={onOpen} title={label}>
+            <LeafMark />
+            <ActivityDot session={entry.session} />
+            <span className="truncate font-mono">{entry.position}</span>
+            <CommanderCrown position={entry.position} />
+            <span className="ml-auto flex-none text-label text-muted-foreground">{label}</span>
+          </button>
+        </SidebarMenuSubButton>
+      </Row>
+    </SidebarMenuSubItem>
+  )
+  // Only a running copy has anything to do: talk to it, or stop it.
+  if (entry.session === undefined) return row
   return (
-    <ActionContextMenu subject="session" prefill={prefill} open={{ label: 'Open its terminal', onOpen }}>
-      <SidebarMenuSubItem>
-        <Row rowKey={rowKeys.operator(deploymentId, entry.position)}>
-          <SidebarMenuSubButton asChild>
-            <button type="button" className={cn('w-full', entry.session === undefined && 'text-muted-foreground')} onClick={onOpen} title={label}>
-              <LeafMark />
-              <ActivityDot session={entry.session} />
-              <span className="truncate font-mono">{entry.position}</span>
-              <CommanderCrown position={entry.position} />
-              <span className="ml-auto flex-none text-label text-muted-foreground">{label}</span>
-            </button>
-          </SidebarMenuSubButton>
-        </Row>
-      </SidebarMenuSubItem>
+    <ActionContextMenu subject="session" prefill={{ deployment: deploymentId, position: entry.position }} open={{ label: 'Open its terminal', onOpen }}>
+      {row}
     </ActionContextMenu>
   )
 }
@@ -407,7 +410,7 @@ export function AppSidebar(props: AppSidebarProps) {
                 <SidebarMenuItem className={cn(BOXED, BOX_BORDER)}>
                   <SidebarMenuButton onClick={openMenu} title="Go to anything, or do something">
                     <Search className="size-4 flex-none" />
-                    <span className="text-muted-foreground">Go to or do…</span>
+                    <span className="text-muted-foreground">Go to or do</span>
                     <kbd className="ml-auto font-mono text-label text-muted-foreground">⌘K</kbd>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

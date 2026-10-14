@@ -36,17 +36,9 @@ const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(var(--sidebar),1fr))] gap-
 
 type PositionCardProps = { deploymentId: string; entry: RosterEntry; isOpen: boolean; onOpen: (position: string) => void }
 
-// Right-click a running card to talk to it or stop it, an inactive one to start it.
+// Right-click a running card to talk to it or stop it.
 function PositionCard({ deploymentId, entry: { position, session }, isOpen, onOpen }: PositionCardProps) {
-  if (session === undefined) {
-    return (
-      <ActionContextMenu subject="session" prefill={{ deployment: deploymentId, operator: position }}>
-        <div>
-          <InactiveCard position={position} />
-        </div>
-      </ActionContextMenu>
-    )
-  }
+  if (session === undefined) return <InactiveCard position={position} />
   return (
     <ActionContextMenu subject="session" prefill={{ deployment: deploymentId, position }} open={{ label: 'Open its terminal', onOpen: () => onOpen(position) }}>
       <button type="button" onClick={() => onOpen(position)} className={cn(CARD, 'hover:bg-layer-2', isOpen && 'bg-selection')}>

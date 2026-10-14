@@ -74,7 +74,10 @@ pub fn missions_table(missions: &[Mission]) -> String {
     table(&["#", "Status", "With", "Mission"], rows)
 }
 
-fn deployments_table(deployments: &[Deployment]) -> String {
+pub fn deployments_table(deployments: &[Deployment]) -> String {
+    if deployments.is_empty() {
+        return format!("No deployments yet. Start one with `{NAME} deployment start`.");
+    }
     let rows = deployments
         .iter()
         .map(|deployment| {

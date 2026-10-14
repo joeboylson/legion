@@ -1,7 +1,7 @@
 //! One module per command.
 
 pub mod channel;
-pub mod deploy;
+pub mod deployment;
 pub mod log;
 pub mod mission;
 pub mod operator;

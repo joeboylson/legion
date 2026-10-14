@@ -5,7 +5,7 @@ use legion2_proto::{Command, Deployment, EntryKind, LogFilter, Mission, MissionS
 use crate::{
     arguments::MissionAction,
     ask::{item, Item},
-    commands::{deploy, show},
+    commands::{deployment, show},
     context::{open_deployments, Context},
     live::{present, start},
     pretty::{mission_view, missions_table},
@@ -31,7 +31,7 @@ async fn deployment_for_new_mission(ctx: &mut Context, has_named_deployment: boo
     }
     ctx.ask.intro(NAME);
     ctx.ask.note("No deployment is running here yet. Let's start one for this mission.");
-    deploy::start(ctx, deploy::DeployInputs::none()).await
+    deployment::start(ctx, deployment::DeploymentInputs::none()).await
 }
 
 async fn missions(ctx: &mut Context, deployment: &Deployment) -> Result<Vec<Mission>, String> {

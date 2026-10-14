@@ -49,7 +49,7 @@ function PartContent({ snapshot, part, escalations, changeCount, openPosition, o
 
 // Each part's own buttons: what you'd most often do from it.
 const PART_ACTIONS: Record<DeploymentPart, readonly string[]> = {
-  operators: ['session.start', 'session.send'],
+  operators: ['session.send'],
   missions: ['mission.add'],
   questions: ['question.answer'],
   decisions: ['question.answer'],

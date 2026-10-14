@@ -78,9 +78,9 @@ pub enum Top {
         #[arg(long, short)]
         yes: bool,
     },
-    /// Start, edit (rename it or change its pipeline), close, reopen or delete a deployment.
-    Deploy {
-        action: Option<DeployAction>,
+    /// Start, list, edit (rename it or change its pipeline), close, reopen or delete deployments.
+    Deployment {
+        action: Option<DeploymentAction>,
         /// The pipeline to run, or for edit to move to; `none` for no pipeline, where the commander picks who goes next.
         #[arg(long)]
         pipeline: Option<String>,
@@ -120,7 +120,7 @@ pub enum Top {
         #[arg(long)]
         file: Option<String>,
     },
-    /// Message someone on the team.
+    /// Send an operator a message.
     Send {
         /// A running position, such as commander or builder-2.
         #[arg(long)]
@@ -130,15 +130,9 @@ pub enum Top {
         #[arg(long)]
         file: Option<String>,
     },
-    /// Start, stop or watch a session, or press a key in one.
+    /// Stop or watch a session, or press a key in one.
     Session {
         action: Option<SessionAction>,
-        /// For start: the operator, or commander.
-        #[arg(long)]
-        operator: Option<String>,
-        /// For start: the mission to work on.
-        #[arg(long)]
-        mission: Option<u32>,
         /// A running position, such as builder-2.
         #[arg(long)]
         position: Option<String>,
@@ -168,7 +162,7 @@ pub enum Top {
         #[arg(long)]
         export: Option<String>,
     },
-    /// Link this Legion with others: see, open, close or subscribe to channels, and set switches.
+    /// Link this Legion with others: see, open, close or subscribe to channels, and set permissions.
     Channel {
         action: Option<ChannelAction>,
         #[arg(long)]
@@ -232,7 +226,7 @@ macro_rules! choices {
 choices!(SetupAction { Init => "Set up this folder, or change its settings", Show => "Show its operators, pipelines and settings", Remove => "Remove this folder from Legion" });
 choices!(OperatorAction { Add => "Add an operator", Edit => "Edit an operator", Remove => "Remove an operator", List => "List the operators" });
 choices!(PipelineAction { Add => "Add a pipeline", Edit => "Edit a pipeline's file", Remove => "Remove a pipeline", List => "List the pipelines" });
-choices!(DeployAction { Start => "Start a deployment", Edit => "Rename a deployment, or change its pipeline", Close => "Close a deployment", Reopen => "Reopen a closed deployment", Delete => "Delete a closed deployment for good" });
+choices!(DeploymentAction { Start => "Start a deployment", List => "List the deployments", Edit => "Rename a deployment, or change its pipeline", Close => "Close a deployment", Reopen => "Reopen a closed deployment", Delete => "Delete a closed deployment for good" });
 choices!(MissionAction {
     Add => "Add a mission",
     List => "List the missions",
@@ -241,14 +235,14 @@ choices!(MissionAction {
     Resume => "Resume a paused mission",
     Finish => "Finish a done mission",
 });
-choices!(SessionAction { Start => "Start a session", Stop => "Stop a session", Watch => "Watch a session's screen", Key => "Press a key in a session" });
+choices!(SessionAction { Stop => "Stop a session", Watch => "Watch a session's screen", Key => "Press a key in a session" });
 choices!(ChannelAction {
     Status => "Show the channels",
     Open => "Host a channel",
     Close => "Stop hosting the channel",
     Subscribe => "Subscribe to another Legion's channel",
     Unsubscribe => "Unsubscribe from a channel",
-    Switch => "Set a deployment's send and receive switches",
+    Permissions => "Set a deployment's channel permissions: whether it can send and receive",
     Log => "Show what the channels carried",
 });
 choices!(ServiceChoice { Install => "Install the service and start it", Remove => "Stop the service and remove it" });

@@ -32,7 +32,7 @@ export function ActionContextMenu({ subject, prefill, open, children }: Omit<Men
         )}
         {actions.map(action => (
           <ContextMenuItem key={action.id} variant={action.isDestructive === true ? 'destructive' : 'default'} onSelect={() => runAction(action.id, prefill)}>
-            {action.label}…
+            {action.label}
           </ContextMenuItem>
         ))}
       </ContextMenuContent>
@@ -59,7 +59,7 @@ export function ActionMenuButton({ subject, prefill, open, label }: MenuProps) {
         )}
         {actions.map(action => (
           <DropdownMenuItem key={action.id} variant={action.isDestructive === true ? 'destructive' : 'default'} onSelect={() => runAction(action.id, prefill)}>
-            {action.label}…
+            {action.label}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

@@ -55,14 +55,14 @@ function MenuRoot({ sources, onGo, onAction }: { sources: Omit<Sources, 'folderD
   const destinations = destinationsOf(sources, sources.goTo)
   return (
     <>
-      <CommandInput placeholder="Go to anything, or do something…" autoFocus />
+      <CommandInput placeholder="Go to anything, or do something" autoFocus />
       <CommandList>
         <CommandEmpty>Nothing matches.</CommandEmpty>
         <CommandGroup heading="Actions">
           {ACTIONS.map(action => (
             <CommandItem key={action.id} value={`${action.group} ${action.label}`} onSelect={() => onAction(action)}>
               <span className="w-20 flex-none font-mono text-label text-muted-foreground">{action.group}</span>
-              <span className={action.isDestructive === true ? 'text-danger' : undefined}>{action.label}…</span>
+              <span className={action.isDestructive === true ? 'text-danger' : undefined}>{action.label}</span>
             </CommandItem>
           ))}
         </CommandGroup>

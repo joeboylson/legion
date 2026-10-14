@@ -41,6 +41,9 @@ pub const SESSION_SETTINGS_JSON: &str = r#"{"syncClaudeAiSkills": false, "spinne
 pub const TERMINAL_TYPE: &str = "xterm-256color";
 pub const TERMINAL_ROWS: u16 = 40;
 pub const TERMINAL_COLUMNS: u16 = 120;
+/// How many lines that scrolled off the top of a session's screen are kept,
+/// for scrolling back in the app.
+pub const TERMINAL_HISTORY_LINES: usize = 2000;
 pub const TERMINAL_READ_BUFFER_BYTES: usize = 8192;
 
 pub const DEFAULT_MAX_BUSY_SESSIONS: usize = 6;

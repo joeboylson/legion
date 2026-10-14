@@ -1,5 +1,5 @@
 //! `channel`: see the channels, open or close one, subscribe, and set a
-//! deployment's send and receive switches.
+//! deployment's channel permissions: whether it can send and receive.
 
 use legion2_proto::{ChannelSwitch, Command, Reply, DEFAULT_CHANNEL_PORT};
 
@@ -32,7 +32,7 @@ pub fn parse_switch(word: &str) -> Result<ChannelSwitch, String> {
     SWITCHES.iter().map(|(switch, _)| *switch).find(|switch| switch.as_str() == word).ok_or_else(|| format!("{word:?}: use off, ask or free"))
 }
 
-/// One switch: the flag's when given; asked, starting from where it is, in
+/// One permission: the flag's when given; asked, starting from where it is, in
 /// a terminal; otherwise left as it is.
 fn pick_switch(ctx: &Context, given: Option<String>, prompt: &str, current: ChannelSwitch) -> Result<Option<ChannelSwitch>, String> {
     match (given, ctx.ask.is_interactive()) {
@@ -78,7 +78,7 @@ pub async fn run(ctx: &mut Context, action: Option<ChannelAction>, inputs: Chann
             show(&ctx.send(Command::ChannelUnsubscribe { address }).await?);
             Ok(())
         }
-        ChannelAction::Switch => {
+        ChannelAction::Permissions => {
             let deployment = ctx.deployment().await?;
             let Reply::Channels { channels } = ctx.send(Command::ChannelStatus).await? else { return Err("unexpected reply".into()) };
             let current = channels.switches.iter().find(|set| set.deployment == deployment.id);

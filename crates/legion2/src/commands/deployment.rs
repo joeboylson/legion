@@ -1,9 +1,9 @@
-//! `deploy`: start, rename or close a deployment.
+//! `deployment`: start, list, edit, close, reopen or delete deployments.
 
 use legion2_proto::{pipeline_label, Command, Deployment, FolderDetail, Reply, NAME, NO_PIPELINE};
 
 use crate::{
-    arguments::DeployAction,
+    arguments::DeploymentAction,
     ask::item,
     commands::{
         operator::{self, OperatorInputs},
@@ -11,20 +11,21 @@ use crate::{
         show,
     },
     context::Context,
+    pretty::deployments_table,
 };
 
 const DEFAULT_TEAM_NAME: &str = "team";
 
-pub struct DeployInputs {
+pub struct DeploymentInputs {
     pub pipeline: Option<String>,
     pub team: Option<Vec<String>>,
     pub name: Option<String>,
     pub yes: bool,
 }
 
-impl DeployInputs {
-    pub fn none() -> DeployInputs {
-        DeployInputs { pipeline: None, team: None, name: None, yes: false }
+impl DeploymentInputs {
+    pub fn none() -> DeploymentInputs {
+        DeploymentInputs { pipeline: None, team: None, name: None, yes: false }
     }
 }
 
@@ -48,7 +49,7 @@ async fn add_operators(ctx: &mut Context, folder: &str) -> Result<(), String> {
 
 /// Starts a deployment in the folder: operators first if it has none, then
 /// how work moves, the team, and a name.
-pub async fn start(ctx: &mut Context, inputs: DeployInputs) -> Result<Deployment, String> {
+pub async fn start(ctx: &mut Context, inputs: DeploymentInputs) -> Result<Deployment, String> {
     let mut detail = ctx.folder().await?;
     let folder = detail.folder.path.clone();
     if detail.operators.is_empty() {
@@ -127,15 +128,20 @@ async fn pick_pipeline(ctx: &mut Context, deployment: &Deployment) -> Result<Str
     ctx.ask.pick(None, &format!("Move {} to which pipeline?", deployment.name), choices, "--pipeline", "no other pipeline can run here")
 }
 
-pub async fn run(ctx: &mut Context, action: Option<DeployAction>, inputs: DeployInputs) -> Result<(), String> {
-    match action.unwrap_or(DeployAction::Start) {
-        DeployAction::Start => {
+pub async fn run(ctx: &mut Context, action: Option<DeploymentAction>, inputs: DeploymentInputs) -> Result<(), String> {
+    match ctx.ask.action(action, "legion2 deployment")? {
+        DeploymentAction::List => {
+            let detail = ctx.folder().await?;
+            println!("{}", deployments_table(&detail.deployments));
+            Ok(())
+        }
+        DeploymentAction::Start => {
             ctx.ask.intro(NAME);
             start(ctx, inputs).await?;
             ctx.ask.outro(&format!("Add a mission with `{NAME} mission add`; `{NAME} status --watch` shows how it's going."));
             Ok(())
         }
-        DeployAction::Edit => {
+        DeploymentAction::Edit => {
             let deployment = ctx.deployment().await?;
             let (name, pipeline) = match (inputs.name, inputs.pipeline) {
                 (None, None) if !ctx.ask.is_interactive() => return Err("say what to change: --name or --pipeline".into()),
@@ -156,13 +162,13 @@ pub async fn run(ctx: &mut Context, action: Option<DeployAction>, inputs: Deploy
             }
             Ok(())
         }
-        DeployAction::Reopen => {
+        DeploymentAction::Reopen => {
             let id = pick_closed(ctx, "Reopen which deployment?").await?;
             let Reply::Deployment { deployment } = ctx.send(Command::DeploymentReopen { deployment: id }).await? else { return Err("unexpected reply".into()) };
             ctx.ask.success(format!("reopened {}; its commander is starting", deployment.name));
             Ok(())
         }
-        DeployAction::Delete => {
+        DeploymentAction::Delete => {
             let id = pick_closed(ctx, "Delete which deployment?").await?;
             let prompt = "Delete it for good? Its log, missions and checkouts go; its branches stay in git.";
             if !ctx.ask.confirm(inputs.yes, prompt)? {
@@ -171,7 +177,7 @@ pub async fn run(ctx: &mut Context, action: Option<DeployAction>, inputs: Deploy
             show(&ctx.send(Command::DeploymentDelete { deployment: id }).await?);
             Ok(())
         }
-        DeployAction::Close => {
+        DeploymentAction::Close => {
             let deployment = ctx.deployment().await?;
             if !ctx.ask.confirm(inputs.yes, &format!("Close {}? Every session in it ends.", deployment.name))? {
                 return Ok(());

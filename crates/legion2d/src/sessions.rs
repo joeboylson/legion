@@ -14,7 +14,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use crate::{
     constants::{
         ADDON_PERMISSION_MODE_ENV, ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
-        CHILD_SESSION_MARKERS, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
+        CHILD_SESSION_MARKERS, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
     context_handover::{autocompact_percent, HandoverPhase},
@@ -98,6 +98,10 @@ impl Session {
         self.screen.screen().contents().trim_end().to_string()
     }
 
+    pub fn screen_history(&mut self) -> String {
+        history_of(&mut self.screen)
+    }
+
     /// Redraws the screen in a terminal view: clear, contents with colors,
     /// then the cursor where the session has it.
     pub fn screen_ansi(&self) -> String {
@@ -106,6 +110,24 @@ impl Session {
         let contents = String::from_utf8_lossy(&screen.contents_formatted()).into_owned();
         format!("{contents}\x1b[{};{}H", cursor_row + 1, cursor_column + 1)
     }
+}
+
+/// The lines that have scrolled off the top of a screen, oldest first, as
+/// plain text. vt100 shows them by scrolling its view back, so each is read
+/// at its own offset, then the view goes back to the bottom.
+pub fn history_of(screen: &mut vt100::Parser) -> String {
+    screen.set_scrollback(usize::MAX);
+    let kept = screen.screen().scrollback();
+    let columns = screen.screen().size().1;
+    let lines: Vec<String> = (1..=kept)
+        .rev()
+        .map(|offset| {
+            screen.set_scrollback(offset);
+            screen.screen().rows(0, columns).next().unwrap_or_default().trim_end().to_string()
+        })
+        .collect();
+    screen.set_scrollback(0);
+    lines.join("\n")
 }
 
 pub struct SpawnRequest {
@@ -181,7 +203,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         is_reported_stuck: false,
         next_turn_answers_announcements: None,
         is_answering_announcements: false,
-        screen: vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, 0),
+        screen: vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES),
         input,
         killer,
         _terminal: terminal.master,
@@ -236,4 +258,17 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         }
     });
     Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn what_scrolls_off_the_top_is_kept_in_order() {
+        let mut screen = vt100::Parser::new(3, 20, 100);
+        screen.process(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        assert_eq!(history_of(&mut screen), "one\ntwo");
+        assert!(screen.screen().contents().starts_with("three"), "the view is back at the bottom");
+    }
 }

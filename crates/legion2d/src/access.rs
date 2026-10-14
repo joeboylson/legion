@@ -135,7 +135,7 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         | Command::ChannelStatus
         | Command::ChannelLog { .. }
         | Command::ChannelSwitch { .. } => {
-            Err(refusal(AllowedTo::HumanOnly, "open, close or subscribe to channels, or set their switches"))
+            Err(refusal(AllowedTo::HumanOnly, "open, close or subscribe to channels, or set their permissions"))
         }
     }
 }

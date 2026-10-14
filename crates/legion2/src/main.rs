@@ -24,7 +24,7 @@ use crate::{
     ask::Asker,
     commands::{
         channel::ChannelInputs,
-        deploy::DeployInputs,
+        deployment::DeploymentInputs,
         log::LogInputs,
         mission::MissionInputs,
         operator::OperatorInputs,
@@ -80,15 +80,13 @@ async fn run() -> Result<(), String> {
             commands::operator::run(&mut ctx, action, OperatorInputs { name, text, file, limit, model, mode, yes }).await
         }
         Top::Pipeline { action, name, operators, route, yes } => commands::pipeline::run(&mut ctx, action, PipelineInputs { name, operators, route, yes }).await,
-        Top::Deploy { action, pipeline, team, name, yes } => commands::deploy::run(&mut ctx, action, DeployInputs { pipeline, team, name, yes }).await,
+        Top::Deployment { action, pipeline, team, name, yes } => commands::deployment::run(&mut ctx, action, DeploymentInputs { pipeline, team, name, yes }).await,
         Top::Mission { action, title, text, file, number, watch } => {
             commands::mission::run(&mut ctx, action, MissionInputs { title, text, file, number, watch }, has_named_deployment).await
         }
         Top::Answer { question, text, file } => commands::talk::answer(&mut ctx, question, TalkInputs { text, file }).await,
         Top::Send { to, text, file } => commands::talk::send(&mut ctx, to, TalkInputs { text, file }).await,
-        Top::Session { action, operator, mission, position, key, yes } => {
-            commands::session::run(&mut ctx, action, SessionInputs { operator, mission, position, key, yes }).await
-        }
+        Top::Session { action, position, key, yes } => commands::session::run(&mut ctx, action, SessionInputs { position, key, yes }).await,
         Top::Log { watch, mission, position, kind, since, export } => commands::log::run(&mut ctx, LogInputs { watch, mission, position, kinds: kind, since, export }).await,
         Top::Channel { action, port, key, address, send, receive, watch, yes } => {
             commands::channel::run(&mut ctx, action, ChannelInputs { port, key, address, send, receive, watch, yes }).await

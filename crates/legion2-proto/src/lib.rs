@@ -283,7 +283,8 @@ pub enum Reply {
     Sessions { sessions: Vec<SessionInfo> },
     /// `text` is the screen as plain text; `ansi` redraws it, colors and
     /// cursor included, in a terminal view.
-    Screen { text: String, ansi: String },
+    /// `history` is what scrolled off the top, oldest first, as plain text.
+    Screen { text: String, ansi: String, history: String },
     Entry { entry: Entry },
     Entries { entries: Vec<Entry> },
     /// Plain text to show as it is.
