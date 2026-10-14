@@ -26,6 +26,7 @@ mod folder_commands;
 mod folder_details;
 mod folder_state;
 mod git;
+mod harness;
 mod ids;
 mod log_commands;
 mod machine_settings;
