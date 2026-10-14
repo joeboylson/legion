@@ -290,7 +290,8 @@ pub fn ensure_setup(folder: &Path) -> Result<bool, String> {
 pub fn read_settings(folder: &Path) -> Result<Settings, String> {
     let path = setup_folder(folder).join(SETTINGS_FILE_NAME);
     let text = fs::read_to_string(&path).map_err(|error| format!("can't read {}: {error}", path.display()))?;
-    let settings: Settings = serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
+    // The error's path names the broken models entry, such as `models.b`.
+    let settings: Settings = serde_path_to_error::deserialize(&mut serde_json::Deserializer::from_str(&text)).map_err(|error| format!("{}: {error}", path.display()))?;
     crate::model_choice::check_models(&settings.models).map_err(|error| format!("{}: {error}", path.display()))?;
     Ok(settings)
 }
@@ -788,10 +789,18 @@ mod tests {
         let missing_harness = folder_with_settings(r#"{"name": "app", "models": {"local": {"model": "qwen"}}}"#);
         let missing_model = folder_with_settings(r#"{"name": "app", "models": {"local": {"harness": "opencode"}}}"#);
         let unknown_key = folder_with_settings(r#"{"name": "app", "models": {"local": {"harness": "opencode", "model": "qwen", "port": 1}}}"#);
-        assert!(read_settings(&missing_harness).err().unwrap().contains("missing field `harness`"));
-        assert!(read_settings(&missing_model).err().unwrap().contains("missing field `model`"));
+        assert!(read_settings(&missing_harness).err().unwrap().contains("models.local: missing field `harness`"));
+        assert!(read_settings(&missing_model).err().unwrap().contains("models.local: missing field `model`"));
         assert!(read_settings(&unknown_key).err().unwrap().contains("port"));
         [missing_harness, missing_model, unknown_key].iter().for_each(|folder| fs::remove_dir_all(folder).unwrap());
+    }
+
+    #[test]
+    fn a_broken_entry_among_good_ones_is_named() {
+        let folder = folder_with_settings(r#"{"name": "app", "models": {"a": {"harness": "x", "model": "q"}, "b": {"model": "q"}}}"#);
+        let error = read_settings(&folder).err().unwrap();
+        assert!(error.contains(SETTINGS_FILE_NAME) && error.contains("models.b: missing field `harness`"), "{error}");
+        fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]

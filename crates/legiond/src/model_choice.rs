@@ -43,6 +43,11 @@ pub fn check_models(models: &BTreeMap<String, ModelEntry>) -> Result<(), String>
 
 fn check_entry(name: &str, entry: &ModelEntry) -> Result<(), String> {
     check_name("model", name)?;
+    let fields = [("harness", Some(&entry.harness)), ("address", entry.address.as_ref()), ("model", Some(&entry.model))];
+    // An empty model would reach the harness as `--model ""`.
+    if let Some((field, _)) = fields.iter().find(|(_, value)| value.is_some_and(|value| value.trim().is_empty())) {
+        return Err(format!("model {name:?}: {field:?} is empty"));
+    }
     if entry.harness == CLAUDE_CODE_HARNESS && entry.address.is_some() {
         return Err(format!("model {name:?}: Claude Code takes no address; remove \"address\""));
     }
@@ -96,6 +101,15 @@ mod tests {
         let models = parse(r#"{"local": {"harness": "claude-code", "address": "http://x", "model": "opus"}}"#);
         assert_eq!(check_models(&models), Err("model \"local\": Claude Code takes no address; remove \"address\"".into()));
         assert_eq!(check_models(&parse(r#"{"local": {"harness": "claude-code", "model": "opus"}}"#)), Ok(()));
+    }
+
+    #[test]
+    fn empty_fields_are_refused() {
+        let error = |json: &str| check_models(&parse(json)).unwrap_err();
+        assert_eq!(error(r#"{"a": {"harness": "", "model": "q"}}"#), r#"model "a": "harness" is empty"#);
+        assert_eq!(error(r#"{"a": {"harness": "  ", "model": "q"}}"#), r#"model "a": "harness" is empty"#);
+        assert_eq!(error(r#"{"a": {"harness": "opencode", "model": ""}}"#), r#"model "a": "model" is empty"#);
+        assert_eq!(error(r#"{"a": {"harness": "opencode", "address": "", "model": "q"}}"#), r#"model "a": "address" is empty"#);
     }
 
     #[test]
