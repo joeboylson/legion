@@ -8,6 +8,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
@@ -133,12 +134,23 @@ pub fn harness_names(folder: &Path) -> Vec<String> {
     names
 }
 
+/// A name is a file name in the harnesses folder, never a path out of it.
+fn is_harness_name(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\'])
+}
+
 pub fn read_harness(folder: &Path, name: &str) -> Result<HarnessTemplate, String> {
+    if !is_harness_name(name) {
+        return Err(format!("harness name {name:?} can't contain / or \\ or start with ."));
+    }
     let path = harnesses_folder(folder).join(format!("{name}{HARNESS_FILE_EXTENSION}"));
     if name == CLAUDE_CODE_HARNESS {
         return Err(format!("{}: Claude Code is started by Legion itself, not from a harness file", path.display()));
     }
-    let text = fs::read_to_string(&path).map_err(|_| format!("no harness {name} in .{NAME}/{HARNESSES_FOLDER_NAME}/"))?;
+    let text = fs::read_to_string(&path).map_err(|error| match error.kind() {
+        ErrorKind::NotFound => format!("no harness {name} in .{NAME}/{HARNESSES_FOLDER_NAME}/"),
+        _ => format!("{}: {error}", path.display()),
+    })?;
     let template: HarnessTemplate = serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
     check_template(&template, name).map_err(|problem| format!("{}: {problem}", path.display()))?;
     Ok(template)
@@ -203,15 +215,31 @@ fn literal(text: &str) -> Vec<Piece<'_>> {
     }
 }
 
+/// The blank name right after a `{`, when the text there is `name}`.
+fn blank_after(after: &str) -> Option<&str> {
+    let length = after.find(|character: char| !character.is_ascii_alphanumeric()).unwrap_or(after.len());
+    Some(&after[..length]).filter(|name| is_blank_name(name) && after[length..].starts_with('}'))
+}
+
+// A loop, not recursion: a file full of `{` would overflow the stack, and that
+// kills legiond.
 fn pieces(text: &str) -> Vec<Piece<'_>> {
-    let Some(open) = text.find('{') else {
-        return literal(text);
-    };
-    let after = &text[open + 1..];
-    match after.find('}').map(|close| &after[..close]).filter(|name| is_blank_name(name)) {
-        Some(name) => [literal(&text[..open]), vec![Piece::Blank(name)], pieces(&after[name.len() + 1..])].concat(),
-        None => [literal(&text[..open + 1]), pieces(after)].concat(),
+    let mut pieces = Vec::new();
+    let mut literal_start = 0;
+    let mut search_from = 0;
+    while let Some(offset) = text[search_from..].find('{') {
+        let open = search_from + offset;
+        search_from = open + 1;
+        let Some(name) = blank_after(&text[open + 1..]) else {
+            continue;
+        };
+        pieces.extend(literal(&text[literal_start..open]));
+        pieces.push(Piece::Blank(name));
+        search_from = open + name.len() + 2;
+        literal_start = search_from;
     }
+    pieces.extend(literal(&text[literal_start..]));
+    pieces
 }
 
 fn blank_names(text: &str) -> Vec<&str> {
@@ -236,15 +264,37 @@ fn fill_text(text: &str, blanks: &Blanks) -> Result<String, String> {
         .collect()
 }
 
+enum ConfigProblem {
+    NoValue(String),
+    SameKey(String),
+}
+
+impl ConfigProblem {
+    fn message(&self, harness: &str) -> String {
+        match self {
+            ConfigProblem::NoValue(blank) => format!("harness {harness}: blank {{{blank}}} has no value"),
+            ConfigProblem::SameKey(key) => format!("harness {harness}: two configFile keys both fill to {key:?}"),
+        }
+    }
+}
+
+fn add_entry(mut entries: Map<String, Value>, (key, value): (String, Value)) -> Result<Map<String, Value>, ConfigProblem> {
+    if entries.contains_key(&key) {
+        return Err(ConfigProblem::SameKey(key));
+    }
+    entries.insert(key, value);
+    Ok(entries)
+}
+
 /// Values go in as strings, never parsed as JSON.
-fn fill_json(value: &Value, blanks: &Blanks) -> Result<Value, String> {
+fn fill_json(value: &Value, blanks: &Blanks) -> Result<Value, ConfigProblem> {
     match value {
-        Value::String(text) => fill_text(text, blanks).map(Value::String),
+        Value::String(text) => fill_text(text, blanks).map(Value::String).map_err(ConfigProblem::NoValue),
         Value::Array(items) => items.iter().map(|item| fill_json(item, blanks)).collect::<Result<_, _>>().map(Value::Array),
         Value::Object(entries) => entries
             .iter()
-            .map(|(key, value)| Ok((fill_text(key, blanks)?, fill_json(value, blanks)?)))
-            .collect::<Result<Map<_, _>, String>>()
+            .map(|(key, value)| Ok((fill_text(key, blanks).map_err(ConfigProblem::NoValue)?, fill_json(value, blanks)?)))
+            .try_fold(Map::new(), |filled, entry| add_entry(filled, entry?))
             .map(Value::Object),
         other => Ok(other.clone()),
     }
@@ -277,7 +327,7 @@ pub fn fill(template: &HarnessTemplate, blanks: &Blanks) -> Result<FilledCommand
     let config_file = template
         .config_file
         .as_ref()
-        .map(|config| fill_json(config, blanks).map_err(no_value))
+        .map(|config| fill_json(config, blanks).map_err(|problem| problem.message(&template.name)))
         .transpose()?
         .map(|config| serde_json::to_string_pretty(&config).map_err(|error| format!("harness {}: {error}", template.name)))
         .transpose()?;
@@ -447,6 +497,46 @@ mod tests {
         assert!(serde_json::from_str::<HarnessTemplate>(r#"{"name": "pi", "command": "pi", "args": [], "tools": "mcp", "extra": 1}"#).is_err());
         assert!(serde_json::from_str::<HarnessTemplate>(r#"{"name": "pi", "command": "pi", "args": [], "tools": "smoke"}"#).is_err());
         assert!(serde_json::from_str::<HarnessTemplate>(r#"{"$schema": "x", "name": "pi", "command": "pi", "args": [], "tools": "mcp"}"#).is_ok());
+    }
+
+    #[test]
+    fn a_file_full_of_braces_is_read_without_overflowing() {
+        let folder = scratch_folder();
+        let braces = "{".repeat(100_000);
+        write_harness(&folder, "pi", &format!(r#"{{"name": "pi", "command": "pi", "args": ["{braces}"], "tools": "commands"}}"#));
+        let harness = read_harness(&folder, "pi").unwrap();
+        assert_eq!(fill(&harness, &Blanks::default()).unwrap().args, [braces]);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_is_a_path_is_refused() {
+        let folder = scratch_folder();
+        fs::write(setup_folder(&folder).join("evil.json"), r#"{"name": "../evil", "command": "pi", "args": [], "tools": "commands"}"#).unwrap();
+        assert_eq!(read_harness(&folder, "../evil").unwrap_err(), r#"harness name "../evil" can't contain / or \ or start with ."#);
+        assert!(read_harness(&folder, r"a\b").is_err());
+        assert!(read_harness(&folder, ".hidden").is_err());
+        assert!(read_harness(&folder, "").is_err());
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_harness_that_cant_be_read_says_why() {
+        let folder = scratch_folder();
+        let path = harnesses_folder(&folder).join("pi.json");
+        fs::create_dir(&path).unwrap();
+        let error = read_harness(&folder, "pi").unwrap_err();
+        assert!(error.starts_with(&format!("{}: ", path.display())), "{error}");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn two_config_keys_that_fill_the_same_fail_loud() {
+        let harness = template(r#"{"name": "pi", "command": "pi", "args": [], "tools": "mcp", "configFile": {"{model}": 1, "{modelProvider}": 2}}"#);
+        let blanks = Blanks { model: Some("p".into()), model_provider: Some("p".into()), ..Default::default() };
+        assert_eq!(fill(&harness, &blanks).unwrap_err(), r#"harness pi: two configFile keys both fill to "p""#);
+        let one_missing = Blanks { model_provider: None, ..blanks };
+        assert_eq!(fill(&harness, &one_missing).unwrap_err(), "harness pi: blank {modelProvider} has no value");
     }
 
     #[test]
