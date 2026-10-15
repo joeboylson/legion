@@ -16,12 +16,10 @@ use legion_proto::NAME;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::setup::setup_folder;
+use crate::{model_choice::CLAUDE_CODE_HARNESS, setup::setup_folder};
 
 pub const HARNESSES_FOLDER_NAME: &str = "harnesses";
 const HARNESS_FILE_EXTENSION: &str = ".json";
-/// Claude Code is started by Legion itself, so it can't have a template.
-const CLAUDE_CODE_HARNESS: &str = "claude-code";
 /// The blank in `toolName` that stands for one of Legion's tool names.
 const TOOL_BLANK: &str = "{tool}";
 
