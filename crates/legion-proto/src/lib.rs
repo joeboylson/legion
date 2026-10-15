@@ -12,11 +12,11 @@ pub mod tools;
 /// Every name the new version uses comes from this, so it can run beside
 /// today's Legion and switch to "legion" in one change.
 pub const NAME: &str = "legion";
+/// Where a pipeline ends. A decision can also send work to the commander.
+pub const PIPELINE_END: &str = "done";
 /// Running with no pipeline: every operator in the folder, and the commander
 /// picks who works on a mission next after each step. Named `none` where a
 /// pipeline's name goes, and shown as "no pipeline".
-/// Where a pipeline ends. A decision can also send work to the commander.
-pub const PIPELINE_END: &str = "done";
 pub const NO_PIPELINE: &str = "none";
 pub const NO_PIPELINE_LABEL: &str = "no pipeline";
 /// What no pipeline was called before; deployments started then still use it.
