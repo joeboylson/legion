@@ -52,7 +52,7 @@ pub struct Daemon {
 pub fn pending_entries(state: &State, session_id: &str) -> Result<Option<Vec<Entry>>, String> {
     let Some(session) = state.sessions.get(session_id) else { return Ok(None) };
     let (folder_index, _) = state.find_deployment(&session.deployment)?;
-    state.folders[folder_index].store.undelivered_entries(&session.deployment, &session.position).map(Some)
+    state.folders[folder_index].store.undelivered_entries(&session.deployment, &session.position, session.mission).map(Some)
 }
 
 /// Records that these entries reached the session, and whether its next

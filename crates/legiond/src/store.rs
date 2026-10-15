@@ -304,8 +304,12 @@ impl Store {
         Ok(entries_matching(self.all_entries(deployment_id)?, filter))
     }
 
-    /// Entries addressed to a position that no session has been handed yet.
-    pub fn undelivered_entries(&self, deployment_id: &str, position: &str) -> Result<Vec<Entry>, String> {
+    /// Entries addressed to a position that no session has been handed yet,
+    /// for the session on `mission`. A pause note is only for the session
+    /// that held its mission when it was paused: never one on another
+    /// mission, and not once the mission was resumed or this position
+    /// started a new session on it.
+    pub fn undelivered_entries(&self, deployment_id: &str, position: &str, mission: Option<u32>) -> Result<Vec<Entry>, String> {
         let addressed = self.query_all(
             &format!(
                 "SELECT {ENTRY_COLUMNS} FROM entries
@@ -314,7 +318,30 @@ impl Store {
             [deployment_id, position],
             entry_from_row,
         )?;
-        Ok(addressed.into_iter().filter(|entry| entry.kind.is_delivered()).collect())
+        let mut kept = Vec::new();
+        for entry in addressed.into_iter().filter(|entry| entry.kind.is_delivered()) {
+            if !self.is_stale_pause(&entry, position, mission)? {
+                kept.push(entry);
+            }
+        }
+        Ok(kept)
+    }
+
+    fn is_stale_pause(&self, entry: &Entry, position: &str, mission: Option<u32>) -> Result<bool, String> {
+        if entry.kind != EntryKind::Paused {
+            return Ok(false);
+        }
+        if entry.mission != mission {
+            return Ok(true);
+        }
+        self.database
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM entries WHERE deployment = ?1 AND id > ?2 AND mission IS ?3
+                   AND (kind = ?4 OR (kind = ?5 AND from_position = ?6)))",
+                params![entry.deployment, entry.id, entry.mission, EntryKind::Resumed.as_str(), EntryKind::SessionStarted.as_str(), position],
+                |row| row.get(0),
+            )
+            .map_err(database_error)
     }
 
     pub fn mark_delivered(&self, entry_ids: &[i64]) -> Result<(), String> {
@@ -466,9 +493,66 @@ mod tests {
         let message = NewEntry { kind: EntryKind::Message, to: Some("reviewer".into()), ..note("look") };
         let added = store.add_entry("r", "builder", &message).unwrap();
         store.add_entry("r", "builder", &NewEntry { to: Some("reviewer".into()), ..note("not delivered") }).unwrap();
-        assert_eq!(store.undelivered_entries("r", "reviewer").unwrap().len(), 1);
+        assert_eq!(store.undelivered_entries("r", "reviewer", None).unwrap().len(), 1);
         store.mark_delivered(&[added.id]).unwrap();
-        assert!(store.undelivered_entries("r", "reviewer").unwrap().is_empty());
+        assert!(store.undelivered_entries("r", "reviewer", None).unwrap().is_empty());
+    }
+
+    fn post(store: &Store, from: &str, kind: EntryKind, mission: u32, to: Option<&str>) -> Entry {
+        store.add_entry("r", from, &NewEntry { kind, mission: Some(mission), to: to.map(String::from), ..note("n") }).unwrap()
+    }
+
+    fn ids_of(entries: Vec<Entry>) -> Vec<i64> {
+        entries.into_iter().map(|entry| entry.id).collect()
+    }
+
+    // Claude's add-on and OpenCode's push both read through `undelivered_entries`.
+    #[test]
+    fn a_pause_note_reaches_only_the_session_that_held_the_mission() {
+        let store = store_with_deployment();
+        let for_57 = post(&store, "commander", EntryKind::Paused, 57, Some("shipper"));
+        let for_58 = post(&store, "commander", EntryKind::Paused, 58, Some("shipper-2"));
+        assert_eq!(ids_of(store.undelivered_entries("r", "shipper", Some(57)).unwrap()), vec![for_57.id]);
+        assert_eq!(ids_of(store.undelivered_entries("r", "shipper-2", Some(58)).unwrap()), vec![for_58.id]);
+        assert!(store.undelivered_entries("r", "shipper-2", Some(57)).unwrap().is_empty(), "another mission's note");
+        assert!(store.undelivered_entries("r", "shipper", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_resume_replaces_only_its_own_missions_pause_note() {
+        let store = store_with_deployment();
+        post(&store, "shipper", EntryKind::SessionStarted, 57, None);
+        post(&store, "shipper-2", EntryKind::SessionStarted, 58, None);
+        post(&store, "commander", EntryKind::Paused, 57, Some("shipper"));
+        let for_58 = post(&store, "commander", EntryKind::Paused, 58, Some("shipper-2"));
+        post(&store, "human", EntryKind::Resumed, 57, Some("commander"));
+        assert!(store.undelivered_entries("r", "shipper", Some(57)).unwrap().is_empty());
+        assert_eq!(ids_of(store.undelivered_entries("r", "shipper-2", Some(58)).unwrap()), vec![for_58.id]);
+    }
+
+    #[test]
+    fn a_fresh_session_after_a_stop_and_resume_gets_no_old_pause_note() {
+        let store = store_with_deployment();
+        post(&store, "shipper", EntryKind::SessionStarted, 57, None);
+        post(&store, "shipper-2", EntryKind::SessionStarted, 58, None);
+        post(&store, "commander", EntryKind::Paused, 57, Some("shipper"));
+        post(&store, "commander", EntryKind::Paused, 58, Some("shipper-2"));
+        post(&store, "legion", EntryKind::SessionEnded, 57, None);
+        post(&store, "legion", EntryKind::SessionEnded, 58, None);
+        post(&store, "human", EntryKind::Resumed, 57, Some("commander"));
+        post(&store, "shipper", EntryKind::SessionStarted, 57, None);
+        post(&store, "shipper-2", EntryKind::SessionStarted, 58, None);
+        assert!(store.undelivered_entries("r", "shipper", Some(57)).unwrap().is_empty());
+        assert!(store.undelivered_entries("r", "shipper-2", Some(58)).unwrap().is_empty(), "started fresh after the pause, with no resume of 58");
+        assert!(store.undelivered_entries("r", "shipper", Some(58)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn other_entries_still_reach_a_session_after_a_fresh_start() {
+        let store = store_with_deployment();
+        post(&store, "shipper", EntryKind::SessionStarted, 57, None);
+        let message = post(&store, "commander", EntryKind::Message, 57, Some("shipper"));
+        assert_eq!(ids_of(store.undelivered_entries("r", "shipper", Some(57)).unwrap()), vec![message.id]);
     }
 
     #[test]
