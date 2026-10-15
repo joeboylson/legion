@@ -17,7 +17,7 @@ use crate::{
     channels::ChannelManager,
     activity_entries::entry_for_activity_change,
     unreported_turns::{is_announcements_only, next_turn_is_announcements_only, unreported_turn_message},
-    constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS},
+    constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS, RESTARTED_FRESH_REASON},
     entry_routing::delivery_text,
     folder_state::{read_folder_registry, FolderState},
     machine_settings::{read_machine_settings, MachineSettings},
@@ -224,8 +224,7 @@ impl Daemon {
     fn end_for_fresh_start(&self, session_id: &str) {
         let mut state = self.state.lock().unwrap();
         let Some(session) = state.sessions.get_mut(session_id) else { return };
-        session.is_stopping = true;
-        if let Err(error) = session.end() {
+        if let Err(error) = session.stop(RESTARTED_FRESH_REASON) {
             eprintln!("{LEGION}d: {error}");
         }
     }

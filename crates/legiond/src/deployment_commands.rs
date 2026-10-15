@@ -6,7 +6,7 @@ use legion_proto::{pipeline_label, EntryKind, NewEntry, Reply, Deployment, COMMA
 
 use std::path::Path;
 
-use crate::{daemon::Daemon, git::drop_worktree, ids::new_id, naming::unique_deployment_name, setup::read_pipeline, store::now_ms};
+use crate::{constants::DEPLOYMENT_CLOSED_REASON, daemon::Daemon, git::drop_worktree, ids::new_id, naming::unique_deployment_name, setup::read_pipeline, store::now_ms};
 
 impl Daemon {
     pub fn start_deployment(self: &Arc<Self>, folder_key: &str, pipeline: &str, name: Option<String>) -> Result<Reply, String> {
@@ -164,10 +164,7 @@ impl Daemon {
             let folder = &mut state.folders[folder_index];
             folder.store.close_deployment(&deployment.id, closed_ms)?;
             folder.deployments.iter_mut().filter(|known| known.id == deployment.id).for_each(|known| known.closed_ms = Some(closed_ms));
-            state.sessions.values_mut().filter(|session| session.deployment == deployment.id).try_for_each(|session| {
-                session.is_stopping = true;
-                session.end()
-            })?;
+            state.sessions.values_mut().filter(|session| session.deployment == deployment.id).try_for_each(|session| session.stop(DEPLOYMENT_CLOSED_REASON))?;
             deployment
         };
         let closed = NewEntry { kind: EntryKind::DeploymentClosed, mission: None, to: None, text: format!("deployment {} closed", deployment.name), answers: None };

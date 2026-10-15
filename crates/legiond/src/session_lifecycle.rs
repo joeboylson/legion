@@ -12,7 +12,7 @@ use crate::{
     setup::{read_operator, read_pipeline},
     check_ins::{check_in_request, is_check_in_due},
     context_handover::{fresh_start_prompt, HandoverPhase},
-    constants::{SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
+    constants::{DEPLOYMENT_CLOSED_REASON, IDLE_COPY_FREED_REASON, MISSION_FINISHED_REASON, PART_REMOVED_REASON, RESTARTED_FRESH_REASON, STOPPED_ON_REQUEST_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
     naming::operator_of_position,
     sessions::Session,
@@ -36,10 +36,15 @@ pub fn end_mission_sessions(sessions: &mut HashMap<String, Session>, deployment_
     sessions
         .values_mut()
         .filter(|session| session.deployment == deployment_id && session.mission == Some(mission))
-        .try_for_each(|session| {
-            session.is_stopping = true;
-            session.end()
-        })
+        .try_for_each(|session| session.stop(MISSION_FINISHED_REASON))
+}
+
+/// A session Legion stopped says why, never an exit status: the kill made it up.
+pub fn ended_text(position: &str, stopped_because: Option<&str>, how_it_ended: &str) -> String {
+    match stopped_because {
+        Some(reason) => format!("{position}'s session stopped ({reason})"),
+        None => format!("{position}'s session ended ({how_it_ended})"),
+    }
 }
 
 pub fn minutes_label(minutes: u64) -> String {
@@ -79,7 +84,7 @@ impl Daemon {
     /// most once per gap), or hears that its operator's session ended.
     pub fn handle_session_end(self: &Arc<Self>, session: &Session, how_it_ended: &str) {
         self.announce_session(&legion_proto::SessionInfo { activity: legion_proto::Activity::Ended, ..session.info() });
-        let ended_text = format!("{}'s session ended ({how_it_ended})", session.position);
+        let ended_text = ended_text(&session.position, session.stopped_because.as_deref(), how_it_ended);
         self.post_legion_entry(&session.deployment, entry(EntryKind::SessionEnded, None, session.mission, ended_text));
         let is_deployment_open = self.state.lock().unwrap().find_open_deployment(&session.deployment).is_ok();
         if session.handover == HandoverPhase::Restarting && is_deployment_open {
@@ -278,6 +283,22 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_legion_stopped_says_why_and_no_exit_status() {
+        for reason in [MISSION_FINISHED_REASON, RESTARTED_FRESH_REASON, STOPPED_ON_REQUEST_REASON, DEPLOYMENT_CLOSED_REASON, PART_REMOVED_REASON, IDLE_COPY_FREED_REASON] {
+            for how_it_ended in ["exit status 1", "exit status 129: boom"] {
+                let text = ended_text("builder", Some(reason), how_it_ended);
+                assert_eq!(text, format!("builder's session stopped ({reason})"));
+                assert!(!text.contains("exit status"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_session_that_ended_on_its_own_keeps_its_status() {
+        assert_eq!(ended_text("builder", None, "exit status 1: boom"), "builder's session ended (exit status 1: boom)");
+    }
 
     #[test]
     fn only_a_session_with_an_add_on_is_reported_stuck_starting() {

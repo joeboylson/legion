@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use legion_proto::{EntryKind, NewEntry, Part, Reply, COMMANDER, LEGION};
 
 use crate::{
-    constants::WORKTREES_FOLDER_NAME,
+    constants::{PART_REMOVED_REASON, WORKTREES_FOLDER_NAME},
     daemon::Daemon,
     git::{create_part_worktree, is_git_repo, merge_branch, remove_worktree, MergeOutcome},
     store::PartCheckout,
@@ -115,10 +115,7 @@ impl Daemon {
                     .sessions
                     .values_mut()
                     .filter(|session| session.deployment == deployment.id && session.mission == Some(mission) && session.part == Some(number))
-                    .try_for_each(|session| {
-                        session.is_stopping = true;
-                        session.end()
-                    })?;
+                    .try_for_each(|session| session.stop(PART_REMOVED_REASON))?;
             }
             let is_last = parts.iter().all(|other| other.part.is_merged || other.part.number == number);
             (deployment.id, outcome, is_last, worktree.branch)

@@ -11,7 +11,7 @@ use crate::{
     shared_tools::{shared_tools, shared_tools_folder},
     mission_parts::{part_first_prompt, part_instructions},
     store::PartCheckout,
-    constants::{STRATEGIST_DISALLOWED_TOOLS, DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
+    constants::{IDLE_COPY_FREED_REASON, STOPPED_ON_REQUEST_REASON, STRATEGIST_DISALLOWED_TOOLS, DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
     daemon::{Daemon, State},
     git::{create_worktree, current_branch, is_git_repo},
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
@@ -273,8 +273,7 @@ impl Daemon {
             let session_id = state.sessions.iter().find(|(_, session)| session.deployment == deployment.id && session.position == position).map(|(id, _)| id.clone());
             // Taken out now, so its position is free for the new session at once.
             let Some(mut session) = session_id.and_then(|id| state.sessions.remove(&id)) else { return Ok(()) };
-            session.is_stopping = true;
-            session.end()?;
+            session.stop(IDLE_COPY_FREED_REASON)?;
             (deployment.id, session.info())
         };
         let (deployment_id, info) = freed;
@@ -374,8 +373,7 @@ impl Daemon {
         let mut state = self.state.lock().unwrap();
         let (_, deployment) = state.find_deployment(deployment_key)?;
         let session = state.session_in_deployment(&deployment.id, position)?;
-        session.is_stopping = true;
-        session.end()?;
+        session.stop(STOPPED_ON_REQUEST_REASON)?;
         Ok(Reply::Done)
     }
 

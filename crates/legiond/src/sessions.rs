@@ -54,6 +54,8 @@ pub struct Session {
     pub permission_asked_at: Option<Instant>,
     /// Set when Legion ends it on purpose, so its end isn't treated as a crash.
     pub is_stopping: bool,
+    /// Why Legion stopped it, for the log.
+    pub stopped_because: Option<String>,
     pub started_at: Instant,
     /// Whether the admin has been told it seems stuck before starting.
     pub is_reported_stuck: bool,
@@ -96,7 +98,10 @@ impl Session {
             .map_err(|error| format!("can't type into the session: {error}"))
     }
 
-    pub fn end(&mut self) -> Result<(), String> {
+    /// Ends it on purpose, for the reason given.
+    pub fn stop(&mut self, reason: &str) -> Result<(), String> {
+        self.is_stopping = true;
+        self.stopped_because = Some(reason.to_string());
         self.killer.kill().map_err(|error| format!("can't end the session: {error}"))
     }
 
@@ -219,11 +224,11 @@ fn ended_with_last_line(how_it_ended: String, screen: &str) -> String {
     }
 }
 
-/// Why a session ended, for the log. One Legion stops on purpose, and a
-/// Claude session, say only its exit status. A template that ended on its own
+/// Why a session that ended on its own ended, for the log. A Claude session
+/// says only its exit status. A template that ended on its own
 /// with an error says what it wrote to stderr, else the last line on its screen.
-fn ended_reason(how_it_ended: String, exited_cleanly: bool, is_stopping: bool, reports_itself: bool, stderr: &str, screen: &str) -> String {
-    if is_stopping || !reports_itself || exited_cleanly {
+fn ended_reason(how_it_ended: String, exited_cleanly: bool, reports_itself: bool, stderr: &str, screen: &str) -> String {
+    if !reports_itself || exited_cleanly {
         return how_it_ended;
     }
     let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
@@ -270,6 +275,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         last_check_in_ms: None,
         permission_asked_at: None,
         is_stopping: false,
+        stopped_because: None,
         started_at: Instant::now(),
         is_reported_stuck: false,
         next_turn_answers_announcements: None,
@@ -334,7 +340,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             state.sessions.remove(&session_id)
         };
         if let Some(session) = ended_session {
-            let how_it_ended = ended_reason(how_it_ended, exited_cleanly, session.is_stopping, session.reports_itself, &stderr, &session.screen_text());
+            let how_it_ended = ended_reason(how_it_ended, exited_cleanly, session.reports_itself, &stderr, &session.screen_text());
             waiting_daemon.handle_session_end(&session, &how_it_ended);
         }
     });
@@ -355,28 +361,22 @@ mod tests {
     const STATUS_BAR: &str = "esc interrupt · legion · qwen ctrl+p menu";
 
     #[test]
-    fn a_stopped_session_says_only_its_exit_status_on_any_harness() {
-        assert_eq!(ended_reason("exit status 1".into(), false, true, true, "boom\n", STATUS_BAR), "exit status 1");
-        assert_eq!(ended_reason("exit status 1".into(), false, true, false, "", STATUS_BAR), "exit status 1");
-    }
-
-    #[test]
     fn a_crashed_template_gives_its_stderr_over_its_screen() {
         let stderr = "\nopencode isn't on PATH\n  \n";
-        assert_eq!(ended_reason("exit status 1".into(), false, false, true, stderr, STATUS_BAR), "exit status 1: opencode isn't on PATH");
+        assert_eq!(ended_reason("exit status 1".into(), false, true, stderr, STATUS_BAR), "exit status 1: opencode isn't on PATH");
         let long = "a\nb\nc\nd\n";
-        assert_eq!(ended_reason("exit status 1".into(), false, false, true, long, STATUS_BAR), "exit status 1: b / c / d");
+        assert_eq!(ended_reason("exit status 1".into(), false, true, long, STATUS_BAR), "exit status 1: b / c / d");
     }
 
     #[test]
     fn a_crashed_template_without_stderr_gives_its_screen_line() {
-        assert_eq!(ended_reason("exit status 1".into(), false, false, true, " \n", "Starting\nfailed to start\n"), "exit status 1: failed to start");
+        assert_eq!(ended_reason("exit status 1".into(), false, true, " \n", "Starting\nfailed to start\n"), "exit status 1: failed to start");
     }
 
     #[test]
     fn claude_and_a_clean_exit_are_unchanged() {
-        assert_eq!(ended_reason("exit status 1".into(), false, false, false, "x", "y"), "exit status 1");
-        assert_eq!(ended_reason("exit status 0".into(), true, false, true, "x", STATUS_BAR), "exit status 0");
+        assert_eq!(ended_reason("exit status 1".into(), false, false, "x", "y"), "exit status 1");
+        assert_eq!(ended_reason("exit status 0".into(), true, true, "x", STATUS_BAR), "exit status 0");
     }
 
     #[test]

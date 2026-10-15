@@ -52,6 +52,13 @@ pub const ENDED_SCREEN_DRAIN_LIMIT: std::time::Duration = std::time::Duration::f
 /// Where a template session's stderr is kept until it ends, under the data folder.
 pub const STDERR_FOLDER_NAME: &str = "stderr";
 pub const STDERR_FILE_EXTENSION: &str = "txt";
+/// Why Legion stopped a session, as the log says it.
+pub const MISSION_FINISHED_REASON: &str = "mission finished";
+pub const RESTARTED_FRESH_REASON: &str = "restarted with a fresh conversation";
+pub const STOPPED_ON_REQUEST_REASON: &str = "stopped on request";
+pub const DEPLOYMENT_CLOSED_REASON: &str = "deployment closed";
+pub const PART_REMOVED_REASON: &str = "its mission part was removed";
+pub const IDLE_COPY_FREED_REASON: &str = "idle copy freed for another session";
 /// How many of a template's last stderr lines say why it ended.
 pub const ENDED_STDERR_LINES: usize = 3;
 
