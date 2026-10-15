@@ -119,7 +119,7 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
         first_prompt: first_prompt.unwrap_or_else(|| COMMANDER_FIRST_PROMPT.into()),
-        clear_at: clear_at_percent(None, settings.clear_at),
+        clear_at: clear_at_percent(None, settings.clear_at, false),
     };
     Ok((launch, fingerprint))
 }
@@ -145,7 +145,7 @@ fn strategist_launch(state: &State, folder_index: usize, deployment: &Deployment
         allowed_tools: Vec::new(),
         disallowed_tools: STRATEGIST_DISALLOWED_TOOLS.iter().map(|tool| tool.to_string()).collect(),
         first_prompt: STRATEGIST_FIRST_PROMPT.into(),
-        clear_at: clear_at_percent(None, settings.clear_at),
+        clear_at: clear_at_percent(None, settings.clear_at, false),
     })
 }
 
@@ -201,7 +201,7 @@ fn operator_launch(
         on_template: template.is_some(),
     };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
-    let clear_at = clear_at_percent(operator.config.clear_at, settings.clear_at);
+    let clear_at = clear_at_percent(operator.config.clear_at, settings.clear_at, template.is_some());
     Ok(LaunchPlan {
         position,
         system_prompt,

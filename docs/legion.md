@@ -270,7 +270,7 @@ tool's first comment line.
 
 ## What Legion does on its own
 
-- **Hands over a full conversation.** Past `clearAt` (default 30%, or
+- **Hands over a full conversation.** Past `clearAt` (default 30%, 60% on OpenCode, or
   `false` for never), a session is asked for a "Handoff:" note, then started
   again fresh, reading it. Claude Code's own summary is set 10 points later
   as a backstop. An OpenCode session hands over the same way: Legion reads

@@ -99,6 +99,8 @@ pub const PROMPTS_FOLDER_NAME: &str = "prompts";
 /// How full (in percent) a conversation may get before its session hands
 /// over to a fresh one, unless legion.json or operator.json says otherwise.
 pub const DEFAULT_CLEAR_AT_PERCENT: u8 = 30;
+/// Template sessions' default: their windows are small, and OpenCode's own compaction comes at about 75%.
+pub const DEFAULT_TEMPLATE_CLEAR_AT_PERCENT: u8 = 60;
 /// Backstop for a session that doesn't hand over: Claude Code summarizes the
 /// conversation this many points past clearAt, never past the cap.
 pub const AUTOCOMPACT_POINTS_PAST_CLEAR_AT: u8 = 10;

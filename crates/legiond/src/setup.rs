@@ -101,9 +101,10 @@ impl From<NeverClear> for bool {
 }
 
 /// The percentage a position hands over at, or None for never: its
-/// operator's clearAt, else the folder's, else the default.
-pub fn clear_at_percent(operator: Option<ClearAt>, folder: Option<ClearAt>) -> Option<u8> {
+/// operator's clearAt, else the folder's, else the default for its kind.
+pub fn clear_at_percent(operator: Option<ClearAt>, folder: Option<ClearAt>, on_template: bool) -> Option<u8> {
     match operator.or(folder) {
+        None if on_template => Some(crate::constants::DEFAULT_TEMPLATE_CLEAR_AT_PERCENT),
         None => Some(crate::constants::DEFAULT_CLEAR_AT_PERCENT),
         Some(ClearAt::Percent(percent)) => Some(percent.into()),
         Some(ClearAt::Never(_)) => None,
@@ -613,8 +614,8 @@ mod tests {
     #[test]
     fn clear_at_takes_a_percentage_or_false() {
         let parse = |json: &str| serde_json::from_str::<OperatorConfig>(json).map(|config| config.clear_at);
-        assert_eq!(clear_at_percent(parse(r#"{"clearAt": 45}"#).unwrap(), None), Some(45));
-        assert_eq!(clear_at_percent(parse(r#"{"clearAt": false}"#).unwrap(), None), None);
+        assert_eq!(clear_at_percent(parse(r#"{"clearAt": 45}"#).unwrap(), None, false), Some(45));
+        assert_eq!(clear_at_percent(parse(r#"{"clearAt": false}"#).unwrap(), None, false), None);
         assert!(parse(r#"{"clearAt": true}"#).is_err());
         assert!(parse(r#"{"clearAt": 0}"#).is_err());
         assert!(parse(r#"{"clearAt": 101}"#).is_err());
@@ -623,9 +624,12 @@ mod tests {
     #[test]
     fn an_operators_clear_at_beats_the_folders_which_beats_the_default() {
         let percent = |value: u8| Some(ClearAt::Percent(ClearPercent::try_from(value).unwrap()));
-        assert_eq!(clear_at_percent(percent(50), percent(40)), Some(50));
-        assert_eq!(clear_at_percent(None, percent(40)), Some(40));
-        assert_eq!(clear_at_percent(None, None), Some(crate::constants::DEFAULT_CLEAR_AT_PERCENT));
+        assert_eq!(clear_at_percent(percent(50), percent(40), false), Some(50));
+        assert_eq!(clear_at_percent(None, percent(40), false), Some(40));
+        assert_eq!(clear_at_percent(None, None, false), Some(crate::constants::DEFAULT_CLEAR_AT_PERCENT));
+        assert_eq!(clear_at_percent(None, None, true), Some(crate::constants::DEFAULT_TEMPLATE_CLEAR_AT_PERCENT));
+        assert_eq!(clear_at_percent(percent(40), None, true), Some(40));
+        assert_eq!(clear_at_percent(None, Some(ClearAt::Never(NeverClear)), true), None);
     }
 
     fn team(names: &[&str]) -> Vec<String> {
