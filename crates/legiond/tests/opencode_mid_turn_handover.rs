@@ -22,6 +22,9 @@ async fn log_texts(legion: &mut ThrowawayLegion, deployment: &str) -> Vec<String
     entries.into_iter().filter(|entry| entry.kind == EntryKind::Activity).map(|entry| entry.text).collect()
 }
 
+/// Two legionds starting together can be handed the same free port for their fake servers.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Started {
     legion: ThrowawayLegion,
     deployment: String,
@@ -54,6 +57,7 @@ async fn wait_until_busy(legion: &mut ThrowawayLegion, deployment: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failing_interrupt_still_hands_over_and_says_so() {
+    let _alone = ONE_AT_A_TIME.lock().await;
     let Started { mut legion, deployment, launch, port } = start_operator("opencode-mid-turn-500").await;
     let tokens = Arc::new(AtomicU64::new(30_000));
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -71,6 +75,7 @@ async fn a_failing_interrupt_still_hands_over_and_says_so() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and_handed_over() {
+    let _alone = ONE_AT_A_TIME.lock().await;
     let Started { mut legion, deployment, launch, port } = start_operator("opencode-mid-turn").await;
     // A turn is running, and its conversation fills up while it does.
     let tokens = Arc::new(AtomicU64::new(30_000));
