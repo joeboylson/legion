@@ -226,3 +226,24 @@ can go out through an adapter-like reader of the record that posts to
    channel messages become envelopes too, so there is one way in. Every
    remote envelope carries its sending machine, and the receiver checks it
    against the channel it came in on.
+6. **Decision records, for training small local models.** Every choice
+   Legion or a commander makes (who goes next, approve or ask, stuck or
+   working, take a suggestion or not) is written as a `decision.made` event:
+   the options there were, the one picked, who picked it, and its `cause`. A
+   later event links back when it's overturned (sent back, restarted,
+   reverted), so each decision also has an outcome. Synced to Supabase,
+   these become training data from every machine, without leaking anything:
+   - **Fields, not prose.** The situation is stored as fields: pipeline,
+     step, who handed off, which pipeline condition they claimed, fix
+     rounds, minutes taken, files changed, options, choice.
+   - **A local summary for the words.** Where words matter, the local model
+     (spark-fast) writes a short, neutral summary of the handoff note ("tests
+     pass, work committed, one open question about a config name"), and the
+     summary goes up instead of the note.
+   - **A last check before sending.** On the sending machine, anything that
+     looks like a key, password, email address or long piece of code, or
+     that matches a never-send word list (customer names), is blocked and
+     kept local, with a note in the log.
+   - The raw text stays in the local action record only.
+   The Supabase adapter sends `decision.made` with these fields and the
+   summary by default; nothing else of the text.
