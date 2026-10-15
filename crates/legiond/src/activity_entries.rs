@@ -5,7 +5,7 @@ use legion_proto::{Activity, EntryKind};
 const DEFAULT_PERMISSION_REQUEST: &str = "a tool needs permission";
 
 /// The deployment log entry a change calls for, if any: a new permission question,
-/// a new wait on a usage limit, or a halt. Each goes to the admin.
+/// a new wait on a usage limit, a halt, or an OpenCode server that stops answering. Each goes to the admin.
 pub fn entry_for_activity_change(position: &str, previous: Activity, current: Activity, detail: Option<&str>) -> Option<(EntryKind, String)> {
     if previous == current {
         return None;
@@ -17,6 +17,7 @@ pub fn entry_for_activity_change(position: &str, previous: Activity, current: Ac
             Some((EntryKind::Note, format!("{position} hit its usage limit{reset}; Legion tells it to carry on once the limit resets")))
         }
         Activity::Halted => Some((EntryKind::Note, format!("{position} was halted in its terminal and waits to be told what to do next"))),
+        Activity::Unreachable => Some((EntryKind::Note, format!("{position} doesn't answer from its OpenCode server"))),
         _ => None,
     }
 }
@@ -42,6 +43,14 @@ mod tests {
         let (kind, text) = entry_for_activity_change("builder", Activity::Busy, Activity::Limited, Some("five_hour resets 14:00")).unwrap();
         assert_eq!(kind, EntryKind::Note);
         assert!(text.starts_with("builder hit its usage limit (five_hour resets 14:00)"));
+    }
+
+    #[test]
+    fn a_server_that_stops_answering_is_logged() {
+        let (kind, text) = entry_for_activity_change("builder", Activity::Busy, Activity::Unreachable, None).unwrap();
+        assert_eq!(kind, EntryKind::Note);
+        assert_eq!(text, "builder doesn't answer from its OpenCode server");
+        assert_eq!(entry_for_activity_change("builder", Activity::Unreachable, Activity::Unreachable, None), None);
     }
 
     #[test]

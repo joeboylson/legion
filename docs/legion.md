@@ -110,7 +110,9 @@ runs on Claude Code as before. The harness `claude-code` is Claude Code too.
 Any other harness needs `.legion/harnesses/<harness>.json`, or the operator
 won't start ("no harness opencode in .legion/harnesses/"). Legion ships one for
 OpenCode in `templates/harnesses/opencode.json`; copy it in by hand.
-`legion setup init` doesn't.
+`legion setup init` doesn't. A copy made before Legion read OpenCode's state
+makes its own password and has no `{password}`: copy the file in again, or the
+session shows "can't see this session's state".
 
 A harness file says how to start the program:
 
@@ -150,8 +152,9 @@ it.
 
 The OpenCode template starts OpenCode's server on `{port}`, waits until
 Legion's tools are connected (up to 60 seconds; if they don't, or OpenCode
-is missing or its server stops, the session ends and the log says why), then starts OpenCode on it with the first prompt. A template with both `{port}`
-and `{password}` is a session with a server: every few seconds Legion asks the
+is missing or its server stops, the session ends and the log says why), then starts OpenCode on it with the first prompt.
+
+A template with both `{port}` and `{password}` is a session with a server: every few seconds Legion asks the
 server whether the session is busy or idle, and shows that in the app and
 `legion status`, as for Claude. If the server stops answering, it shows
 "can't reach its server". A busy one counts against the machine's limit of

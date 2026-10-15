@@ -1,20 +1,26 @@
 //! Keeps each OpenCode session's activity current by asking its server.
 
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use tokio::task::JoinSet;
 
 use crate::{
     daemon::{ActivityReport, Daemon},
     opencode_server::OpenCodeServer,
-    opencode_state::{activity_from, ask_server, progress_after, Progress, Reply},
+    opencode_state::{activity_from, ask_server, progress_after, Progress, Reply, RunScope},
 };
 
 struct Question {
     session_id: String,
     server: OpenCodeServer,
     progress: Progress,
+    scope: RunScope,
     waited: Duration,
+}
+
+/// OpenCode names the folder it was started in by its real path.
+fn canonical(folder: &Path) -> String {
+    folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf()).to_string_lossy().into_owned()
 }
 
 impl Daemon {
@@ -30,14 +36,14 @@ impl Daemon {
                 .iter()
                 .filter_map(|(session_id, session)| {
                     let server = session.server.clone()?;
-                    Some(Question { session_id: session_id.clone(), server, progress: session.server_progress, waited: session.started_at.elapsed() })
+                    Some(Question { session_id: session_id.clone(), server, progress: session.server_progress, scope: RunScope { started_ms: session.started_ms, directory: canonical(&session.working_folder) }, waited: session.started_at.elapsed() })
                 })
                 .collect()
         };
         let mut asking = JoinSet::new();
         questions.into_iter().for_each(|question| {
             asking.spawn(async move {
-                let reply = ask_server(&question.server, question.progress).await;
+                let reply = ask_server(&question.server, question.progress, &question.scope).await;
                 (question, reply)
             });
         });
