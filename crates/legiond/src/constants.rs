@@ -169,6 +169,10 @@ pub const OPENCODE_ACTIVE_PATH: &str = "/api/session/active";
 /// Every session OpenCode has stored for this repo, from every worktree and every earlier
 /// server, not just this one's, so a session in it is only ours after checking when and where it began.
 pub const OPENCODE_SESSIONS_PATH: &str = "/api/session";
+/// A session's newest step: the messages route, filtered and ordered where the server can.
+pub const OPENCODE_LAST_STEP_QUERY: &str = "message?type=assistant&order=desc&limit=1";
+/// The models the server knows, each with the context size it plans around.
+pub const OPENCODE_MODELS_PATH: &str = "/api/model";
 /// Random bytes in a session's server password.
 pub const OPENCODE_PASSWORD_BYTES: usize = 24;
 /// Reopening a deployment waits this long for its sessions, still stopping from

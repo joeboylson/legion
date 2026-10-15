@@ -224,8 +224,8 @@ fn answer(status: &str, body: &str) -> String {
     format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
-/// Plays OpenCode's server: lists one session, and takes prompts unless told to fail them.
-pub fn serve_opencode(port: u16, tag: String, is_failing: Arc<AtomicBool>, prompts: Arc<Mutex<Vec<String>>>) {
+/// Reads each request off a connection and writes back what `reply` makes of it.
+pub fn serve_http(port: u16, reply: impl Fn(&str) -> String + Send + 'static) {
     let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -241,27 +241,61 @@ pub fn serve_opencode(port: u16, tag: String, is_failing: Arc<AtomicBool>, promp
                     break;
                 }
             }
-            let request = String::from_utf8_lossy(&raw).to_string();
-            let reply = if request.starts_with("GET /api/session?search=") {
-                answer(
-                    "200 OK",
-                    &format!(
-                        r#"{{"data":[
-                            {{"id":"ses_foreign","title":"someone else's","time":{{"created":99999999999999}}}},
-                            {{"id":"ses_older","title":"an earlier run","time":{{"created":1}}}},
-                            {{"id":"ses_1","title":{tag:?},"time":{{"created":99999999999998}}}}]}}"#
-                    ),
-                )
-            } else if request.starts_with("POST /api/session/ses_1/prompt ") {
-                prompts.lock().unwrap().push(request.clone());
-                match is_failing.load(Ordering::SeqCst) {
-                    true => answer("500 Internal Server Error", "no"),
-                    false => answer("200 OK", "{}"),
-                }
-            } else {
-                answer("404 Not Found", "")
-            };
-            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.write_all(reply(&String::from_utf8_lossy(&raw)).as_bytes());
+        }
+    });
+}
+
+/// What OpenCode's server answers to listing sessions: ours among others.
+pub fn session_list(tag: &str) -> String {
+    answer(
+        "200 OK",
+        &format!(
+            r#"{{"data":[
+                {{"id":"ses_foreign","title":"someone else's","time":{{"created":99999999999999}}}},
+                {{"id":"ses_older","title":"an earlier run","time":{{"created":1}}}},
+                {{"id":"ses_1","title":{tag:?},"time":{{"created":99999999999998}}}}]}}"#
+        ),
+    )
+}
+
+/// Plays OpenCode's server: lists one session, and takes prompts unless told to fail them.
+pub fn serve_opencode(port: u16, tag: String, is_failing: Arc<AtomicBool>, prompts: Arc<Mutex<Vec<String>>>) {
+    serve_http(port, move |request| {
+        if request.starts_with("GET /api/session?search=") {
+            session_list(&tag)
+        } else if request.starts_with("POST /api/session/ses_1/prompt ") {
+            prompts.lock().unwrap().push(request.to_string());
+            match is_failing.load(Ordering::SeqCst) {
+                true => answer("500 Internal Server Error", "no"),
+                false => answer("200 OK", "{}"),
+            }
+        } else {
+            answer("404 Not Found", "")
+        }
+    });
+}
+
+/// Plays a server whose session has used `tokens` of a 100000-token context
+/// on its newest step, is running a turn while `is_running`, and keeps the
+/// prompts it is sent.
+pub fn serve_opencode_with_context(port: u16, tag: String, tokens: u64, is_running: Arc<AtomicBool>, prompts: Arc<Mutex<Vec<String>>>) {
+    serve_http(port, move |request| {
+        if request.starts_with("GET /api/session/active ") {
+            let running = is_running.load(Ordering::SeqCst);
+            answer("200 OK", if running { r#"{"data":{"ses_1":{"type":"running"}}}"# } else { r#"{"data":{}}"# })
+        } else if request.starts_with("GET /api/session?search=") {
+            session_list(&tag)
+        } else if request.starts_with("GET /api/session/ses_1/message?") {
+            let step = format!(r#"{{"data":[{{"type":"assistant","model":{{"id":"m","providerID":"p"}},"tokens":{{"input":{tokens},"output":0,"reasoning":0,"cache":{{"read":0,"write":0}}}}}}]}}"#);
+            answer("200 OK", &step)
+        } else if request.starts_with("GET /api/model ") {
+            answer("200 OK", r#"{"data":[{"id":"m","providerID":"p","limit":{"context":100000,"output":8192}}]}"#)
+        } else if request.starts_with("POST /api/session/ses_1/prompt ") {
+            prompts.lock().unwrap().push(request.to_string());
+            answer("200 OK", "{}")
+        } else {
+            answer("404 Not Found", "")
         }
     });
 }

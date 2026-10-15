@@ -318,3 +318,59 @@ the callouts and toolbox sections); Claude's instructions are unchanged
 
 A folder that already has its own copy of `opencode.json` in
 `.legion/harnesses/` keeps the old config until the new one is copied in.
+
+## Full conversations (mission 15)
+
+A shipper on `spark-big` filled its context (114.7K of 131K) after 125
+steps. OpenCode's compaction failed twice with "The compaction request cannot
+be reduced further…" and the session went idle with its work uncommitted.
+
+**Cause:** the template gave the model only a name. A model with no `limit`
+is planned as **200000 context, 32000 output** (`GET /api/model`). The
+Spark models run 131072, so:
+- **Output:** OpenCode sends `limit.output` as `max_completion_tokens` on
+  every request (32000 here; 8192 when set). vLLM refuses a request whose
+  prompt plus that is over 131072, so a prompt past ~99K tokens was refused
+  before the model read it.
+- **Auto-compaction:** it starts at the context size minus a buffer, so
+  against 200000 it never started before the window was gone. The summary
+  request carries the whole conversation too, so one begun past the window
+  can't fit: "cannot be reduced further".
+
+**Compaction settings** (config `compaction`: `auto`, `buffer`, `keep.tokens`;
+`GET /openapi.json`). Auto is on. With context 20000 and a fake model that
+reports its prompt size, compaction began at 18000 (output 2000 or 8000
+alike), so the output limit doesn't move it. With `buffer` 4000 it began at
+16000-17000, and with context 131072 and no `buffer` between 110K and 116K. So
+the default buffer is about 15K-20K; the template sets `buffer` 32768, which
+starts compaction at about 98K (between 90K and 100K in the same test),
+leaving the summary request room.
+
+**Tool output:** a tool's output is cut at `tool_output` `max_lines` 2000 /
+`max_bytes` 51200 by default (about 13K tokens for one big read, kept in the
+conversation). The template sets 1000 lines / 20480 bytes.
+
+**System prompt and tool list** are sent on every request and are not part of
+what compaction shrinks (the summary replaces the messages). After mission 14
+they are about 6.5K tokens.
+
+**Template now sets** (`templates/harnesses/opencode.json`): model
+`limit` `{"context": 131072, "output": 8192}`, `compaction.buffer` 32768, and
+`tool_output` as above. The limit is written for the Spark models, both
+131072; a model with another size needs its own copy of the template.
+*Checked:* the filled config under a throwaway HOME, `opencode serve`, and a
+fake model reporting `usage.prompt_tokens`: `GET /api/model` showed the
+limit, auto-compaction began between 90K and 100K and not below. The fake's
+"ok" isn't the summary format OpenCode requires, so those attempts ended as
+failed; a real model's summary wasn't run here.
+
+**How full a session is** (for `clearAt`): the session's `tokens` on
+`GET /api/session/{id}` add up every step (57000 after three 19000 steps), so
+they aren't the conversation's size. The size is the newest assistant step:
+`GET /api/session/{id}/message?type=assistant&order=desc&limit=1` gives
+`tokens` (input, output, reasoning, cache read and write, which OpenCode's own
+meter adds) and the step's `model`. The context size comes from
+`GET /api/model`. legiond does this every poll
+(`crates/legiond/src/opencode_context.rs`) and hands the session over at
+`clearAt` as it does a Claude session. A step taken before a compaction still
+reads as full until the next step.

@@ -20,6 +20,13 @@
     "model": "{modelProvider}/{model}",
     "default_agent": "legion",
     "websearch": false,
+    "compaction": {
+      "buffer": 32768
+    },
+    "tool_output": {
+      "max_lines": 1000,
+      "max_bytes": 20480
+    },
     "providers": {
       "{modelProvider}": {
         "package": "@ai-sdk/openai-compatible",
@@ -31,6 +38,10 @@
         "models": {
           "{model}": {
             "name": "{model}",
+            "limit": {
+              "context": 131072,
+              "output": 8192
+            },
             "body": {
               "parallel_tool_calls": true,
               "reasoning_effort": "none",

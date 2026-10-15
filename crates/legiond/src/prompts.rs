@@ -239,7 +239,8 @@ pub struct OperatorBriefing<'a> {
 const TEMPLATE_WORKING_HABITS: &str = "How to work, so each step counts:
 - Put related reads and searches in one step: call several tools in one reply when none needs another's result.
 - Read a file only when the step you're on needs it.
-- Start writing early, once you know enough for the first change, instead of exploring everything first.";
+- Start writing early, once you know enough for the first change, instead of exploring everything first.
+- Commit after each piece of work that builds and passes its tests, with a one-line message, so a lost session never loses more than the last piece.";
 
 pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: OperatorBriefing, mission: Option<MissionBriefing>) -> String {
     let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch, callouts, definition_file, callouts_file, naming, on_template } = briefing;
@@ -434,6 +435,7 @@ mod tests {
         assert!(prompt.contains("Put related reads and searches in one step"));
         assert!(prompt.contains("Read a file only when the step you're on needs it"));
         assert!(prompt.contains("Start writing early"));
+        assert!(prompt.contains("Commit after each piece of work that builds and passes its tests, with a one-line message"));
     }
 
     /// An operator on a template with a long definition, a long history, many callouts and many tools.
@@ -484,6 +486,7 @@ mod tests {
     #[test]
     fn a_session_off_a_template_hears_nothing_of_it() {
         assert!(!operator_with(&ToolNaming::claude(), false).contains("Start writing early"));
+        assert!(!operator_with(&ToolNaming::claude(), false).contains("Commit after each piece of work"));
         assert!(!fixed_commander(&ToolNaming::Command).contains("Start writing early"));
     }
 

@@ -201,11 +201,7 @@ fn operator_launch(
         on_template: template.is_some(),
     };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
-    // A template session has no add-on to say how full its conversation is.
-    let clear_at = match template {
-        Some(_) => None,
-        None => clear_at_percent(operator.config.clear_at, settings.clear_at),
-    };
+    let clear_at = clear_at_percent(operator.config.clear_at, settings.clear_at);
     Ok(LaunchPlan {
         position,
         system_prompt,

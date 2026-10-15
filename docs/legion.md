@@ -83,8 +83,8 @@ Kept in git, so everyone working on the folder shares it.
 - `operators/<name>/operator.json` (all optional): `model` (a Claude
   model, or the name of one of the folder's `models`),
   `permissionMode`, `limit` (copies at once, default 1), `allowedTools`,
-  `disallowedTools`, `clearAt`. `allowedTools`, `disallowedTools` and
-  `clearAt` apply only to Claude Code.
+  `disallowedTools`, `clearAt`. `allowedTools` and `disallowedTools` apply
+  only to Claude Code; `clearAt` also works on OpenCode (below).
 - `harnesses/<name>.json`: how to start a program other than Claude Code
   (below).
 - `pipelines/<name>.yaml`: `operators`, `first`, and `decisions`. Each
@@ -185,8 +185,7 @@ What a session on another harness can't do yet:
 - Say whether it's busy or idle, unless it runs a server Legion can ask, as
   OpenCode does. Without one it shows "can't see this session's state", and
   doesn't count against the machine's limit of busy sessions once started.
-- Use `allowedTools` and `disallowedTools`, or hand over to a fresh
-  conversation at `clearAt`.
+- Use `allowedTools` and `disallowedTools`.
 - Run the commander or the strategist. They stay on Claude Code.
 - Use `tools: "commands"`: `legion handoff`, `legion note`, `legion done` and
   the other tool commands don't exist yet.
@@ -274,7 +273,9 @@ tool's first comment line.
 - **Hands over a full conversation.** Past `clearAt` (default 30%, or
   `false` for never), a session is asked for a "Handoff:" note, then started
   again fresh, reading it. Claude Code's own summary is set 10 points later
-  as a backstop.
+  as a backstop. An OpenCode session hands over the same way: Legion reads
+  how full it is from its server (its newest step's tokens over the model's
+  context size), and OpenCode compacts it by itself as the backstop.
 - **Checks on long turns.** After 5 minutes of work, and every 5 after, the
   commander is asked to read that operator's screen.
 - **Points out stalled work** to an idle commander: a handoff no one picked
