@@ -19,8 +19,6 @@ pub struct ModelChoice {
 }
 
 /// A named entry wins; any other name (opus, sonnet …) is a Claude Code model.
-// Sessions don't start from this yet; the harness switch reads it later.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn model_choice(operator_model: Option<&str>, models: &BTreeMap<String, ModelEntry>) -> ModelChoice {
     let Some(operator_model) = operator_model else {
         return claude_code(None);

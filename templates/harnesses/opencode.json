@@ -1,0 +1,69 @@
+{
+  "name": "opencode",
+  "command": "sh",
+  "args": [
+    "-c",
+    "set -u\ncommand -v opencode >/dev/null || { echo \"opencode isn't on PATH\" >&2; exit 1; }\nOPENCODE_PASSWORD=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \\n')\nexport OPENCODE_PASSWORD\nserver=http://127.0.0.1:{port}\nserve_log=$(mktemp)\nopencode serve --port {port} >\"$serve_log\" 2>&1 &\nserve_pid=$!\ntrap 'kill $serve_pid 2>/dev/null; rm -f \"$serve_log\"' EXIT\nmcp() { curl -sS -u \"opencode:$OPENCODE_PASSWORD\" \"$server/api/mcp\" 2>&1; }\ntries=0\nuntil mcp | grep -q '\"name\":\"legion\",\"status\":{\"status\":\"connected\"'; do\n  if ! kill -0 \"$serve_pid\" 2>/dev/null; then\n    echo \"opencode serve stopped: $(tail -n 5 \"$serve_log\" | tr '\\n' ' ')\" >&2\n    exit 1\n  fi\n  tries=$((tries + 1))\n  if [ \"$tries\" -gt 120 ]; then\n    echo \"Legion's tools didn't connect to OpenCode in 60 seconds: $(mcp)\" >&2\n    exit 1\n  fi\n  sleep 0.5\ndone\nopencode mini --server \"$server\" --model \"$2\" --agent legion --prompt \"$1\"\n",
+    "sh",
+    "{firstPrompt}",
+    "{modelProvider}/{model}"
+  ],
+  "env": {
+    "OPENCODE_CONFIG": "{configFile}"
+  },
+  "toolName": "legion_{tool}",
+  "tools": "mcp",
+  "configFile": {
+    "$schema": "https://opencode.ai/config.json",
+    "model": "{modelProvider}/{model}",
+    "default_agent": "legion",
+    "providers": {
+      "{modelProvider}": {
+        "package": "@ai-sdk/openai-compatible",
+        "settings": {
+          "baseURL": "{address}"
+        },
+        "models": {
+          "{model}": {
+            "name": "{model}"
+          }
+        }
+      }
+    },
+    "agents": {
+      "legion": {
+        "mode": "primary",
+        "system": "{file:{systemPromptFile}}",
+        "permissions": [
+          {
+            "action": "*",
+            "resource": "*",
+            "effect": "allow"
+          },
+          {
+            "action": "question",
+            "resource": "*",
+            "effect": "deny"
+          }
+        ]
+      }
+    },
+    "mcp": {
+      "servers": {
+        "legion": {
+          "type": "local",
+          "codemode": false,
+          "command": [
+            "{legionCommand}",
+            "mcp"
+          ],
+          "environment": {
+            "LEGION_DEPLOYMENT": "{deployment}",
+            "LEGION_POSITION": "{position}",
+            "LEGION_SOCKET": "{socket}"
+          }
+        }
+      }
+    }
+  }
+}

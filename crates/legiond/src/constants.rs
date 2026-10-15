@@ -45,6 +45,9 @@ pub const TERMINAL_COLUMNS: u16 = 120;
 /// for scrolling back in the app.
 pub const TERMINAL_HISTORY_LINES: usize = 2000;
 pub const TERMINAL_READ_BUFFER_BYTES: usize = 8192;
+/// How long an ended template session's last output may take to reach its
+/// screen, which is the only place it says why it ended.
+pub const ENDED_SCREEN_DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub const DEFAULT_MAX_BUSY_SESSIONS: usize = 6;
 pub const DEFAULT_PERMISSION_TIMEOUT_MINUTES: u64 = 30;

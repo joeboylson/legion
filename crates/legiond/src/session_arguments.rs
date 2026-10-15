@@ -7,6 +7,8 @@ use serde_json::json;
 
 use crate::{
     constants::{legion_tools_rule, LEGION_TOOLS_SUBCOMMAND, SESSION_SETTINGS_JSON},
+    harness::HarnessTemplate,
+    model_choice::ModelChoice,
     setup::PermissionMode,
 };
 
@@ -14,7 +16,9 @@ use crate::{
 pub struct LaunchPlan {
     pub position: String,
     pub system_prompt: String,
-    pub model: Option<String>,
+    pub model_choice: ModelChoice,
+    /// The model's harness template; None runs Claude Code.
+    pub template: Option<HarnessTemplate>,
     pub permission_mode: Option<PermissionMode>,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
@@ -50,7 +54,7 @@ pub fn session_arguments(plan: &LaunchPlan, tools_config: &str, system_prompt_fi
         [] => Vec::new(),
         rules => std::iter::once("--disallowedTools".to_string()).chain(rules.iter().cloned()).collect(),
     };
-    let model: Vec<String> = plan.model.iter().flat_map(|model| ["--model".to_string(), model.clone()]).collect();
+    let model: Vec<String> = plan.model_choice.model.iter().flat_map(|model| ["--model".to_string(), model.clone()]).collect();
     let permission_mode: Vec<String> =
         plan.permission_mode.iter().flat_map(|mode| ["--permission-mode".to_string(), mode.flag_value().to_string()]).collect();
     // A list flag would take the first prompt as one more entry without `--`.
@@ -69,15 +73,19 @@ pub fn session_arguments(plan: &LaunchPlan, tools_config: &str, system_prompt_fi
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use serde_json::Value;
 
     use super::*;
+    use crate::model_choice::model_choice;
 
     fn plan(allowed: &[&str], disallowed: &[&str], model: Option<&str>) -> LaunchPlan {
         LaunchPlan {
             position: "builder".into(),
             system_prompt: "be good".into(),
-            model: model.map(String::from),
+            model_choice: model_choice(model, &BTreeMap::new()),
+            template: None,
             permission_mode: None,
             allowed_tools: allowed.iter().map(|rule| rule.to_string()).collect(),
             disallowed_tools: disallowed.iter().map(|rule| rule.to_string()).collect(),

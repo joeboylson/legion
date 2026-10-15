@@ -1,0 +1,24 @@
+cwd: <home>/.local/share/legion/folders/repo-<id>/worktrees/0001-tiny
+arg: --plugin-dir
+arg: <addon>
+arg: --settings
+arg: {"syncClaudeAiSkills": false, "spinnerTipsEnabled": false, "promptSuggestionEnabled": false}
+arg: --mcp-config
+arg: {"mcpServers":{"legion":{"args":["mcp"],"command":"<bin>/legion","env":{"LEGION_DEPLOYMENT":"<deployment>","LEGION_POSITION":"echoer","LEGION_SOCKET":"<home>/.local/share/legion/legiond.sock"}}}}
+arg: --append-system-prompt-file
+arg: <home>/.local/share/legion/prompts/<deployment>-echoer.md
+arg: --allowedTools
+arg: mcp__legion
+arg: --
+arg: Start on mission 1.
+env: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=40
+env: FAKE_HARNESS_OUT=<home>/out
+env: HINDSIGHT_NO_CAPTURE=1
+env: HOME=<home>
+env: LEGION_ADDON_SESSION=<session>
+env: LEGION_ADDON_SOCKET=<home>/.local/share/legion/legiond.sock
+env: LEGION_DEPLOYMENT=<deployment>
+env: LEGION_POSITION=echoer
+env: PATH=<bin>:/usr/bin:/bin
+env: PWD=<home>/.local/share/legion/folders/repo-<id>/worktrees/0001-tiny
+env: TERM=xterm-256color

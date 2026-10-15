@@ -1,4 +1,5 @@
-//! Claude sessions in terminals legiond owns, each with the add-on loaded.
+//! Sessions in terminals legiond owns: Claude Code with the add-on loaded,
+//! or a harness template's command.
 //! Terminals and processes are state and I/O, so this file isn't functional.
 
 use std::{
@@ -8,18 +9,20 @@ use std::{
     time::Instant,
 };
 
-use legion_proto::{Activity, SessionInfo, ENV_DEPLOYMENT, ENV_POSITION, LEGION};
+use legion_proto::{Activity, SessionInfo, ENV_DEPLOYMENT, ENV_POSITION, ENV_SOCKET, LEGION};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
 use crate::{
     constants::{
         ADDON_PERMISSION_MODE_ENV, ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
-        CHILD_SESSION_MARKERS, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
+        CHILD_SESSION_MARKERS, ENDED_SCREEN_DRAIN_LIMIT, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
     context_handover::{autocompact_percent, HandoverPhase},
     daemon::Daemon,
+    harness::FilledCommand,
     ids::new_id,
+    session_programs::SessionProgram,
     setup::PermissionMode,
     store::RunningSession,
     terminal_key::TerminalKey,
@@ -33,6 +36,9 @@ pub struct Session {
     pub part: Option<u32>,
     pub activity: Activity,
     pub can_see_state: bool,
+    /// Started from a harness template: no add-on reports what it does, so
+    /// Legion can't tell when it's busy or stuck.
+    pub reports_itself: bool,
     pub detail: Option<String>,
     pub model: Option<String>,
     /// How full its conversation is, in percent, as its add-on last said.
@@ -136,35 +142,73 @@ pub struct SpawnRequest {
     pub mission: Option<u32>,
     pub part: Option<u32>,
     pub working_folder: PathBuf,
-    pub arguments: Vec<String>,
+    pub program: SessionProgram,
+    /// The model to show before the session says which it runs.
+    pub model: Option<String>,
     pub clear_at: Option<u8>,
     pub permission_mode: Option<PermissionMode>,
 }
 
-fn claude_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> CommandBuilder {
+/// The program's name, as a failed start names it.
+fn program_name<'a>(daemon: &'a Daemon, program: &'a SessionProgram) -> &'a str {
+    match program {
+        SessionProgram::Claude(_) => &daemon.config.claude_command,
+        SessionProgram::Template(filled) => &filled.command,
+    }
+}
+
+/// Claude Code with the add-on, and the add-on's settings.
+fn claude_command(daemon: &Daemon, request: &SpawnRequest, arguments: &[String], session_id: &str) -> CommandBuilder {
     let config = &daemon.config;
     let mut command = CommandBuilder::new(&config.claude_command);
     command.arg("--plugin-dir");
     command.arg(&config.addon_folder);
-    command.args(&request.arguments);
-    command.cwd(&request.working_folder);
-    command.env("TERM", TERMINAL_TYPE);
-    CHILD_SESSION_MARKERS.iter().for_each(|marker| command.env_remove(marker));
+    command.args(arguments);
     command.env(ADDON_SOCKET_ENV, &config.socket_path);
     command.env(ADDON_SESSION_ENV, session_id);
     if let Some(mode) = request.permission_mode {
         command.env(ADDON_PERMISSION_MODE_ENV, mode.flag_value());
     }
-    command.env(HINDSIGHT_NO_CAPTURE.0, HINDSIGHT_NO_CAPTURE.1);
-    command.env(ENV_DEPLOYMENT, &request.deployment);
-    command.env(ENV_POSITION, &request.position);
     if let Some(clear_at) = request.clear_at {
         command.env(AUTOCOMPACT_PERCENT_ENV, autocompact_percent(clear_at).to_string());
     }
+    command
+}
+
+/// A template's command, with the three settings `legion` reads.
+fn template_command(daemon: &Daemon, filled: &FilledCommand) -> CommandBuilder {
+    let mut command = CommandBuilder::new(&filled.command);
+    command.args(&filled.args);
+    command.env(ENV_SOCKET, &daemon.config.socket_path);
+    filled.env.iter().for_each(|(name, value)| command.env(name, value));
+    command
+}
+
+/// The command for a session, with what every session gets.
+fn session_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> CommandBuilder {
+    let config = &daemon.config;
+    let mut command = match &request.program {
+        SessionProgram::Claude(arguments) => claude_command(daemon, request, arguments, session_id),
+        SessionProgram::Template(filled) => template_command(daemon, filled),
+    };
+    command.cwd(&request.working_folder);
+    command.env("TERM", TERMINAL_TYPE);
+    CHILD_SESSION_MARKERS.iter().for_each(|marker| command.env_remove(marker));
+    command.env(HINDSIGHT_NO_CAPTURE.0, HINDSIGHT_NO_CAPTURE.1);
+    command.env(ENV_DEPLOYMENT, &request.deployment);
+    command.env(ENV_POSITION, &request.position);
     // So the session finds the legion command next to legiond.
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     command.env("PATH", format!("{}:{inherited_path}", config.binary_folder.display()));
     command
+}
+
+/// A session with no add-on says why it ended only on its screen: its last line.
+fn ended_with_last_line(how_it_ended: String, screen: &str) -> String {
+    match screen.lines().rev().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => format!("{how_it_ended}: {line}"),
+        None => how_it_ended,
+    }
 }
 
 /// Starts a session. Its terminal is read, and its end noticed, on threads
@@ -173,11 +217,11 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     let terminal_size = PtySize { rows: TERMINAL_ROWS, cols: TERMINAL_COLUMNS, pixel_width: 0, pixel_height: 0 };
     let terminal = native_pty_system().openpty(terminal_size).map_err(|error| format!("can't open a terminal: {error}"))?;
     let session_id = new_id();
-    let command = claude_command(daemon, &request, &session_id);
+    let command = session_command(daemon, &request, &session_id);
     let mut child = terminal
         .slave
         .spawn_command(command)
-        .map_err(|error| format!("can't start {}: {error}", daemon.config.claude_command))?;
+        .map_err(|error| format!("can't start {}: {error}", program_name(daemon, &request.program)))?;
     drop(terminal.slave);
     let killer = child.clone_killer();
     let mut output = terminal.master.try_clone_reader().map_err(|error| format!("can't read the terminal: {error}"))?;
@@ -189,9 +233,10 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         mission: request.mission,
         part: request.part,
         activity: Activity::Starting,
-        can_see_state: true,
+        can_see_state: !request.program.reports_itself(),
+        reports_itself: request.program.reports_itself(),
         detail: None,
-        model: None,
+        model: request.model,
         context_percent: None,
         clear_at: request.clear_at,
         handover: HandoverPhase::Working,
@@ -209,6 +254,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         _terminal: terminal.master,
     };
     let info = session.info();
+    let reports_itself = session.reports_itself;
     let running = RunningSession { deployment: info.deployment.clone(), position: info.position.clone(), mission: info.mission, part: info.part, session_id: session_id.clone() };
     {
         let mut state = daemon.state.lock().unwrap();
@@ -224,6 +270,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     // Keep reading the terminal, or claude blocks once its buffer fills.
     let reading_daemon = daemon.clone();
     let reading_session_id = session_id.clone();
+    let (screen_drained, screen_drained_signal) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
         let mut buffer = [0u8; TERMINAL_READ_BUFFER_BYTES];
         while let Ok(read_count) = output.read(&mut buffer) {
@@ -234,6 +281,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
                 session.screen.process(&buffer[..read_count]);
             }
         }
+        let _ = screen_drained.send(());
     });
 
     let waiting_daemon = daemon.clone();
@@ -242,6 +290,9 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             Ok(status) => format!("exit status {}", status.exit_code()),
             Err(error) => error.to_string(),
         };
+        if reports_itself {
+            let _ = screen_drained_signal.recv_timeout(ENDED_SCREEN_DRAIN_LIMIT);
+        }
         let ended_session = {
             let mut state = waiting_daemon.state.lock().unwrap();
             if !waiting_daemon.is_shutting_down.load(Ordering::SeqCst) {
@@ -254,6 +305,10 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             state.sessions.remove(&session_id)
         };
         if let Some(session) = ended_session {
+            let how_it_ended = match session.reports_itself {
+                true => ended_with_last_line(how_it_ended, &session.screen_text()),
+                false => how_it_ended,
+            };
             waiting_daemon.handle_session_end(&session, &how_it_ended);
         }
     });
@@ -263,6 +318,13 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ended_session_without_an_add_on_gives_its_last_line() {
+        let screen = "Starting\nLegion's tools didn't connect to OpenCode in 60 seconds: refused\n  \n";
+        assert_eq!(ended_with_last_line("exit status 1".into(), screen), "exit status 1: Legion's tools didn't connect to OpenCode in 60 seconds: refused");
+        assert_eq!(ended_with_last_line("exit status 0".into(), " \n"), "exit status 0");
+    }
 
     #[test]
     fn what_scrolls_off_the_top_is_kept_in_order() {
