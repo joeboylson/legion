@@ -60,7 +60,7 @@ One-line heads-ups for everyone, like a kitchen calling "behind": a gotcha, a
 slow or flaky command, a file not to touch. Anyone calls one out with the
 `callout` tool (or `legion callout <text>`), at most 200 characters, one
 line. Legion adds it to `.legion/callouts.md` with the date and who said it,
-commits that file, and tells everyone running as a heads-up that wants no
+commits that file (unless git ignores `.legion/`, in which case it only writes it), and tells everyone running as a heads-up that wants no
 reply (a shared tool is announced the same way). Every session's instructions
 list the newest 20. `callouts` (the tool, or `legion callouts`) reads them
 all.
@@ -230,7 +230,7 @@ legiond checks every call against the caller's role, whatever it sees.
 
 An operator that does something a second time by hand (a browser test, a
 check, a setup step) makes it a tool and calls `share_tool`. Legion copies
-it into the folder's `.legion/tools/`, commits just that file, and tells
+it into the folder's `.legion/tools/`, commits just that file (unless git ignores `.legion/`, in which case it only writes it), and tells
 everyone running. Every operator's instructions list the toolbox with each
 tool's first comment line.
 

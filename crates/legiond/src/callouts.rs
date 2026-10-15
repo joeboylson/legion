@@ -116,16 +116,19 @@ impl Daemon {
         let existing = fs::read_to_string(&path).unwrap_or_else(|_| CALLOUTS_FILE_HEADER.to_string());
         let updated = format!("{existing}{}\n", callout_line(&date_of(now_ms()), author, &callout));
         fs::write(&path, updated).map_err(|error| format!("can't write {}: {error}", path.display()))?;
-        if is_git_repo(&folder_path) {
+        let commit_result = if is_git_repo(&folder_path) {
             let relative = path.strip_prefix(&folder_path).unwrap_or(&path);
-            commit_paths(&folder_path, &[relative], &format!("Callout from {author}: {callout}"))?;
-        }
+            commit_paths(&folder_path, &[relative], &format!("Callout from {author}: {callout}"))
+        } else {
+            Ok(())
+        };
         let announcement = callout_announcement(author, &callout);
         others.into_iter().try_for_each(|position| {
             let entry = NewEntry { kind: EntryKind::Announcement, mission: None, to: Some(position), text: announcement.clone(), answers: None };
             self.post_entry(&deployment_id, author, entry).map(|_| ())
         })?;
-        Ok(Reply::Done)
+        // Announced first so a failed commit never loses it.
+        commit_result.map(|_| Reply::Done)
     }
 }
 

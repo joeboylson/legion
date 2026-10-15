@@ -66,16 +66,19 @@ impl Daemon {
         if source != shared_path {
             fs::copy(source, &shared_path).map_err(|error| format!("can't copy {file} to {}: {error}", shared_path.display()))?;
         }
-        if is_git_repo(&folder_path) {
+        let commit_result = if is_git_repo(&folder_path) {
             let relative = shared_path.strip_prefix(&folder_path).unwrap_or(&shared_path);
-            commit_paths(&folder_path, &[relative], &format!("Share tool {}: {summary}", name.to_string_lossy()))?;
-        }
+            commit_paths(&folder_path, &[relative], &format!("Share tool {}: {summary}", name.to_string_lossy()))
+        } else {
+            Ok(())
+        };
         let text = tool_announcement(sharer, &shared_path, summary);
         others.into_iter().try_for_each(|position| {
             let entry = NewEntry { kind: EntryKind::Announcement, mission: None, to: Some(position), text: text.clone(), answers: None };
             self.post_entry(&deployment_id, sharer, entry).map(|_| ())
         })?;
-        Ok(Reply::Done)
+        // Announced first so a failed commit never loses it.
+        commit_result.map(|_| Reply::Done)
     }
 }
 

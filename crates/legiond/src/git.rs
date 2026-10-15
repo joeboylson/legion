@@ -3,17 +3,19 @@
 //! or after replaying the mission's commits and running the folder's check
 //! if it has. Anything that doesn't go cleanly is left for the admin.
 
-use std::{path::Path, process::Command};
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
 
 use crate::{constants::CHECK_OUTPUT_TAIL_LINES, store::Worktree};
 
+fn git_output(folder: &Path, arguments: &[&str]) -> Result<Output, String> {
+    Command::new("git").arg("-C").arg(folder).args(arguments).output().map_err(|error| format!("can't run git: {error}"))
+}
+
 fn run_git(folder: &Path, arguments: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(arguments)
-        .output()
-        .map_err(|error| format!("can't run git: {error}"))?;
+    let output = git_output(folder, arguments)?;
     if !output.status.success() {
         return Err(format!("git {}: {}", arguments.join(" "), String::from_utf8_lossy(&output.stderr).trim()));
     }
@@ -25,42 +27,48 @@ const CHECK_IGNORE_NOT_IGNORED: i32 = 1;
 
 /// Whether git ignores this path. Any answer but yes or no (not a repo, bad
 /// path) is an error, not a guess.
-fn is_ignored(folder: &Path, path: &Path) -> Result<bool, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(["check-ignore", "-q", "--"])
-        .arg(path)
-        .output()
-        .map_err(|error| format!("can't run git: {error}"))?;
+fn is_ignored(folder: &Path, path: &str) -> Result<bool, String> {
+    let output = git_output(folder, &["check-ignore", "-q", "--", path])?;
     match output.status.code() {
         Some(CHECK_IGNORE_IS_IGNORED) => Ok(true),
         Some(CHECK_IGNORE_NOT_IGNORED) => Ok(false),
-        _ => Err(format!("git check-ignore -- {}: {}", path.display(), String::from_utf8_lossy(&output.stderr).trim())),
+        _ => Err(format!("git check-ignore -- {path}: {}", String::from_utf8_lossy(&output.stderr).trim())),
     }
+}
+
+/// A tracked path is committed without `git add`, which refuses it once an
+/// ignore rule starts matching it.
+fn is_tracked(folder: &Path, path: &str) -> Result<bool, String> {
+    Ok(git_output(folder, &["ls-files", "--error-unmatch", "--", path])?.status.success())
 }
 
 /// Commits just these paths, leaving anything else staged as it was. A path
 /// with no change commits nothing, which isn't a problem. An ignored path is
 /// left uncommitted and never force-added: the owner ignored it to keep it out of git.
 pub fn commit_paths(folder: &Path, paths: &[&Path], message: &str) -> Result<(), String> {
-    let mut tracked_paths = Vec::new();
-    for path in paths {
-        if !is_ignored(folder, path)? {
-            tracked_paths.push(*path);
-        }
-    }
-    if tracked_paths.is_empty() {
+    let candidates: Vec<String> = paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
+    let committed: Vec<String> = candidates
+        .into_iter()
+        .filter_map(|path| is_ignored(folder, &path).map(|ignored| (!ignored).then_some(path)).transpose())
+        .collect::<Result<_, _>>()?;
+    if committed.is_empty() {
         return Ok(());
     }
-    let path_arguments: Vec<String> = tracked_paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
-    let add: Vec<&str> = ["add", "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect();
-    run_git(folder, &add)?;
-    let unchanged = run_git(folder, &["diff", "--cached", "--quiet", "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect::<Vec<_>>()).is_ok();
+    let untracked: Vec<&str> = committed
+        .iter()
+        .map(String::as_str)
+        .filter_map(|path| is_tracked(folder, path).map(|tracked| (!tracked).then_some(path)).transpose())
+        .collect::<Result<_, _>>()?;
+    if !untracked.is_empty() {
+        let add: Vec<&str> = ["add", "--"].into_iter().chain(untracked).collect();
+        run_git(folder, &add)?;
+    }
+    let path_arguments = committed.iter().map(String::as_str);
+    let unchanged = run_git(folder, &["diff", "--quiet", "HEAD", "--"].into_iter().chain(path_arguments.clone()).collect::<Vec<_>>()).is_ok();
     if unchanged {
         return Ok(());
     }
-    let commit: Vec<&str> = ["commit", "-q", "-m", message, "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect();
+    let commit: Vec<&str> = ["commit", "-q", "-m", message, "--"].into_iter().chain(path_arguments).collect();
     run_git(folder, &commit).map(|_| ())
 }
 
@@ -293,6 +301,17 @@ mod tests {
         assert_eq!(commit_paths(&repo, &[&path], "callout: heads up"), Ok(()));
         assert_eq!(run_git(&repo, &["log", "-1", "--format=%s"]).unwrap(), "callout: heads up");
         assert_eq!(run_git(&repo, &["ls-files", ".legion"]).unwrap(), ".legion/callouts.md");
+    }
+
+    #[test]
+    fn a_tracked_path_is_still_committed_after_an_ignore_rule_matches_it() {
+        let repo = temporary_repo("tracked-then-ignored");
+        let path = write_legion_file(&repo);
+        commit_paths(&repo, &[&path], "first").unwrap();
+        commit_file(&repo, ".gitignore", ".legion/\n");
+        fs::write(&path, "- heads up\n- another\n").unwrap();
+        assert_eq!(commit_paths(&repo, &[&path], "second"), Ok(()));
+        assert_eq!(run_git(&repo, &["log", "-1", "--format=%s"]).unwrap(), "second");
     }
 
     #[test]
