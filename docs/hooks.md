@@ -98,8 +98,10 @@ whole machine:
 {
   "hooks": {
     "before": [
-      { "match": "mission.finish", "hooks": [{ "type": "command", "command": "./scripts/check-ci.sh" }] },
-      { "match": "*", "when": { "via": "web" }, "hooks": [{ "type": "command", "command": "legion-web-policy" }] }
+      { "match": "mission.finish", "timeoutSeconds": 120, "onTimeout": "block",
+        "hooks": [{ "type": "command", "command": "./scripts/check-ci.sh" }] },
+      { "match": "*", "when": { "via": "web" }, "timeoutSeconds": 5, "onTimeout": "block",
+        "hooks": [{ "type": "command", "command": "legion-web-policy" }] }
     ],
     "after": [
       { "match": "entry.added", "hooks": [{ "type": "adapter", "adapter": "supabase" }] }
@@ -112,11 +114,60 @@ whole machine:
   as JSON on stdin. Exit code 2 blocks the action, and what it wrote to stderr
   goes back to whoever sent it. Printing `{"data": …}` changes the action.
 - **`after`** is like `PostToolUse`. It sees the result or event and can't block it.
+  It reads from the action record (below), not from the action as it happens.
 - **Hook types:** `command` (a shell command), `http` (POST to a URL) and
   `adapter` (built into legiond: TCP, Supabase, Postgres).
 - **Limits on the web** are a `before` hook on `via: "web"`, not a separate
   security layer. Answering questions and approving held messages could pass;
   changing tools, permissions or folders would stay local.
+
+## Keeping hooks from stalling Legion
+
+`handle_command` runs every command to the end before it replies, and the
+26 entries Legion writes on its own happen in the middle of its work. A hook
+run inline there would hold all of Legion up while it runs, and one that
+hangs would stop it. Three rules keep that from happening.
+
+### 1. An action record, and `after` hooks read from it
+
+Every envelope is written to a record that only grows:
+`actions.jsonl` in each folder's data, next to the log. Writing it is the
+last step of an action, so a written envelope is one that happened.
+
+- `after` hooks and adapters each read the record from where they left off,
+  in the background. Each keeps its own place (the last `id` it handled), so
+  a slow Supabase adapter never delays a TCP one, and neither delays Legion.
+- After a restart, a crash or the machine sleeping, each picks up from its
+  place and catches up. Nothing is lost, and nothing is sent twice: adapters
+  already drop repeats by `id`.
+- A hook that keeps failing is retried with a growing wait, then marked
+  stuck in the app, with its place kept, so you can fix it and let it
+  catch up.
+- The record is also what `cause` points into, so "this answer led to that
+  message going out" can be followed back after the fact.
+
+### 2. `before` hooks are rare and time-limited
+
+- A `before` hook must name the actions it runs on (`mission.finish`), or
+  narrow `*` with a `when` (`via: "web"`). A bare `"*"` with no `when` is
+  refused when the file loads.
+- Each has `timeoutSeconds` (default 10) and `onTimeout`: `block` stops
+  the action and says the hook timed out; `allow` lets it through and
+  writes a note to the log. Default: `block` for actions from outside the
+  machine (`via: "web"`, `channel:*`), `allow` for everything else.
+- `before` hooks run outside legiond's state lock, so a slow one holds up
+  only its own action, not other folders or sessions.
+- Legion's own actions (`actor.kind: "legion"`) don't run `before` hooks
+  unless a hook names them, so a check-in or a stalled-work notice can't be
+  blocked by mistake.
+
+### 3. No loops
+
+An action a hook causes (a hook that runs `legion send`) carries the hook's
+envelope as its `cause`, and `via: "hook:<name>"`. Legion refuses an action
+whose `cause` chain already passes through the same hook on the same
+subject, and any chain deeper than 8. The refusal goes in the log, naming
+the hook.
 
 ## Open questions
 
@@ -132,6 +183,13 @@ whole machine:
 
 1. The envelope, and one place every action goes through, with the 26
    internal calls moved onto it.
-2. Hooks: `before` and `after`, `command` and `http`.
-3. TCP channels moved behind an adapter.
-4. A Supabase adapter.
+2. The action record, written as the last step of every action.
+3. Hooks: `after` (read from the record) first, then `before` with its time
+   limits and the loop check. `command` and `http`.
+4. TCP channels moved behind an adapter that reads the record.
+5. A Supabase adapter.
+
+The local AI work fits this: sessions with no add-on report what they're
+doing with a `session.report` action, and an OpenCode session's messages
+can go out through an adapter-like reader of the record that posts to
+`opencode serve`.
