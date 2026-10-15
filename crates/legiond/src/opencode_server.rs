@@ -80,14 +80,19 @@ pub async fn post(server: &OpenCodeServer, path: &str, body: &str) -> Result<Str
 
 /// The server lists every session it has ever stored, from every folder and
 /// run, so only one made since this session started, in its folder, is this
-/// run's. The newest such session's ID, if there is one.
+/// run's. Its ID, if there is one; two are an error, since which is this
+/// session's can't be told.
 pub fn this_runs_session(reply: &str, started_ms: i64, directory: &str) -> Result<Option<String>, String> {
     let reply: Value = serde_json::from_str(reply).map_err(|error| format!("not JSON: {error}"))?;
     let sessions = reply.get("data").and_then(Value::as_array).ok_or("no data list")?;
     let created = |session: &Value| session.pointer("/time/created").and_then(Value::as_f64).unwrap_or(0.0);
     let is_this_runs = |session: &&Value| created(session) >= started_ms as f64 && session.pointer("/location/directory").and_then(Value::as_str) == Some(directory);
-    let newest = sessions.iter().filter(is_this_runs).max_by(|first, second| created(first).total_cmp(&created(second)));
-    Ok(newest.and_then(|session| session.get("id")).and_then(Value::as_str).map(str::to_string))
+    let mut matches = sessions.iter().filter(is_this_runs);
+    match (matches.next(), matches.next()) {
+        (Some(_), Some(_)) => Err(format!("more than one OpenCode session in {directory} since this one started")),
+        (Some(session), None) => Ok(session.get("id").and_then(Value::as_str).map(str::to_string)),
+        (None, _) => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -111,8 +116,13 @@ mod tests {
             {"id":"ses_other","time":{"created":2000},"location":{"directory":"/elsewhere"}},
             {"id":"ses_a","time":{"created":1000},"location":{"directory":"/work"}},
             {"id":"ses_b","time":{"created":1500},"location":{"directory":"/work"}}]}"#;
-        assert_eq!(this_runs_session(list, 1000, "/work"), Ok(Some("ses_b".into())));
+        assert_eq!(this_runs_session(list, 1200, "/work"), Ok(Some("ses_b".into())));
         assert_eq!(this_runs_session(list, 1600, "/work"), Ok(None), "all older");
+        assert_eq!(
+            this_runs_session(list, 1000, "/work"),
+            Err("more than one OpenCode session in /work since this one started".to_string()),
+            "two matches can't be told apart"
+        );
         assert_eq!(this_runs_session(list, 0, "/nowhere"), Ok(None));
         assert_eq!(this_runs_session(r#"{"data":[]}"#, 0, "/work"), Ok(None));
         assert!(this_runs_session("nope", 0, "/work").is_err());
