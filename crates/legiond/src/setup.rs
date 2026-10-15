@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use legion_proto::{COMMANDER, NAME};
+use legion_proto::{COMMANDER, NAME, PIPELINE_END};
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_FILE_NAME: &str = "legion.json";
@@ -17,8 +17,6 @@ pub const OPERATORS_FOLDER_NAME: &str = "operators";
 pub const DEFINITION_FILE_NAME: &str = "definition.md";
 pub const OPERATOR_CONFIG_FILE_NAME: &str = "operator.json";
 pub const PIPELINE_FILE_EXTENSION: &str = ".yaml";
-/// Where a pipeline ends. A decision can also send work to the commander.
-pub const PIPELINE_END: &str = "done";
 pub const STARTING_PIPELINE_NAME: &str = "feature";
 pub use legion_proto::{NO_PIPELINE, OLD_NO_PIPELINE};
 /// What the commander and operators read about a pipeline with no decisions.

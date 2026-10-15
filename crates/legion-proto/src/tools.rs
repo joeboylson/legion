@@ -4,7 +4,7 @@
 //! command against the caller's role; the lists here only keep each session
 //! from seeing tools it can't use.
 
-use crate::{role_of_position, Command, EntryKind, LogFilter, NewEntry, Role, COMMANDER, NAME};
+use crate::{role_of_position, Command, EntryKind, LogFilter, NewEntry, Role, COMMANDER, NAME, PIPELINE_END};
 use serde_json::{json, Map, Value};
 
 /// Who gets a tool, by role.
@@ -176,6 +176,12 @@ pub const TOOLS: &[Tool] = &[
         arguments: &[MISSION],
     },
     Tool {
+        name: "mark_done",
+        description: "Mark a mission done when no operator will: Legion logs that you did and why, then finishes it like the finish tool, check included.",
+        audience: COMMANDER_ONLY,
+        arguments: &[MISSION, required("why", Text, "Why it's done without an operator reporting it.")],
+    },
+    Tool {
         name: "pause",
         description: "Pause a mission. Tells whoever holds it to stop at the next good point.",
         audience: COMMANDER_ONLY,
@@ -325,8 +331,13 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
         "share_tool" => Command::ToolShare { deployment, file: text_argument(arguments, "file")?, summary: text_argument(arguments, "summary")? },
         "suggest" => post(&deployment, EntryKind::Suggestion, None, None, text_argument(arguments, "text")?),
         "handoff" => {
-            let handoff_text = format!("→ {}: {}", text_argument(arguments, "next")?, text_argument(arguments, "note")?);
-            post(&deployment, EntryKind::Handoff, Some(required_mission(arguments)?), None, handoff_text)
+            let (next, note) = (text_argument(arguments, "next")?, text_argument(arguments, "note")?);
+            let mission = Some(required_mission(arguments)?);
+            // The table ends at done, so a handoff there is the done tool.
+            if next.trim().eq_ignore_ascii_case(PIPELINE_END) {
+                return Ok(post(&deployment, EntryKind::Done, mission, None, note));
+            }
+            post(&deployment, EntryKind::Handoff, mission, None, format!("→ {next}: {note}"))
         }
         "done" => post(&deployment, EntryKind::Done, Some(required_mission(arguments)?), None, text_argument(arguments, "summary")?),
         "blocked" => post(&deployment, EntryKind::Blocked, Some(required_mission(arguments)?), None, text_argument(arguments, "reason")?),
@@ -346,6 +357,7 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
         "stop" => Command::SessionStop { deployment, position: text_argument(arguments, "position")? },
         "screen" => Command::Screen { deployment, position: text_argument(arguments, "position")? },
         "finish" => Command::MissionFinish { deployment, mission: required_mission(arguments)? },
+        "mark_done" => Command::MissionMarkDone { deployment, mission: required_mission(arguments)?, why: text_argument(arguments, "why")? },
         "pause" => post(&deployment, EntryKind::Paused, Some(required_mission(arguments)?), None, text_argument(arguments, "why")?),
         "resume" => post(&deployment, EntryKind::Resumed, Some(required_mission(arguments)?), None, text_argument(arguments, "note")?),
         "answer" => {
@@ -448,6 +460,21 @@ mod tests {
         let call = command_for_tool_call("handoff", &json!({ "mission": 3, "next": "reviewer", "note": "built" }), "deployment", "builder").unwrap();
         let Command::Post { entry, .. } = call else { panic!() };
         assert_eq!((entry.kind, entry.mission, entry.text.as_str()), (EntryKind::Handoff, Some(3), "→ reviewer: built"));
+    }
+
+    #[test]
+    fn a_handoff_to_done_is_the_done_tool_with_the_note_as_summary() {
+        let call = command_for_tool_call("handoff", &json!({ "mission": 3, "next": " Done ", "note": "all clean" }), "deployment", "checker").unwrap();
+        let Command::Post { entry, .. } = call else { panic!() };
+        assert_eq!((entry.kind, entry.mission, entry.text.as_str()), (EntryKind::Done, Some(3), "all clean"));
+    }
+
+    #[test]
+    fn only_the_commander_marks_a_mission_done() {
+        let arguments = json!({ "mission": 3, "why": "the checker handed off to done" });
+        assert!(command_for_tool_call("mark_done", &arguments, "deployment", "builder").is_err());
+        let call = command_for_tool_call("mark_done", &arguments, "deployment", COMMANDER).unwrap();
+        assert!(matches!(call, Command::MissionMarkDone { mission: 3, why, .. } if why == "the checker handed off to done"));
     }
 
     #[test]

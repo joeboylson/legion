@@ -60,6 +60,11 @@ pub fn finish_entry(outcome: FinishOutcome, mission: u32, branch: &str, base: &s
     NewEntry { kind, mission: Some(mission), to, text, answers: None }
 }
 
+/// The log entry for a mission marked done by someone other than its operator.
+pub fn marked_done_entry(mission: u32, by: &str, why: &str) -> NewEntry {
+    NewEntry { kind: EntryKind::Done, mission: Some(mission), to: None, text: format!("marked done by {by}: {why}"), answers: None }
+}
+
 impl Daemon {
     pub fn add_mission(&self, deployment_key: &str, title: &str, body: &str) -> Result<Reply, String> {
         let (deployment_id, number) = {
@@ -94,6 +99,22 @@ impl Daemon {
         };
         let parts = self.mission_parts(deployment_key, number)?;
         Ok(Reply::Mission { mission, body, parts })
+    }
+
+    /// For a mission whose operator never reported it done: logs who marked it
+    /// and why, then finishes it the same way as the finish command.
+    pub fn mark_mission_done(&self, deployment_key: &str, by: &str, number: u32, why: &str) -> Result<Reply, String> {
+        let deployment_id = {
+            let state = self.state.lock().unwrap();
+            let (folder_index, deployment) = state.find_open_deployment(deployment_key)?;
+            let mission = state.folders[folder_index].store.mission(&deployment.id, number)?;
+            if mission.status == MissionStatus::Done {
+                return Err(format!("mission {number} is already done; finish it instead"));
+            }
+            deployment.id.clone()
+        };
+        self.post_entry(&deployment_id, by, marked_done_entry(number, by, why))?;
+        self.finish_mission(&deployment_id, number)
     }
 
     pub fn finish_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {
@@ -149,6 +170,13 @@ mod tests {
         let text = postmortem_request(7);
         assert!(text.starts_with("Mission 7 is finished."));
         assert!(text.contains("postmortem tool (mission 7)") && text.contains("log tool, mission 7"));
+    }
+
+    #[test]
+    fn a_mark_done_says_who_and_why() {
+        let entry = marked_done_entry(4, "commander", "the checker handed off to done");
+        assert_eq!((entry.kind, entry.mission, entry.to), (EntryKind::Done, Some(4), None));
+        assert_eq!(entry.text, "marked done by commander: the checker handed off to done");
     }
 
     #[test]

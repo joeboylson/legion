@@ -498,6 +498,14 @@ export const ACTIONS: readonly Action[] = [
     },
   },
   {
+    id: 'mission.done',
+    group: 'Mission',
+    label: 'Mark a mission done',
+    subjects: ['mission'],
+    steps: [deploymentStep(), missionStep('Every mission is done already.', mission => mission.status !== 'done'), longText('why', 'Why is it done?', 'The checker handed off to done and it was missed.')],
+    run: (answers) => send({ type: 'mission_mark_done', deployment: textOf(answers.deployment), mission: Number(answers.mission), why: textOf(answers.why) }, 'Marked done and finished.'),
+  },
+  {
     id: 'mission.finish',
     group: 'Mission',
     label: 'Finish a done mission',

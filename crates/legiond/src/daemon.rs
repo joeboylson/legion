@@ -328,6 +328,7 @@ impl Daemon {
             Command::MissionList { deployment } => self.list_missions(&deployment),
             Command::MissionRead { deployment, mission } => self.read_mission(&deployment, mission),
             Command::MissionFinish { deployment, mission } => self.finish_mission(&deployment, mission),
+            Command::MissionMarkDone { deployment, mission, why } => self.mark_mission_done(&deployment, &author, mission, &why),
             Command::SessionStart { deployment, operator, mission, part } => {
                 self.start_session_on(&deployment, StartRequest { operator: &operator, mission, part, position: None, starter: &author, first_prompt: None })
             }

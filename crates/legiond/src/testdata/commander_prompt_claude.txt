@@ -33,6 +33,7 @@ Legion's tools, which already know your deployment and position:
 - mcp__legion__stop: End a position's session. Takes the position, as the sessions tool lists it, not an operator name.
 - mcp__legion__screen: Read a position's screen.
 - mcp__legion__finish: Move the base branch up to a done mission's branch. Anything that doesn't go cleanly goes to the admin.
+- mcp__legion__mark_done: Mark a mission done when no operator will: Legion logs that you did and why, then finishes it like the finish tool, check included.
 - mcp__legion__pause: Pause a mission. Tells whoever holds it to stop at the next good point.
 - mcp__legion__resume: Resume a paused mission.
 - mcp__legion__answer: Pass the admin's answer back to whoever asked, by the question's entry number.

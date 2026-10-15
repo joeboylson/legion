@@ -92,12 +92,13 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         | Command::SessionStop { deployment, .. }
         | Command::Screen { deployment, .. }
         | Command::MissionFinish { deployment, .. }
+        | Command::MissionMarkDone { deployment, .. }
         | Command::MissionSplit { deployment, .. }
             if is_commander =>
         {
             Ok(Some(deployment))
         }
-        Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } | Command::MissionSplit { .. } => {
+        Command::SessionStart { .. } | Command::SessionStop { .. } | Command::Screen { .. } | Command::MissionFinish { .. } | Command::MissionMarkDone { .. } | Command::MissionSplit { .. } => {
             Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish or split missions"))
         }
         Command::MissionAdd { .. } => Err("only the admin creates missions; suggest one with the suggest tool".into()),
@@ -180,6 +181,14 @@ mod tests {
         for command in [start(), stop, finish, post(EntryKind::Note), post(EntryKind::Handoff)] {
             assert!(run_a_session_command_targets(Role::Strategist, &command).unwrap_err().contains("only suggests"));
         }
+    }
+
+    #[test]
+    fn only_the_commander_marks_a_mission_done() {
+        let mark_done = Command::MissionMarkDone { deployment: "r".into(), mission: 1, why: "w".into() };
+        assert_eq!(run_a_session_command_targets(Role::Commander, &mark_done), Ok(Some("r")));
+        assert!(run_a_session_command_targets(Role::Operator, &mark_done).is_err());
+        assert!(run_a_session_command_targets(Role::Strategist, &mark_done).unwrap_err().contains("only suggests"));
     }
 
     #[test]

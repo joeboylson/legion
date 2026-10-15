@@ -1,4 +1,4 @@
-//! `mission`: add, list, read, pause, resume or finish missions.
+//! `mission`: add, list, read, pause, resume, mark done or finish missions.
 
 use legion_proto::{Command, Deployment, EntryKind, LogFilter, Mission, MissionStatus, NewEntry, Reply, NAME};
 
@@ -104,6 +104,13 @@ pub async fn run(ctx: &mut Context, action: Option<MissionAction>, inputs: Missi
             let number = ctx.ask.pick(inputs.number, "Which mission?", mission_items(&all, |mission| mission.status == MissionStatus::Paused), "--number", "no mission is paused")?;
             let note = ctx.ask.long_text(inputs.text, inputs.file, "Anything to tell whoever picks it up?", "The review is done: go ahead.")?;
             post(ctx, &deployment, EntryKind::Resumed, number, note).await
+        }
+        MissionAction::Done => {
+            let not_done = |mission: &Mission| mission.status != MissionStatus::Done;
+            let number = ctx.ask.pick(inputs.number, "Which mission?", mission_items(&all, not_done), "--number", "every mission is done already")?;
+            let why = ctx.ask.long_text(inputs.text, inputs.file, "Why is it done?", "The checker handed off to done and it was missed.")?;
+            show(&ctx.send(Command::MissionMarkDone { deployment: deployment.id, mission: number, why }).await?);
+            Ok(())
         }
         MissionAction::Finish => {
             let number = ctx.ask.pick(inputs.number, "Which mission?", mission_items(&all, |mission| mission.status == MissionStatus::Done), "--number", "no mission is done yet")?;

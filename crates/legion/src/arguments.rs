@@ -93,12 +93,12 @@ pub enum Top {
         #[arg(long, short)]
         yes: bool,
     },
-    /// Add, list, read, pause, resume or finish missions.
+    /// Add, list, read, pause, resume, mark done or finish missions.
     Mission {
         action: Option<MissionAction>,
         #[arg(long)]
         title: Option<String>,
-        /// The mission, or the note for a pause or resume.
+        /// The mission, or the note for a pause or resume, or why it is marked done.
         #[arg(long, conflicts_with = "file")]
         text: Option<String>,
         /// The same, from a file.
@@ -233,6 +233,7 @@ choices!(MissionAction {
     Read => "Read a mission",
     Pause => "Pause a mission",
     Resume => "Resume a paused mission",
+    Done => "Mark a mission done, and finish it",
     Finish => "Finish a done mission",
 });
 choices!(SessionAction { Stop => "Stop a session", Watch => "Watch a session's screen", Key => "Press a key in a session" });

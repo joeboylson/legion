@@ -253,9 +253,12 @@ it's done and tells the commander once every part is in.
 says what it chose and why, and carries on. The decision shows with your
 escalations; answer it to change course (the answer goes back to the
 operator), or dismiss it.
-- **Operators:** `handoff`, `part_done`, `done`, `blocked`.
+- **Operators:** `handoff`, `part_done`, `done`, `blocked`. A handoff to
+  `done` counts as `done`, with its note as the summary.
 - **Commander:** `start` (optionally on a part), `split`, `stop`, `screen`,
-  `finish`, `pause`, `resume`, `answer`, `postmortem`.
+  `finish`, `mark_done` (done and finish in one, logged with who and why;
+  the admin's is `legion mission done` or the app's "Mark a mission done"),
+  `pause`, `resume`, `answer`, `postmortem`.
 - **Strategist:** `screen`, `suggest_speedup`, `postmortem`.
 
 legiond checks every call against the caller's role, whatever it sees.
