@@ -52,7 +52,7 @@ fn call_key(call_number: u64) -> String {
 }
 
 fn didnt_answer(reason: &str) -> String {
-    format!("{NAME} didn't answer: {reason}")
+    format!("Legion didn't answer: {reason}")
 }
 
 impl Client {
@@ -111,7 +111,8 @@ impl Client {
             Ok(Err(Failure::Dropped(reason))) => Err(didnt_answer(&reason)),
             Err(_) => {
                 self.websocket = None;
-                Err(didnt_answer(&format!("no reply within {} seconds", limit.as_secs_f64())))
+                // The call may have reached legiond and run, so say not to ask blindly again.
+                Err(didnt_answer(&format!("no reply within {} seconds; it may still be carried out, so check the log before asking again", limit.as_secs_f64())))
             }
         }
     }
@@ -239,7 +240,7 @@ mod tests {
         let legiond = fake_legiond("silent", vec![Behaviour::Silent]);
         let mut client = Client::at(legiond.socket_path.clone());
         let error = client.ask_within(Command::Ping, TEST_LIMIT).await.unwrap_err();
-        assert!(error.starts_with("legion didn't answer:"), "{error}");
+        assert!(error.starts_with("Legion didn't answer:"), "{error}");
         assert!(client.websocket.is_none(), "a timed-out connection must not be reused");
     }
 
@@ -266,13 +267,13 @@ mod tests {
         let legiond = fake_legiond("dropped-twice", vec![Behaviour::Drop, Behaviour::Drop]);
         let mut client = Client::at(legiond.socket_path.clone());
         let error = client.ask_within(Command::Ping, TEST_LIMIT).await.unwrap_err();
-        assert!(error.starts_with("legion didn't answer:"), "{error}");
+        assert!(error.starts_with("Legion didn't answer:"), "{error}");
     }
 
     #[tokio::test]
     async fn no_legiond_is_an_error_not_a_hang() {
         let mut client = Client::at(PathBuf::from("/tmp/lgc-nothing-here.sock"));
         let error = client.ask_within(Command::Ping, TEST_LIMIT).await.unwrap_err();
-        assert!(error.starts_with("legion didn't answer: can't reach"), "{error}");
+        assert!(error.starts_with("Legion didn't answer: can't reach"), "{error}");
     }
 }

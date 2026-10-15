@@ -250,7 +250,9 @@ tool's first comment line.
 - **Makes room.** When every copy of an operator is taken and one is idle,
   starting it again ends the idle one. It won't start a second copy on a
   mission or part one already holds; it says to message that one instead.
-- **Limits and timeouts.** At most `maxBusySessions` busy sessions on the
+- **Limits and timeouts.** A tool call errors after 60 seconds with no
+  answer (`finish` after 10 minutes); a dropped connection to legiond is
+  tried once more, without running the call twice. At most `maxBusySessions` busy sessions on the
   machine (default 6); an unanswered permission request is refused after
   `permissionTimeoutMinutes` (default 30). Both are in
   `~/.local/share/legion/settings.json`, read each time they're needed, so a

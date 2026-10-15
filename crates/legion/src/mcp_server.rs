@@ -139,7 +139,7 @@ mod tests {
         let answers: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         assert_eq!(answers.len(), 2);
         assert_eq!(answers[0]["result"]["isError"], true);
-        assert!(answers[0]["result"]["content"][0]["text"].as_str().unwrap().starts_with("legion didn't answer:"));
+        assert!(answers[0]["result"]["content"][0]["text"].as_str().unwrap().starts_with("Legion didn't answer:"));
         assert_eq!(answers[1]["result"], json!({}));
     }
 
