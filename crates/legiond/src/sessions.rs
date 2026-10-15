@@ -15,7 +15,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use crate::{
     constants::{
         ADDON_PERMISSION_MODE_ENV, ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
-        CHILD_SESSION_MARKERS, ENDED_SCREEN_DRAIN_LIMIT, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
+        CHILD_SESSION_MARKERS, ENDED_SCREEN_DRAIN_LIMIT, ENDED_STDERR_LINES, HINDSIGHT_NO_CAPTURE, STDERR_FOLDER_NAME, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
     context_handover::{autocompact_percent, HandoverPhase},
@@ -175,9 +175,17 @@ fn claude_command(daemon: &Daemon, request: &SpawnRequest, arguments: &[String],
     command
 }
 
-/// A template's command, with the three settings `legion` reads.
-fn template_command(daemon: &Daemon, filled: &FilledCommand) -> CommandBuilder {
-    let mut command = CommandBuilder::new(&filled.command);
+/// Where a template session's stderr goes: its terminal shows only the screen, which holds a status bar by the end.
+fn stderr_path(daemon: &Daemon, session_id: &str) -> PathBuf {
+    daemon.config.data_folder.join(STDERR_FOLDER_NAME).join(format!("{session_id}.txt"))
+}
+
+/// A template's command, with the three settings `legion` reads, run so its stderr lands in a file.
+fn template_command(daemon: &Daemon, filled: &FilledCommand, session_id: &str) -> CommandBuilder {
+    let mut command = CommandBuilder::new("sh");
+    command.args(["-c", r#"exec 2>>"$0"; exec "$@""#]);
+    command.arg(stderr_path(daemon, session_id));
+    command.arg(&filled.command);
     command.args(&filled.args);
     command.env(ENV_SOCKET, &daemon.config.socket_path);
     filled.env.iter().for_each(|(name, value)| command.env(name, value));
@@ -189,7 +197,7 @@ fn session_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) ->
     let config = &daemon.config;
     let mut command = match &request.program {
         SessionProgram::Claude(arguments) => claude_command(daemon, request, arguments, session_id),
-        SessionProgram::Template(filled) => template_command(daemon, filled),
+        SessionProgram::Template(filled) => template_command(daemon, filled, session_id),
     };
     command.cwd(&request.working_folder);
     command.env("TERM", TERMINAL_TYPE);
@@ -211,12 +219,30 @@ fn ended_with_last_line(how_it_ended: String, screen: &str) -> String {
     }
 }
 
+/// Why a session ended, for the log. One Legion stops on purpose, and a
+/// Claude session, say only its exit status. A template that ended on its own
+/// with an error says what it wrote to stderr, else the last line on its screen.
+fn ended_reason(how_it_ended: String, is_stopping: bool, reports_itself: bool, stderr: &str, screen: &str) -> String {
+    if is_stopping || !reports_itself || how_it_ended == "exit status 0" {
+        return how_it_ended;
+    }
+    let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    match lines.len() {
+        0 => ended_with_last_line(how_it_ended, screen),
+        count => format!("{how_it_ended}: {}", lines[count.saturating_sub(ENDED_STDERR_LINES)..].join(" / ")),
+    }
+}
+
 /// Starts a session. Its terminal is read, and its end noticed, on threads
 /// of their own. The caller must not hold the daemon's lock.
 pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<SessionInfo, String> {
     let terminal_size = PtySize { rows: TERMINAL_ROWS, cols: TERMINAL_COLUMNS, pixel_width: 0, pixel_height: 0 };
     let terminal = native_pty_system().openpty(terminal_size).map_err(|error| format!("can't open a terminal: {error}"))?;
     let session_id = new_id();
+    if request.program.reports_itself() {
+        let folder = stderr_path(daemon, &session_id).with_file_name("");
+        std::fs::create_dir_all(&folder).map_err(|error| format!("can't create {}: {error}", folder.display()))?;
+    }
     let command = session_command(daemon, &request, &session_id);
     let mut child = terminal
         .slave
@@ -285,6 +311,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     });
 
     let waiting_daemon = daemon.clone();
+    let stderr_file = stderr_path(daemon, &session_id);
     std::thread::spawn(move || {
         let how_it_ended = match child.wait() {
             Ok(status) => format!("exit status {}", status.exit_code()),
@@ -293,6 +320,8 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         if reports_itself {
             let _ = screen_drained_signal.recv_timeout(ENDED_SCREEN_DRAIN_LIMIT);
         }
+        let stderr = std::fs::read_to_string(&stderr_file).unwrap_or_default();
+        let _ = std::fs::remove_file(&stderr_file);
         let ended_session = {
             let mut state = waiting_daemon.state.lock().unwrap();
             if !waiting_daemon.is_shutting_down.load(Ordering::SeqCst) {
@@ -305,10 +334,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             state.sessions.remove(&session_id)
         };
         if let Some(session) = ended_session {
-            let how_it_ended = match session.reports_itself {
-                true => ended_with_last_line(how_it_ended, &session.screen_text()),
-                false => how_it_ended,
-            };
+            let how_it_ended = ended_reason(how_it_ended, session.is_stopping, session.reports_itself, &stderr, &session.screen_text());
             waiting_daemon.handle_session_end(&session, &how_it_ended);
         }
     });
@@ -324,6 +350,33 @@ mod tests {
         let screen = "Starting\nLegion's tools didn't connect to OpenCode in 60 seconds: refused\n  \n";
         assert_eq!(ended_with_last_line("exit status 1".into(), screen), "exit status 1: Legion's tools didn't connect to OpenCode in 60 seconds: refused");
         assert_eq!(ended_with_last_line("exit status 0".into(), " \n"), "exit status 0");
+    }
+
+    const STATUS_BAR: &str = "esc interrupt · legion · qwen ctrl+p menu";
+
+    #[test]
+    fn a_stopped_session_says_only_its_exit_status_on_any_harness() {
+        assert_eq!(ended_reason("exit status 1".into(), true, true, "boom\n", STATUS_BAR), "exit status 1");
+        assert_eq!(ended_reason("exit status 1".into(), true, false, "", STATUS_BAR), "exit status 1");
+    }
+
+    #[test]
+    fn a_crashed_template_gives_its_stderr_over_its_screen() {
+        let stderr = "\nopencode isn't on PATH\n  \n";
+        assert_eq!(ended_reason("exit status 1".into(), false, true, stderr, STATUS_BAR), "exit status 1: opencode isn't on PATH");
+        let long = "a\nb\nc\nd\n";
+        assert_eq!(ended_reason("exit status 1".into(), false, true, long, STATUS_BAR), "exit status 1: b / c / d");
+    }
+
+    #[test]
+    fn a_crashed_template_without_stderr_gives_its_screen_line() {
+        assert_eq!(ended_reason("exit status 1".into(), false, true, " \n", "Starting\nfailed to start\n"), "exit status 1: failed to start");
+    }
+
+    #[test]
+    fn claude_and_a_clean_exit_are_unchanged() {
+        assert_eq!(ended_reason("exit status 1".into(), false, false, "x", "y"), "exit status 1");
+        assert_eq!(ended_reason("exit status 0".into(), false, true, "x", STATUS_BAR), "exit status 0");
     }
 
     #[test]

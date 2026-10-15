@@ -49,6 +49,11 @@ pub const TERMINAL_READ_BUFFER_BYTES: usize = 8192;
 /// screen, which is the only place it says why it ended.
 pub const ENDED_SCREEN_DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Where a template session's stderr is kept until it ends, under the data folder.
+pub const STDERR_FOLDER_NAME: &str = "stderr";
+/// How many of a template's last stderr lines say why it ended.
+pub const ENDED_STDERR_LINES: usize = 3;
+
 pub const DEFAULT_MAX_BUSY_SESSIONS: usize = 6;
 pub const DEFAULT_PERMISSION_TIMEOUT_MINUTES: u64 = 30;
 /// Where a browser opens the app: http://127.0.0.1:<port>. 0 turns it off.
