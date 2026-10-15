@@ -245,8 +245,15 @@ impl Daemon {
     fn end_for_fresh_start(&self, session_id: &str) {
         let mut state = self.state.lock().unwrap();
         let Some(session) = state.sessions.get_mut(session_id) else { return };
+        let was_wrapped_up_mid_turn = session.wrap_up.is_some();
+        let (deployment, position, mission) = (session.deployment.clone(), session.position.clone(), session.mission);
         if let Err(error) = session.stop(RESTARTED_FRESH_REASON) {
             eprintln!("{LEGION}d: {error}");
+        }
+        drop(state);
+        if was_wrapped_up_mid_turn {
+            let text = format!("{position} ended its turn after being asked to wrap up: handing over to a fresh conversation");
+            self.post_legion_entry(&deployment, NewEntry { kind: legion_proto::EntryKind::Activity, mission, to: None, text, answers: None });
         }
     }
 

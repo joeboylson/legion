@@ -36,6 +36,7 @@ mod mission_parts;
 mod mission_status;
 mod model_choice;
 mod naming;
+mod mid_turn_handover;
 mod opencode_context;
 mod opencode_delivery;
 mod opencode_events;

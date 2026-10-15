@@ -48,16 +48,33 @@ pub fn autocompact_percent(clear_at: u8) -> u8 {
     clear_at.saturating_add(AUTOCOMPACT_POINTS_PAST_CLEAR_AT).min(AUTOCOMPACT_PERCENT_CAP)
 }
 
-/// What the session is asked to do before it's started again.
-pub fn note_request(position: &str, mission: Option<u32>, percent: u8, clear_at: u8) -> String {
-    let full = format!("Your conversation is {percent}% full; this squad clears it at {clear_at}%.");
-    let note = match (position, mission) {
+fn note_instruction(position: &str, mission: Option<u32>) -> String {
+    match (position, mission) {
         (COMMANDER, _) => "add a note to the deployment log with the note tool".to_string(),
         (_, Some(number)) => format!("add a note to mission {number} with the note tool"),
         (_, None) => "add a note with the note tool".to_string(),
-    };
+    }
+}
+
+fn percent_full(percent: u8, clear_at: u8) -> String {
+    format!("Your conversation is {percent}% full; this squad clears it at {clear_at}%.")
+}
+
+/// What the session is asked to do before it's started again.
+pub fn note_request(position: &str, mission: Option<u32>, percent: u8, clear_at: u8) -> String {
+    let full = percent_full(percent, clear_at);
+    let note = note_instruction(position, mission);
     format!(
         "{full} Before anything else, {note}, starting 'Handoff:': what's done, what's next, the files and decisions that matter, and anything you'd hate to lose. Then end your turn. Legion will start you again with a fresh conversation that reads that note."
+    )
+}
+
+/// What a session is told when its conversation fills up in the middle of a turn.
+pub fn wrap_up_request(position: &str, mission: Option<u32>, percent: u8, clear_at: u8) -> String {
+    let full = percent_full(percent, clear_at);
+    let note = note_instruction(position, mission);
+    format!(
+        "{full} Wrap up now: commit what builds and passes, then {note}, starting 'Handoff:': what's done, what's next, the files and decisions that matter. Then end your turn; if it's still running soon, Legion stops it. Legion will start you again with a fresh conversation that reads that note."
     )
 }
 

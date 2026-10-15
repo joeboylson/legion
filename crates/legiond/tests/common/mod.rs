@@ -10,7 +10,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     process::{Child, Command as Process, Stdio},
@@ -334,6 +334,33 @@ pub fn serve_opencode_listing_late(port: u16, tag: String, misses: Arc<AtomicUsi
                 }
                 false => answer("404 Not Found", ""),
             }
+        } else {
+            answer("404 Not Found", "")
+        }
+    });
+}
+
+/// Like `serve_opencode_with_context`, but the tokens can grow while a turn runs, and an
+/// interrupt (kept with the prompts) ends the turn, as OpenCode's does.
+pub fn serve_opencode_mid_turn(port: u16, tag: String, tokens: Arc<AtomicU64>, is_running: Arc<AtomicBool>, requests: Arc<Mutex<Vec<String>>>) {
+    serve_http(port, move |request| {
+        if request.starts_with("GET /api/session/active ") {
+            let running = is_running.load(Ordering::SeqCst);
+            answer("200 OK", if running { r#"{"data":{"ses_1":{"type":"running"}}}"# } else { r#"{"data":{}}"# })
+        } else if request.starts_with("GET /api/session?search=") {
+            session_list(&tag)
+        } else if request.starts_with("GET /api/session/ses_1/message?") {
+            let used = tokens.load(Ordering::SeqCst);
+            let step = format!(r#"{{"data":[{{"type":"assistant","model":{{"id":"m","providerID":"p"}},"tokens":{{"input":{used},"output":0,"reasoning":0,"cache":{{"read":0,"write":0}}}}}}]}}"#);
+            answer("200 OK", &step)
+        } else if request.starts_with("GET /api/model ") {
+            answer("200 OK", r#"{"data":[{"id":"m","providerID":"p","limit":{"context":100000,"output":8192}}]}"#)
+        } else if request.starts_with("POST /api/session/ses_1/prompt ") || request.starts_with("POST /api/session/ses_1/interrupt ") {
+            requests.lock().unwrap().push(request.to_string());
+            if request.contains("/interrupt ") {
+                is_running.store(false, Ordering::SeqCst);
+            }
+            answer("200 OK", "{}")
         } else {
             answer("404 Not Found", "")
         }

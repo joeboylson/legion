@@ -331,7 +331,12 @@ tool's first comment line.
   again fresh, reading it. Claude Code's own summary is set 10 points later
   as a backstop. An OpenCode session hands over the same way: Legion reads
   how full it is from its server (its newest step's tokens over the model's
-  context size), and OpenCode compacts it by itself as the backstop.
+  context size), and OpenCode compacts it by itself as the backstop. An
+  OpenCode turn can run a whole task, so Legion checks on every poll, not
+  only when a turn ends: past `clearAt` mid-turn, it tells the session to
+  commit what builds and hand over. If the turn is still running 2 minutes
+  later, or the conversation is 10 points past `clearAt`, Legion stops the
+  turn, and the fresh conversation starts as usual.
 - **Checks on long turns.** After 5 minutes of work, and every 5 after, the
   commander is asked to read that operator's screen.
 - **Points out stalled work** to an idle commander: a handoff no one picked

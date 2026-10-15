@@ -74,5 +74,6 @@ impl Daemon {
         }
         let report = ActivityReport { activity, detail: None, addon_version: None, model: None, context_percent: answer.context_percent, final_answer: None };
         self.record_activity(&question.session_id, report);
+        self.hand_over_mid_turn(&question.session_id);
     }
 }

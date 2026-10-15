@@ -105,6 +105,10 @@ pub const DEFAULT_TEMPLATE_CLEAR_AT_PERCENT: u8 = 60;
 /// conversation this many points past clearAt, never past the cap.
 pub const AUTOCOMPACT_POINTS_PAST_CLEAR_AT: u8 = 10;
 pub const AUTOCOMPACT_PERCENT_CAP: u8 = 95;
+/// An OpenCode session asked to wrap up mid-turn that is still in that turn this long
+/// after, or this many points past clearAt, has its turn stopped, before its own compaction starts.
+pub const OPENCODE_WRAP_UP_LIMIT: Duration = Duration::from_secs(120);
+pub const OPENCODE_STOP_POINTS_PAST_CLEAR_AT: u8 = 10;
 /// Claude Code reads its summarize-at percentage from this.
 pub const AUTOCOMPACT_PERCENT_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
 /// A commander that ends by itself again this soon after a restart is left down.

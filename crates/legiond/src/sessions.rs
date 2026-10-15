@@ -21,6 +21,7 @@ use crate::{
     context_handover::{autocompact_percent, HandoverPhase},
     daemon::Daemon,
     harness::FilledCommand,
+    mid_turn_handover::WrapUp,
     ids::new_id,
     opencode_server::OpenCodeServer,
     opencode_state::Progress,
@@ -53,6 +54,8 @@ pub struct Session {
     /// The percentage it hands over to a fresh conversation at; None for never.
     pub clear_at: Option<u8>,
     pub handover: HandoverPhase,
+    /// Set when it was asked to wrap up in the middle of a turn.
+    pub wrap_up: Option<WrapUp>,
     /// When its current turn began, in milliseconds since 1970.
     pub turn_started_ms: Option<i64>,
     /// When the commander was last asked to look in on it.
@@ -282,6 +285,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         context_percent: None,
         clear_at: request.clear_at,
         handover: HandoverPhase::Working,
+        wrap_up: None,
         turn_started_ms: None,
         last_check_in_ms: None,
         permission_asked_at: None,
