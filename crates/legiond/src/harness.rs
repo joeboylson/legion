@@ -441,6 +441,7 @@ mod tests {
         assert!(script.contains(r#"--model "$2" --agent legion --prompt "$1""#), "{script}");
         assert!(!script.contains("s3cret") && !script.contains("urandom"), "Legion picks the password, the script never does: {script}");
         assert_eq!(filled.env["OPENCODE_PASSWORD"], "s3cret");
+        assert_eq!(filled.env["BUN_CONFIG_HTTP_IDLE_TIMEOUT"], (STEP_WAIT_MS / 1000).to_string(), "Bun's own 360 second silence limit is lifted to the same 30 minutes");
         assert!(uses_blank(&harness, "port") && uses_blank(&harness, "password"));
         assert!(script.contains(r#"-d '{"title":"tag-9"}'"#) && script.contains("--session \"$sid\""), "{script}");
         assert!(!script.contains("qwen3") && !script.contains("spark-fast"), "names from legion.json never become shell: {script}");

@@ -91,9 +91,9 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     - `chunkTimeout`: longest quiet gap between pieces of the reply. Default
       **300000**. This is the "slow to write" limit.
     - `timeout`: the whole request. No default (none). Left unset.
-    - OpenCode switches Bun's own fetch timeout off (`timeout: false`), so
-      Bun's limit never applies. vLLM has no per-request time limit by
-      default; its server wasn't inspected here.
+    - These are OpenCode's own timers. Bun's fetch has its own limit, which
+      item 15 found. vLLM has no per-request time limit by default; its
+      server wasn't inspected here.
 
     The template sets `headerTimeout` and `chunkTimeout` to **1800000 (30
     minutes)**. Nothing argued for less: a 30 words/s model writes tens of
@@ -109,6 +109,39 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     provider that answers after 8 seconds, with `headerTimeout` 3000, gave
     "Timed out waiting for response headers" and retried; with 20000 the
     reply was read. Under a throwaway HOME, `opencode serve`.
+
+15. **The real 6-minute limit (mission 10):** Bun's own fetch gives up on a
+    request that is silent for **360 seconds**, with `TimeoutError: The
+    operation timed out.` (code 23), the "Transport: The operation timed
+    out" Legion saw at 5m59s. `headerTimeout`, `chunkTimeout` and `timeout`
+    don't touch it: with the provider settings at 3600000, `false`, or
+    1800000 plus `timeout: false`, a model silent for 420 seconds was still
+    cut at 362 seconds (the retry arrived then); with `headerTimeout` 100000
+    it was cut at about 100 seconds, so the settings do reach the request.
+    - **Why:** for `@ai-sdk/openai-compatible` OpenCode uses its own client,
+      which calls `fetch` without `timeout: false`. Bun's default applies.
+      A bare Bun `fetch` (run with `BUN_BE_BUN=1 opencode run script.js`)
+      dies at 360 seconds without `timeout: false` and lives with it.
+    - **Only silence counts.** A reply that sends something at least every
+      360 seconds (even an empty chunk) was not cut: a provider that sent a
+      keepalive chunk every 20 seconds finished at 482 seconds. A model that
+      is busy reading a big prompt sends nothing, so it hits the limit.
+    - **Fix:** the template sets the environment variable
+      `BUN_CONFIG_HTTP_IDLE_TIMEOUT` to `1800` (seconds, the same 30
+      minutes). Not a setting in OpenCode's config: it has no key that
+      reaches this request. Other ways tried and failed: the package name
+      `aisdk:@ai-sdk/openai-compatible` (still cut at 362 s) and a preload
+      script through `BUN_OPTIONS` or `bunfig.toml` (the compiled opencode
+      ignores both).
+    - **Backup:** a small local proxy between OpenCode and the model that
+      sends the stream's headers at once and a `: ping` comment every
+      minute until the model answers, then passes the answer through. It
+      carried a 420 second silent model to a reply. Not needed while the
+      variable works.
+
+    *Checked:* fake provider that stays silent for 420 and 450 seconds
+    (before the headers, and after them), `opencode serve` under a throwaway
+    HOME, request times read from the fake's own log.
 
 **First prompt races the tool server.** With `--standalone`, the first prompt
 was sent before `legion mcp` connected. That turn had no `legion_*` tools, so

@@ -10,7 +10,8 @@
   ],
   "env": {
     "OPENCODE_CONFIG": "{configFile}",
-    "OPENCODE_PASSWORD": "{password}"
+    "OPENCODE_PASSWORD": "{password}",
+    "BUN_CONFIG_HTTP_IDLE_TIMEOUT": "1800"
   },
   "toolName": "legion_{tool}",
   "tools": "mcp",
