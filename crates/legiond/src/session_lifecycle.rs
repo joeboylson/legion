@@ -12,7 +12,7 @@ use crate::{
     setup::{read_operator, read_pipeline},
     check_ins::{check_in_request, is_check_in_due},
     context_handover::{fresh_start_prompt, HandoverPhase},
-    constants::{DEPLOYMENT_CLOSED_REASON, IDLE_COPY_FREED_REASON, MISSION_FINISHED_REASON, PART_REMOVED_REASON, RESTARTED_FRESH_REASON, STOPPED_ON_REQUEST_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
+    constants::{MISSION_FINISHED_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
     naming::operator_of_position,
     sessions::Session,
@@ -91,7 +91,7 @@ impl Daemon {
             return self.start_fresh(session);
         }
         // The strategist isn't the commander's to start; Legion's timer brings it back.
-        if session.is_stopping || !is_deployment_open || session.position == STRATEGIST {
+        if session.is_stopping() || !is_deployment_open || session.position == STRATEGIST {
             return;
         }
         if session.position != COMMANDER {
@@ -283,10 +283,11 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{DEPLOYMENT_CLOSED_REASON, PART_REMOVED_REASON, RESTARTED_FRESH_REASON, STOPPED_ON_REQUEST_REASON};
 
     #[test]
     fn a_session_legion_stopped_says_why_and_no_exit_status() {
-        for reason in [MISSION_FINISHED_REASON, RESTARTED_FRESH_REASON, STOPPED_ON_REQUEST_REASON, DEPLOYMENT_CLOSED_REASON, PART_REMOVED_REASON, IDLE_COPY_FREED_REASON] {
+        for reason in [MISSION_FINISHED_REASON, RESTARTED_FRESH_REASON, STOPPED_ON_REQUEST_REASON, DEPLOYMENT_CLOSED_REASON, PART_REMOVED_REASON] {
             for how_it_ended in ["exit status 1", "exit status 129: boom"] {
                 let text = ended_text("builder", Some(reason), how_it_ended);
                 assert_eq!(text, format!("builder's session stopped ({reason})"));

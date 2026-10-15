@@ -53,8 +53,6 @@ pub struct Session {
     /// Since when it has waited on a permission question.
     pub permission_asked_at: Option<Instant>,
     /// Set when Legion ends it on purpose, so its end isn't treated as a crash.
-    pub is_stopping: bool,
-    /// Why Legion stopped it, for the log.
     pub stopped_because: Option<String>,
     pub started_at: Instant,
     /// Whether the admin has been told it seems stuck before starting.
@@ -98,9 +96,12 @@ impl Session {
             .map_err(|error| format!("can't type into the session: {error}"))
     }
 
+    pub fn is_stopping(&self) -> bool {
+        self.stopped_because.is_some()
+    }
+
     /// Ends it on purpose, for the reason given.
     pub fn stop(&mut self, reason: &str) -> Result<(), String> {
-        self.is_stopping = true;
         self.stopped_because = Some(reason.to_string());
         self.killer.kill().map_err(|error| format!("can't end the session: {error}"))
     }
@@ -274,7 +275,6 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         turn_started_ms: None,
         last_check_in_ms: None,
         permission_asked_at: None,
-        is_stopping: false,
         stopped_because: None,
         started_at: Instant::now(),
         is_reported_stuck: false,

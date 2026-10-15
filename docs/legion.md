@@ -139,6 +139,10 @@ Legion fills these blanks in `command`, `args`, `env` and `configFile`:
 What a harness command writes to stderr goes to the log if it ends with an
 error, not to its screen, so print error lines there.
 
+A session Legion stops (mission finished, fresh restart, stop, deployment
+closed, part removed) logs "stopped (why)" with no exit status. One that ends
+on its own still logs its exit status and stderr.
+
 Every session gets `LEGION_DEPLOYMENT`, `LEGION_POSITION` and
 `LEGION_SOCKET` in its environment, so `legion handoff` and the rest work in
 it.

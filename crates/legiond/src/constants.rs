@@ -58,7 +58,6 @@ pub const RESTARTED_FRESH_REASON: &str = "restarted with a fresh conversation";
 pub const STOPPED_ON_REQUEST_REASON: &str = "stopped on request";
 pub const DEPLOYMENT_CLOSED_REASON: &str = "deployment closed";
 pub const PART_REMOVED_REASON: &str = "its mission part was removed";
-pub const IDLE_COPY_FREED_REASON: &str = "idle copy freed for another session";
 /// How many of a template's last stderr lines say why it ended.
 pub const ENDED_STDERR_LINES: usize = 3;
 
