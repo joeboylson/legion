@@ -456,6 +456,21 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_opencode_template_asks_the_model_not_to_think_and_for_parallel_tool_calls() {
+        let folder = scratch_folder();
+        write_harness(&folder, "opencode", include_str!("../../../templates/harnesses/opencode.json"));
+        let harness = read_harness(&folder, "opencode").unwrap();
+        let blanks = Blanks { system_prompt_file: Some("/p/d-builder.md".into()), port: Some("4242".into()), password: Some("s3cret".into()), session: Some("tag-9".into()), ..opencode_blanks() };
+        let filled = fill(&harness, &blanks).unwrap();
+        let config: Value = serde_json::from_str(filled.config_file.as_deref().unwrap()).unwrap();
+        let body = &config["providers"]["spark-fast"]["models"]["qwen3"]["body"];
+        assert_eq!(body["chat_template_kwargs"], serde_json::json!({"enable_thinking": false}));
+        assert_eq!(body["parallel_tool_calls"], true);
+        assert!(body.get("reasoning_effort").is_none(), "no thinking effort is requested");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
     fn an_unknown_blank_is_refused_naming_it_and_the_file() {
         let folder = scratch_folder();
         let path = write_harness(&folder, "pi", r#"{"name": "pi", "command": "pi", "args": [["--x", "{harnessConfigFile}"]], "tools": "commands"}"#);

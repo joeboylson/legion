@@ -30,7 +30,10 @@
           "{model}": {
             "name": "{model}",
             "body": {
-              "parallel_tool_calls": true
+              "parallel_tool_calls": true,
+              "chat_template_kwargs": {
+                "enable_thinking": false
+              }
             }
           }
         }

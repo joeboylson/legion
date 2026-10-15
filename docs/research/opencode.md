@@ -193,3 +193,23 @@ read four files: its OpenCode session log (`session_message`, assistant
 rows) has steps with 4 reads together and with 4 mixed calls together
 (`shell` and 3 `glob`). The step habits come from the extra section in its
 instructions (`crates/legiond/src/prompts.rs`).
+
+## Thinking
+
+vLLM on the Spark thinks by default (a plain request came back with
+`reasoning` text), and `reasoning_effort` only makes it think more. The
+template sets the model's raw `body` to
+`"chat_template_kwargs": {"enable_thinking": false}`, next to
+`parallel_tool_calls`. A direct request with `reasoning_effort: "medium"` and
+`enable_thinking: false` came back with no `reasoning`.
+
+OpenCode 2.0.25 sent no `reasoning_effort` in any request I captured (`run`,
+`mini --server`, and the template through a throwaway Legion, on both
+`qwen3.6-35b-a3b` and `qwen3.8-27b`); the session rows say variant `default`.
+I couldn't make it send `medium`, so nothing is dropped; if it ever does, a
+model `variant` is the place to override it.
+
+Proof: a capture proxy in front of the Spark logged the template's requests.
+Each body had `chat_template_kwargs: {"enable_thinking": false}` and
+`parallel_tool_calls: true`, and no `reasoning_effort`. The OpenCode session
+log of that run held only `text` and `tool` blocks, no `reasoning`.
