@@ -81,7 +81,7 @@ async fn a_template_session_starts_its_filled_command() {
     let tools = std::fs::read_to_string(legion.data_file(&format!("prompts/{deployment}-echoer.tools.json"))).unwrap();
     assert!(tools.contains("\"mcpServers\""), "{tools}");
     let prompt = std::fs::read_to_string(legion.data_file(&format!("prompts/{deployment}-echoer.md"))).unwrap();
-    assert!(prompt.contains("- legion_handoff: ") && !prompt.contains("mcp__legion__"), "the instructions use the template's tool names");
+    assert!(prompt.contains("are in your tool list as legion_<name>.") && !prompt.contains("mcp__legion__"), "the instructions use the template's tool names");
 
     let sessions = legion.sessions(&deployment).await;
     let operator = sessions.iter().find(|session| session.position == OPERATOR).unwrap();
