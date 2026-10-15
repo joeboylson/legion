@@ -200,16 +200,18 @@ vLLM on the Spark thinks by default (a plain request came back with
 `reasoning` text), and `reasoning_effort` only makes it think more. The
 template sets the model's raw `body` to
 `"chat_template_kwargs": {"enable_thinking": false}`, next to
-`parallel_tool_calls`. A direct request with `reasoning_effort: "medium"` and
-`enable_thinking: false` came back with no `reasoning`.
+`parallel_tool_calls` and `"reasoning_effort": "none"`. A direct request with
+`reasoning_effort: "medium"` and `enable_thinking: false` came back with no `reasoning`.
 
-OpenCode 2.0.25 sent no `reasoning_effort` in any request I captured (`run`,
-`mini --server`, and the template through a throwaway Legion, on both
-`qwen3.6-35b-a3b` and `qwen3.8-27b`); the session rows say variant `default`.
-I couldn't make it send `medium`, so nothing is dropped; if it ever does, a
-model `variant` is the place to override it.
+OpenCode sends `reasoning_effort` only from a saved TUI variant, kept in
+`~/.local/state/opencode/model.json` (live:
+`{"variant":{"spark-big/qwen3.8-27b":"medium"}}`). Sessions under the real
+HOME pick it up and show `[medium]`; a throwaway HOME has no such file, which
+is why my captures had none. The model `body` is merged over it, so
+`"reasoning_effort": "none"` in the body wins (the checker saw `medium`
+replaced by `none`, and vLLM replied with `reasoning_tokens` 0).
 
 Proof: a capture proxy in front of the Spark logged the template's requests.
 Each body had `chat_template_kwargs: {"enable_thinking": false}` and
-`parallel_tool_calls: true`, and no `reasoning_effort`. The OpenCode session
+`parallel_tool_calls: true`, and (in a throwaway HOME) no `reasoning_effort`. The OpenCode session
 log of that run held only `text` and `tool` blocks, no `reasoning`.

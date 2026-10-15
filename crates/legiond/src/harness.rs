@@ -466,7 +466,7 @@ mod tests {
         let body = &config["providers"]["spark-fast"]["models"]["qwen3"]["body"];
         assert_eq!(body["chat_template_kwargs"], serde_json::json!({"enable_thinking": false}));
         assert_eq!(body["parallel_tool_calls"], true);
-        assert!(body.get("reasoning_effort").is_none(), "no thinking effort is requested");
+        assert_eq!(body["reasoning_effort"], "none", "a saved TUI variant like medium must not reach the model");
         fs::remove_dir_all(&folder).unwrap();
     }
 
