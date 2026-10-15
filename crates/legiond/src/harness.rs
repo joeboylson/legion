@@ -117,23 +117,6 @@ fn harnesses_folder(folder: &Path) -> PathBuf {
     setup_folder(folder).join(HARNESSES_FOLDER_NAME)
 }
 
-/// The harness templates in the folder, by name. They're read, and checked,
-/// only when used. No harnesses folder means none.
-// Sessions read one template by name; listing them waits for the app's model screens.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn harness_names(folder: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(harnesses_folder(folder))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|item| item.path().is_file())
-        .filter_map(|item| item.file_name().to_string_lossy().strip_suffix(HARNESS_FILE_EXTENSION).map(str::to_string))
-        .filter(|name| !name.is_empty() && !name.starts_with('.'))
-        .collect();
-    names.sort();
-    names
-}
-
 /// A name is a file name in the harnesses folder, never a path out of it.
 fn is_harness_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\'])
@@ -559,13 +542,4 @@ mod tests {
         assert_eq!(fill(&harness, &one_missing).unwrap_err(), "harness pi: blank {modelProvider} has no value");
     }
 
-    #[test]
-    fn harness_names_are_the_sorted_json_files() {
-        let missing = std::env::temp_dir().join(format!("{NAME}-no-harness-{}", crate::ids::new_id()));
-        assert!(harness_names(&missing).is_empty());
-        let folder = scratch_folder();
-        ["pi.json", "opencode.json", ".hidden.json", "notes.md"].iter().for_each(|file| fs::write(harnesses_folder(&folder).join(file), "{}").unwrap());
-        assert_eq!(harness_names(&folder), ["opencode", "pi"]);
-        fs::remove_dir_all(&folder).unwrap();
-    }
 }
