@@ -169,3 +169,7 @@ pub const OPENCODE_ACTIVE_PATH: &str = "/api/session/active";
 pub const OPENCODE_SESSIONS_PATH: &str = "/api/session";
 /// Random bytes in a session's server password.
 pub const OPENCODE_PASSWORD_BYTES: usize = 24;
+/// Reopening a deployment waits this long for its sessions, still stopping from
+/// the close, to be gone before it gives up and leaves the deployment closed.
+pub const REOPEN_WAIT_LIMIT: Duration = Duration::from_secs(10);
+pub const REOPEN_WAIT_POLL: Duration = Duration::from_millis(50);

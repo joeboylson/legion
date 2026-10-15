@@ -17,4 +17,10 @@ out="$FAKE_HARNESS_OUT/${LEGION_POSITION:-unknown}.txt"
   fi
 } > "$out.part"
 mv "$out.part" "$out"
+# A file named slow-exit in the out folder makes it take a second to go once told to.
+if [ -e "$FAKE_HARNESS_OUT/slow-exit" ]; then
+  trap 'sleep 1; exit 0' HUP TERM INT
+  sleep 3600 &
+  wait
+fi
 exec sleep 3600

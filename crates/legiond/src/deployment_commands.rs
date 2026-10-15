@@ -6,7 +6,7 @@ use legion_proto::{pipeline_label, EntryKind, NewEntry, Reply, Deployment, COMMA
 
 use std::path::Path;
 
-use crate::{constants::DEPLOYMENT_CLOSED_REASON, daemon::Daemon, git::drop_worktree, ids::new_id, naming::unique_deployment_name, setup::read_pipeline, store::now_ms};
+use crate::{constants::{DEPLOYMENT_CLOSED_REASON, REOPEN_WAIT_LIMIT, REOPEN_WAIT_POLL}, daemon::Daemon, git::drop_worktree, ids::new_id, naming::unique_deployment_name, setup::read_pipeline, store::now_ms};
 
 impl Daemon {
     pub fn start_deployment(self: &Arc<Self>, folder_key: &str, pipeline: &str, name: Option<String>) -> Result<Reply, String> {
@@ -78,25 +78,57 @@ impl Daemon {
     }
 
     /// Opens a closed deployment again and starts its commander, which picks
-    /// the work up from the log. Its pipeline must still be able to run.
+    /// the work up from the log. Its pipeline must still be able to run. It
+    /// waits for the sessions the close is still stopping, and if the commander
+    /// can't start, the deployment goes back to closed so a reopen can be tried again.
     pub fn reopen_deployment(self: &Arc<Self>, deployment_key: &str) -> Result<Reply, String> {
-        let deployment = {
-            let mut state = self.state.lock().unwrap();
-            let (folder_index, deployment) = state.find_deployment(deployment_key)?;
+        let (deployment_id, name) = {
+            let state = self.state.lock().unwrap();
+            let (_, deployment) = state.find_deployment(deployment_key)?;
             if deployment.closed_ms.is_none() {
                 return Err(format!("{} is open already", deployment.name));
             }
+            (deployment.id.clone(), deployment.name.clone())
+        };
+        self.wait_for_sessions_to_stop(&deployment_id, &name)?;
+        let (deployment, closed_ms) = {
+            let mut state = self.state.lock().unwrap();
+            let (folder_index, deployment) = state.find_deployment(&deployment_id)?;
+            let closed_ms = deployment.closed_ms.ok_or_else(|| format!("{} is open already", deployment.name))?;
             let folder = &mut state.folders[folder_index];
             read_pipeline(&folder.path, &deployment.pipeline)?;
             folder.store.reopen_deployment(&deployment.id)?;
             folder.deployments.iter_mut().filter(|known| known.id == deployment.id).for_each(|known| known.closed_ms = None);
-            Deployment { closed_ms: None, ..deployment.clone() }
+            (Deployment { closed_ms: None, ..deployment.clone() }, closed_ms)
         };
+        if let Err(error) = self.start_session(&deployment.id, COMMANDER, None, HUMAN, None) {
+            self.set_closed(&deployment.id, closed_ms)?;
+            return Err(format!("couldn't start the commander, so {} stays closed: {error}", deployment.name));
+        }
         let reopened = NewEntry { kind: EntryKind::Note, mission: None, to: None, text: format!("deployment {} reopened", deployment.name), answers: None };
         self.post_entry(&deployment.id, HUMAN, reopened)?;
-        self.start_session(&deployment.id, COMMANDER, None, HUMAN, None)?;
         self.refresh_channel_deployments();
         Ok(Reply::Deployment { deployment })
+    }
+
+    fn wait_for_sessions_to_stop(&self, deployment_id: &str, name: &str) -> Result<(), String> {
+        let started = std::time::Instant::now();
+        while !self.state.lock().unwrap().running_positions(deployment_id).is_empty() {
+            if started.elapsed() >= REOPEN_WAIT_LIMIT {
+                return Err(format!("{name}'s sessions are still stopping after {} seconds, so it stays closed: try again in a moment", REOPEN_WAIT_LIMIT.as_secs()));
+            }
+            std::thread::sleep(REOPEN_WAIT_POLL);
+        }
+        Ok(())
+    }
+
+    fn set_closed(&self, deployment_id: &str, closed_ms: i64) -> Result<(), String> {
+        let mut state = self.state.lock().unwrap();
+        let (folder_index, _) = state.find_deployment(deployment_id)?;
+        let folder = &mut state.folders[folder_index];
+        folder.store.close_deployment(deployment_id, closed_ms)?;
+        folder.deployments.iter_mut().filter(|known| known.id == deployment_id).for_each(|known| known.closed_ms = Some(closed_ms));
+        Ok(())
     }
 
     /// Deletes a closed deployment for good: its log, missions, mission files
