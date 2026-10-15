@@ -22,7 +22,9 @@
       "{modelProvider}": {
         "package": "@ai-sdk/openai-compatible",
         "settings": {
-          "baseURL": "{address}"
+          "baseURL": "{address}",
+          "headerTimeout": 1800000,
+          "chunkTimeout": 1800000
         },
         "models": {
           "{model}": {

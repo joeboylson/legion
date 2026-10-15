@@ -79,6 +79,37 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     `server.connected` event, then heartbeats) and wasn't needed: Legion polls.
     *Checked:* by hand on v2.0.25 with `opencode serve --port P`.
 
+14. **Request time limits (mission 8):** the provider `settings` in v2.0.25
+    take `timeout`, `headerTimeout` and `chunkTimeout` (milliseconds, or
+    `false` to switch one off). Read from the binary:
+    - `headerTimeout`: from sending the request until response headers
+      arrive. Default **300000 (5 minutes)**. With a streamed reply vLLM
+      sends headers only once the prompt is read, so this is the "slow to
+      read a big prompt" limit. It fires as "Timed out waiting for response
+      headers" (a `provider.transport` error), the "Transport: ... timed out"
+      Legion saw.
+    - `chunkTimeout`: longest quiet gap between pieces of the reply. Default
+      **300000**. This is the "slow to write" limit.
+    - `timeout`: the whole request. No default (none). Left unset.
+    - OpenCode switches Bun's own fetch timeout off (`timeout: false`), so
+      Bun's limit never applies. vLLM has no per-request time limit by
+      default; its server wasn't inspected here.
+
+    The template sets `headerTimeout` and `chunkTimeout` to **1800000 (30
+    minutes)**. Nothing argued for less: a 30 words/s model writes tens of
+    thousands of words in that time.
+
+    **What still ends a hung step:** a connection that sends nothing for 30
+    minutes fails with the same error, and OpenCode retries the request (a
+    stalled run showed `retry.attempt` up to 4; where retries stop wasn't
+    checked). A model that keeps sending is never cut off. Past that, only
+    the commander ending the session does.
+
+    *Checked:* `GET /api/config` showed both keys accepted as numbers. A fake
+    provider that answers after 8 seconds, with `headerTimeout` 3000, gave
+    "Timed out waiting for response headers" and retried; with 20000 the
+    reply was read. Under a throwaway HOME, `opencode serve`.
+
 **First prompt races the tool server.** With `--standalone`, the first prompt
 was sent before `legion mcp` connected. That turn had no `legion_*` tools, so
 a Legion first turn would fail. v2.0.25 has no "wait for MCP" setting
@@ -105,7 +136,8 @@ first prompt listed all 17 tools.
     "default_agent": "legion",
     "providers": { "{modelProvider}": {
       "package": "@ai-sdk/openai-compatible",
-      "settings": { "baseURL": "{address}" },
+      "settings": { "baseURL": "{address}",
+                    "headerTimeout": 1800000, "chunkTimeout": 1800000 },
       "models": { "{model}": { "name": "{model}" } } } },
     "agents": { "legion": {
       "mode": "primary",

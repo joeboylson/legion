@@ -354,6 +354,9 @@ mod tests {
   }
 }"#;
 
+    /// 30 minutes, the wait the shipped OpenCode template gives each model request.
+    const STEP_WAIT_MS: u64 = 30 * 60 * 1000;
+
     fn scratch_folder() -> PathBuf {
         let folder = std::env::temp_dir().join(format!("{NAME}-harness-{}", crate::ids::new_id()));
         fs::create_dir_all(harnesses_folder(&folder)).unwrap();
@@ -444,6 +447,10 @@ mod tests {
         assert_eq!(filled.args[2..], ["sh".to_string(), "Say \"hi\"; $(no)".to_string(), "spark-fast/qwen3".to_string()], "the prompt and model are arguments");
         let config: Value = serde_json::from_str(filled.config_file.as_deref().unwrap()).unwrap();
         assert_eq!(config["agents"]["legion"]["system"], "{file:/p/d-builder.md}");
+        let settings = &config["providers"]["spark-fast"]["settings"];
+        assert_eq!(settings["baseURL"], "http://spark:8002/v1");
+        assert_eq!(settings["headerTimeout"], STEP_WAIT_MS, "a slow local model gets 30 minutes to start answering");
+        assert_eq!(settings["chunkTimeout"], STEP_WAIT_MS, "and 30 minutes of quiet before a stream counts as hung");
         assert_eq!(config["mcp"]["servers"]["legion"]["command"], serde_json::json!(["/bin/legion", "mcp"]));
         fs::remove_dir_all(&folder).unwrap();
     }

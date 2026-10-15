@@ -159,6 +159,12 @@ The OpenCode template starts OpenCode's server on `{port}`, waits until
 Legion's tools are connected (up to 60 seconds; if they don't, or OpenCode
 is missing or its server stops, the session ends and the log says why), then starts OpenCode on it with the first prompt.
 
+The template also gives the model provider 30 minutes (`headerTimeout` and
+`chunkTimeout`, in milliseconds) to start answering and to go quiet mid-answer.
+OpenCode's own default is 5 minutes for each, which cut off slow local
+models. A request that sends nothing for 30 minutes still fails and OpenCode
+retries it; see [docs/research/opencode.md](research/opencode.md).
+
 A template with both `{port}` and `{password}` is a session with a server: every few seconds Legion asks the
 server whether the session is busy or idle, and shows that in the app and
 `legion status`, as for Claude. If the server stops answering, it shows
