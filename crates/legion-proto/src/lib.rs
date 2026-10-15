@@ -664,6 +664,9 @@ pub enum EntryKind {
     /// A heads-up handed to everyone running, such as a callout or a shared
     /// tool. No reply is wanted.
     Announcement,
+    /// One finished step of an OpenCode session, for the log only: what it
+    /// did and how long it took. No reply is wanted.
+    Activity,
 }
 
 impl EntryKind {
@@ -689,6 +692,7 @@ impl EntryKind {
             EntryKind::Finished => "finished",
             EntryKind::Decision => "decision",
             EntryKind::Announcement => "announcement",
+            EntryKind::Activity => "activity",
         }
     }
 
@@ -768,6 +772,7 @@ mod tests {
             EntryKind::Finished,
             EntryKind::Decision,
             EntryKind::Announcement,
+            EntryKind::Activity,
         ];
         for kind in kinds {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());

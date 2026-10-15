@@ -38,9 +38,11 @@ mod model_choice;
 mod naming;
 mod opencode_context;
 mod opencode_delivery;
+mod opencode_events;
 mod opencode_push;
 mod opencode_server;
 mod opencode_state;
+mod opencode_steps;
 #[cfg(test)]
 mod opencode_testing;
 mod opencode_watch;
@@ -195,6 +197,16 @@ async fn run() -> Result<(), String> {
         loop {
             interval.tick().await;
             opencode_daemon.clone().read_opencode_states().await;
+        }
+    });
+
+    let following_daemon = daemon.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(OPENCODE_STATE_INTERVAL);
+        let followers = std::sync::Arc::new(std::sync::Mutex::new(opencode_events::Followers::new()));
+        loop {
+            interval.tick().await;
+            following_daemon.follow_opencode_steps(&followers);
         }
     });
 

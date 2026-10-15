@@ -164,6 +164,14 @@ pub const OPENCODE_STATE_INTERVAL: Duration = Duration::from_secs(3);
 pub const OPENCODE_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
 /// How long one request to that server may take before it counts as no answer.
 pub const OPENCODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// OpenCode's stream of what a session does, as server-sent events.
+pub const OPENCODE_EVENTS_PATH: &str = "/api/event";
+/// How long to wait before following a server's events again after the stream broke or wouldn't open.
+pub const OPENCODE_EVENTS_RETRY: Duration = Duration::from_secs(3);
+/// The longest a command may be before a step's line cuts it short.
+pub const STEP_COMMAND_LIMIT: usize = 48;
+/// The most things one step's line names before it counts the rest.
+pub const STEP_PARTS_LIMIT: usize = 3;
 /// The user name OpenCode's server expects with OPENCODE_PASSWORD.
 pub const OPENCODE_USER: &str = "opencode";
 /// Sessions with a foreground turn running; the ones not in it are inactive.

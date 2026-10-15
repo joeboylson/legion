@@ -76,7 +76,14 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     *Checked:* the POST, the title and `search` on v2.0.25 under a throwaway
     HOME; `mini --session` is from item 9.
     `GET /openapi.json` lists the API. `/api/event` is a stream (a
-    `server.connected` event, then heartbeats) and wasn't needed: Legion polls.
+    `server.connected` event, then heartbeats). Legion polls for busy or idle,
+    and follows the stream for one log line per step: `session.step.started`
+    (`data.started` is when the step began), `session.tool.input.started`
+    (the tool's `name`), `session.tool.called` (its `input`, by the same
+    `id`) and `session.step.ended` (its `created` is when it ended); all
+    carry `data.assistantMessageID`. Claude sessions aren't followed: their
+    add-on already reports. The lines are `activity` entries (`legion log
+    --kind activity`).
     *Checked:* by hand on v2.0.25 with `opencode serve --port P`.
 
 14. **Request time limits (mission 8):** the provider `settings` in v2.0.25

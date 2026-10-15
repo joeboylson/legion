@@ -227,10 +227,3 @@ is written and tested, but legiond hasn't been reinstalled with it yet.
   one fix while the next was still being built.
 
 ## From the local AI runs (2026-10-15)
-
-- **Show what an OpenCode session is doing.** OpenCode's own screen can
-  freeze while its server keeps working, and the log stays quiet until a
-  handoff. legiond already talks to each session's `opencode serve` for its
-  state, so it could also follow the server's event stream and write a short
-  line per step to the deployment log or the app (read `app.js`, ran
-  `cargo test`, 12s). Keep it to one line per step so the log stays readable.

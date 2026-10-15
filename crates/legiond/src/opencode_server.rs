@@ -45,16 +45,21 @@ fn base64(bytes: &[u8]) -> String {
         .collect()
 }
 
-async fn send(server: &OpenCodeServer, method: Method, path: &str, body: Option<String>) -> Result<String, String> {
+/// A request to the server with its login on it.
+pub fn authorized_request(server: &OpenCodeServer, method: Method, path: &str, body: Option<String>) -> Result<Request<Full<Bytes>>, String> {
     let login = base64(format!("{OPENCODE_USER}:{}", server.password).as_bytes());
-    let request = Request::builder()
+    Request::builder()
         .method(method)
         .uri(format!("http://{}:{}{path}", Ipv4Addr::LOCALHOST, server.port))
         .header(AUTHORIZATION, format!("Basic {login}"))
         .header("accept", "application/json")
         .header("content-type", "application/json")
         .body(Full::new(Bytes::from(body.unwrap_or_default())))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+async fn send(server: &OpenCodeServer, method: Method, path: &str, body: Option<String>) -> Result<String, String> {
+    let request = authorized_request(server, method, path, body)?;
     // No pooling: a server that goes away shouldn't leave a dead connection to try first.
     let client = Client::builder(TokioExecutor::new()).pool_max_idle_per_host(0).build_http::<Full<Bytes>>();
     let reply = client.request(request).await.map_err(|error| error.to_string())?;
