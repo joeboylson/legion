@@ -4,23 +4,28 @@
 use std::{future::Future, time::Duration};
 
 use axum::Router;
-use hyper::server::conn::http1;
+use hyper::server::conn::http1::{self, UpgradeableConnection};
 use hyper_util::{
     rt::{TokioIo, TokioTimer},
     service::TowerToHyperService,
 };
 use legion_proto::NAME;
-use tokio::net::UnixListener;
+use tokio::{net::{UnixListener, UnixStream}, sync::watch, task::JoinSet};
 
 use crate::constants::ACCEPT_RETRY_DELAY;
 
-/// Answers connections until `stop` finishes. A connection left open when
-/// legiond stops is dropped with the process.
+/// Answers connections until `stop` finishes, then lets the requests being
+/// answered finish (a handed-out inbox message would be lost otherwise).
+/// An upgraded WebSocket isn't waited for.
 pub async fn serve_socket(listener: UnixListener, router: Router, idle_limit: Duration, stop: impl Future<Output = ()>) {
     tokio::pin!(stop);
+    let (stopping, stopped) = watch::channel(false);
+    let mut connections = JoinSet::new();
     loop {
         let stream = tokio::select! {
-            _ = &mut stop => return,
+            _ = &mut stop => break,
+            // Finished connections are cleared as they go, not kept until the end.
+            Some(_) = connections.join_next() => continue,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
                 Err(error) => {
@@ -35,11 +40,23 @@ pub async fn serve_socket(listener: UnixListener, router: Router, idle_limit: Du
             .header_read_timeout(idle_limit)
             .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router.clone()))
             .with_upgrades();
-        tokio::spawn(async move {
-            // A client that leaves or times out is not worth a log line.
-            let _ = connection.await;
-        });
+        connections.spawn(serve_connection(connection, stopped.clone()));
     }
+    drop(listener);
+    let _ = stopping.send(true);
+    while connections.join_next().await.is_some() {}
+}
+
+/// hyper-util's graceful helper doesn't take connections that allow
+/// upgrades, so this asks the connection to finish its request and close.
+async fn serve_connection(connection: UpgradeableConnection<TokioIo<UnixStream>, TowerToHyperService<Router>>, mut stopped: watch::Receiver<bool>) {
+    tokio::pin!(connection);
+    tokio::select! {
+        // A client that leaves or times out is not worth a log line.
+        _ = &mut connection => return,
+        _ = stopped.wait_for(|is_stopping| *is_stopping) => connection.as_mut().graceful_shutdown(),
+    }
+    let _ = connection.await;
 }
 
 #[cfg(test)]
@@ -131,6 +148,24 @@ mod tests {
         assert!(!answered.contains("200"), "{answered}");
         let closed = tokio::time::timeout(Duration::from_secs(5), read_some(&mut stream)).await;
         assert_eq!(closed.expect("still open"), "");
+    }
+
+    #[tokio::test]
+    async fn a_request_in_flight_when_legiond_stops_still_gets_its_answer() {
+        let file = SocketFile(std::env::temp_dir().join(format!("legiond-serving-{}-stop.sock", std::process::id())));
+        let listener = UnixListener::bind(&file.0).unwrap();
+        let slow = get(|| async {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            "done"
+        });
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving = tokio::spawn(serve_socket(listener, Router::new().route("/slow", slow), Duration::from_secs(60), async { let _ = stopped.await; }));
+        let mut stream = UnixStream::connect(&file.0).await.unwrap();
+        stream.write_all(b"GET /slow HTTP/1.1\r\nHost: legiond\r\n\r\n").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stop.send(()).unwrap();
+        assert!(read_some(&mut stream).await.contains("200"));
+        tokio::time::timeout(Duration::from_secs(5), serving).await.expect("didn't finish stopping").unwrap();
     }
 
     #[tokio::test]
