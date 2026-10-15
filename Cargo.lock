@@ -2104,6 +2104,7 @@ name = "legiond"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
  "legion-client",
  "legion-proto",
  "portable-pty",
@@ -2113,6 +2114,7 @@ dependencies = [
  "serde_path_to_error",
  "serde_yaml",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "tower-http",
  "vt100",
 ]

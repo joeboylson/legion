@@ -21,6 +21,7 @@ use crate::{
     entry_routing::delivery_text,
     folder_state::{read_folder_registry, FolderState},
     machine_settings::{read_machine_settings, MachineSettings},
+    request_replays::RequestReplays,
     session_commands::StartRequest,
     sessions::Session,
 };
@@ -38,6 +39,7 @@ pub struct Daemon {
     pub config: Config,
     pub state: Mutex<State>,
     pub events: broadcast::Sender<Event>,
+    pub request_replays: RequestReplays,
     /// The channel this machine hosts and the ones it subscribes to.
     pub channels: ChannelManager,
     /// Set once legiond is stopping: sessions cut off by its exit are
@@ -104,7 +106,7 @@ impl Daemon {
             strategist_checked_at: HashMap::new(),
         };
         let channels = ChannelManager::new(config.data_folder.clone(), events.clone());
-        Arc::new(Daemon { config, state: Mutex::new(state), events, channels, is_shutting_down: AtomicBool::new(false) })
+        Arc::new(Daemon { config, state: Mutex::new(state), events, channels, request_replays: RequestReplays::default(), is_shutting_down: AtomicBool::new(false) })
     }
 
     /// Read fresh each time, so a change to settings.json needs no restart.

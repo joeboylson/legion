@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use legion_proto::{Activity, Command, Event, Outcome, Request, ServerMessage, NAME};
+use legion_proto::{Activity, Caller, Command, Event, Outcome, Request, ServerMessage, NAME};
 use serde::Deserialize;
 use tokio::sync::broadcast;
 
@@ -89,16 +89,24 @@ async fn answer_request(daemon: &Arc<Daemon>, text: &str) -> ServerMessage {
         Err(error) => return ServerMessage::Reply { id: String::new(), outcome: Outcome::Error(format!("bad request: {error}")) },
     };
     let request_id = request.id.clone();
-    let handling_daemon = daemon.clone();
-    // Starting a session blocks briefly; keep it off the async threads.
-    let result = tokio::task::spawn_blocking(move || handling_daemon.handle_command(request.from, request.command))
-        .await
-        .unwrap_or_else(|error| Err(format!("{NAME}d failed: {error}")));
-    let outcome = match result {
-        Ok(reply) => Outcome::Ok(reply),
-        Err(error) => Outcome::Error(error),
+    let Request { from, key, command, .. } = request;
+    let work = carry_out(daemon.clone(), from.clone(), command);
+    let outcome = match key {
+        Some(key) => daemon.request_replays.run_once(from, key, work).await,
+        None => work.await,
     };
     ServerMessage::Reply { id: request_id, outcome }
+}
+
+async fn carry_out(daemon: Arc<Daemon>, from: Option<Caller>, command: Command) -> Outcome {
+    // Starting a session blocks briefly; keep it off the async threads.
+    let result = tokio::task::spawn_blocking(move || daemon.handle_command(from, command))
+        .await
+        .unwrap_or_else(|error| Err(format!("{NAME}d failed: {error}")));
+    match result {
+        Ok(reply) => Outcome::Ok(reply),
+        Err(error) => Outcome::Error(error),
+    }
 }
 
 fn asks_to_watch(text: &str) -> bool {

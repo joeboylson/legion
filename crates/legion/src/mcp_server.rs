@@ -7,7 +7,9 @@ use legion_proto::{
     ENV_POSITION, ENV_DEPLOYMENT, NAME,
 };
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::time::Duration;
+
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 use legion_client::Client;
 
@@ -18,6 +20,11 @@ const JSON_RPC_VERSION: &str = "2.0";
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 const METHOD_NOT_FOUND: i64 = -32601;
 const PARSE_ERROR: i64 = -32700;
+/// A tool call that hasn't been answered by now gets an error instead: a
+/// machine that slept leaves a connection that never answers.
+const TOOL_CALL_TIME_LIMIT: Duration = Duration::from_secs(60);
+/// Finishing a mission runs the project's check, which takes minutes.
+const FINISH_CALL_TIME_LIMIT: Duration = Duration::from_secs(10 * 60);
 
 /// What to do with one message from Claude.
 #[derive(Debug)]
@@ -69,33 +76,44 @@ pub fn handle_message(message: &Value, deployment: &str, position: &str) -> Hand
     }
 }
 
-async fn write_message(stdout: &mut tokio::io::Stdout, message: &Value) -> Result<(), String> {
+fn time_limit_for(command: &legion_proto::Command) -> Duration {
+    match command {
+        legion_proto::Command::MissionFinish { .. } => FINISH_CALL_TIME_LIMIT,
+        _ => TOOL_CALL_TIME_LIMIT,
+    }
+}
+
+async fn write_message(output: &mut (impl AsyncWrite + Unpin), message: &Value) -> Result<(), String> {
     let line = message.to_string() + "\n";
-    stdout.write_all(line.as_bytes()).await.map_err(|error| error.to_string())?;
-    stdout.flush().await.map_err(|error| error.to_string())
+    output.write_all(line.as_bytes()).await.map_err(|error| error.to_string())?;
+    output.flush().await.map_err(|error| error.to_string())
 }
 
 /// Serves until Claude closes stdin.
 pub async fn serve_tools() -> Result<(), String> {
     let deployment = std::env::var(ENV_DEPLOYMENT).map_err(|_| format!("{NAME} mcp runs inside a session legiond started ({ENV_DEPLOYMENT} isn't set)"))?;
     let position = std::env::var(ENV_POSITION).map_err(|_| format!("{ENV_POSITION} isn't set"))?;
-    let mut client = Client::connect().await?;
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut stdout = tokio::io::stdout();
+    // Dials on the first call, so Claude can start before legiond is up.
+    let client = Client::from_environment()?;
+    serve_over(BufReader::new(tokio::io::stdin()), tokio::io::stdout(), client, &deployment, &position).await
+}
+
+async fn serve_over(input: impl AsyncBufRead + Unpin, mut output: impl AsyncWrite + Unpin, mut client: Client, deployment: &str, position: &str) -> Result<(), String> {
+    let mut lines = input.lines();
     while let Some(line) = lines.next_line().await.map_err(|error| error.to_string())? {
         let handling = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle_message(&message, &deployment, &position),
+            Ok(message) => handle_message(&message, deployment, position),
             Err(error) => Handling::Reply(error_message(&Value::Null, PARSE_ERROR, &error.to_string())),
         };
         let response = match handling {
             Handling::Nothing => continue,
             Handling::Reply(response) => response,
-            Handling::CallTool { id, command } => match client.ask(command).await {
+            Handling::CallTool { id, command } => match client.ask_within(command.clone(), time_limit_for(&command)).await {
                 Ok(reply) => tool_result(&id, &reply_text(&reply), false),
                 Err(problem) => tool_result(&id, &problem, true),
             },
         };
-        write_message(&mut stdout, &response).await?;
+        write_message(&mut output, &response).await?;
     }
     Ok(())
 }
@@ -106,6 +124,29 @@ mod tests {
 
     fn request(method: &str, params: Value) -> Value {
         json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
+    }
+
+    #[tokio::test]
+    async fn a_call_with_no_legiond_is_a_tool_error_and_the_server_keeps_serving() {
+        let input = [
+            request("tools/call", json!({ "name": "missions", "arguments": {} })).to_string(),
+            request("ping", json!({})).to_string(),
+        ]
+        .join("\n");
+        let mut output = Vec::new();
+        let client = Client::at("/tmp/legion-mcp-test-no-legiond.sock".into());
+        serve_over(input.as_bytes(), &mut output, client, "r", "builder").await.unwrap();
+        let answers: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(answers.len(), 2);
+        assert_eq!(answers[0]["result"]["isError"], true);
+        assert!(answers[0]["result"]["content"][0]["text"].as_str().unwrap().starts_with("legion didn't answer:"));
+        assert_eq!(answers[1]["result"], json!({}));
+    }
+
+    #[test]
+    fn finishing_gets_longer_than_other_calls() {
+        let finish = legion_proto::Command::MissionFinish { deployment: "r".into(), mission: 1 };
+        assert!(time_limit_for(&finish) > time_limit_for(&legion_proto::Command::Ping));
     }
 
     fn reply(handling: Handling) -> Value {

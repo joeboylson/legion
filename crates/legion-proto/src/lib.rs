@@ -91,11 +91,15 @@ pub struct Request {
     /// The deployment and position the caller speaks for, when it's a session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<Caller>,
+    /// Names one call across connections, so legiond runs it once even when
+    /// the caller asks again on a fresh connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     pub command: Command,
 }
 
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS), ts(export))]
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Caller {
     pub deployment: String,
     pub position: String,
@@ -726,7 +730,7 @@ mod tests {
 
     #[test]
     fn commands_are_tagged_by_type() {
-        let request = Request { id: "1".into(), from: None, command: Command::MissionFinish { deployment: "r".into(), mission: 3 } };
+        let request = Request { id: "1".into(), from: None, key: None, command: Command::MissionFinish { deployment: "r".into(), mission: 3 } };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["command"]["type"], "mission_finish");
         assert!(json.get("from").is_none());

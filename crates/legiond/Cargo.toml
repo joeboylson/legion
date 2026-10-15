@@ -19,3 +19,5 @@ vt100 = "0.15"
 
 [dev-dependencies]
 legion-client = { path = "../legion-client" }
+futures-util = "0.3"
+tokio-tungstenite = "0.28"

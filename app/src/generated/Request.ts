@@ -6,4 +6,9 @@ export type Request = { id: string,
 /**
  * The deployment and position the caller speaks for, when it's a session.
  */
-from?: Caller | null, command: Command, };
+from?: Caller | null, 
+/**
+ * Names one call across connections, so legiond runs it once even when
+ * the caller asks again on a fresh connection.
+ */
+key?: string | null, command: Command, };

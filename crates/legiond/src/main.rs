@@ -37,6 +37,7 @@ mod model_choice;
 mod naming;
 mod permission_answers;
 mod prompts;
+mod request_replays;
 mod deployment_commands;
 mod server;
 mod session_arguments;
