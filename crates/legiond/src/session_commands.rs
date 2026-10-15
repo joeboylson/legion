@@ -43,6 +43,12 @@ pub struct StartRequest<'a> {
     pub first_prompt: Option<String>,
 }
 
+/// A template session's files sit next to its prompt file: the tools
+/// config, and the template's own config file named after the harness.
+const PROMPT_FILE_EXTENSION: &str = "md";
+const TOOLS_CONFIG_FILE_EXTENSION: &str = "tools.json";
+const CONFIG_FILE_EXTENSION: &str = "json";
+
 const STRATEGIST_FIRST_PROMPT: &str = "Wait for Legion's first speed check.";
 const COMMANDER_FIRST_PROMPT: &str = "Your deployment has started. Check its missions with the missions tool and start on any that are waiting.";
 
@@ -319,16 +325,20 @@ impl Daemon {
                 launch.system_prompt = format!("{}\n\n{}", launch.system_prompt, part_instructions(number, &checkout.part));
             }
             let tools_config = legion_tools_config(&self.config.binary_folder, &self.config.socket_path, &deployment.id, &launch.position);
-            let prompt_file = self.config.data_folder.join(PROMPTS_FOLDER_NAME).join(format!("{}-{}.md", deployment.id, launch.position));
+            let prompt_file = self.config.data_folder.join(PROMPTS_FOLDER_NAME).join(format!("{}-{}.{PROMPT_FILE_EXTENSION}", deployment.id, launch.position));
             write_session_file(&prompt_file, &launch.system_prompt)?;
             let working_folder = match &part_checkout {
                 Some(checkout) => PathBuf::from(&checkout.path),
                 None => mission_working_folder(&state, folder_index, &deployment.id, mission)?,
             };
+            let tools_config_file = prompt_file.with_extension(TOOLS_CONFIG_FILE_EXTENSION);
+            let config_file = prompt_file.with_extension(format!("{}.{CONFIG_FILE_EXTENSION}", launch.model_choice.harness));
             let place = LaunchPlace {
                 deployment_id: &deployment.id,
                 tools_config: &tools_config,
                 prompt_file: &prompt_file,
+                tools_config_file: &tools_config_file,
+                config_file: &config_file,
                 working_folder: &working_folder,
                 binary_folder: &self.config.binary_folder,
                 socket_path: &self.config.socket_path,
