@@ -90,6 +90,11 @@ pub async fn post(server: &OpenCodeServer, path: &str, body: &str) -> Result<Str
     request(server, Method::POST, path, Some(body.to_string())).await
 }
 
+/// Sends a JSON body with PATCH.
+pub async fn patch(server: &OpenCodeServer, path: &str, body: &str) -> Result<String, String> {
+    request(server, Method::PATCH, path, Some(body.to_string())).await
+}
+
 /// The server lists every session it has stored, from every folder and run,
 /// and two operators may share a folder, so a session is this one's only if
 /// its title is the tag Legion gave it. Its ID, if there is one; two are an

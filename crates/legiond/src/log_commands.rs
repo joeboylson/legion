@@ -1,6 +1,6 @@
 //! Adding to and reading the deployment log.
 
-use legion_proto::{EntryKind, LogFilter, MissionStatus, NewEntry, Reply, HUMAN};
+use legion_proto::{EntryKind, LogFilter, MissionStatus, NewEntry, Reply};
 
 use crate::{
     daemon::Daemon,
@@ -26,7 +26,7 @@ impl Daemon {
             let deployment_sessions: Vec<(String, Option<u32>)> = state
                 .sessions
                 .values()
-                .filter(|session| session.deployment == deployment.id && !session.is_stopping())
+                .filter(|session| session.deployment == deployment.id)
                 .map(|session| (session.position.clone(), session.mission))
                 .collect();
             let author_mission = deployment_sessions.iter().find(|(position, _)| position == author).and_then(|(_, on)| *on);
@@ -36,8 +36,8 @@ impl Daemon {
             };
             let target = mission_copy.as_ref().or(entry.to.as_ref());
             if let (EntryKind::Message, Some(to)) = (&entry.kind, target) {
-                if to != HUMAN && !deployment_sessions.iter().any(|(position, _)| position == to) {
-                    unreachable = Some(to.clone());
+                if !state.is_position_reachable(&deployment.id, to) {
+                    unreachable = Some((to.clone(), entry.mission.or(author_mission)));
                 }
             }
             let recipient_mission = match (&entry.kind, mission_copy.as_ref().or(entry.to.as_ref())) {
@@ -52,9 +52,9 @@ impl Daemon {
             let facts = RoutingFacts { question, question_mission_is_done, mission_holder: mission.and_then(|known| known.holder), mission_copy, recipient_mission };
             (deployment.id, route_entry(entry, facts)?)
         };
-        if let Some(to) = unreachable {
+        if let Some((to, mission)) = unreachable {
             let note = format!("{author}'s message to {to} wasn't sent: {to} isn't running");
-            self.post_legion_entry(&deployment_id, NewEntry { kind: EntryKind::Note, mission: routed.mission, to: None, text: note, answers: None });
+            self.post_legion_entry(&deployment_id, NewEntry { kind: EntryKind::Note, mission, to: None, text: note, answers: None });
             return Err(format!("{to} isn't running: hand off to it instead, or ask the commander to start it"));
         }
         let posted = self.post_entry(&deployment_id, author, routed)?;

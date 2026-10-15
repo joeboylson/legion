@@ -274,7 +274,10 @@ pub fn serve_opencode(port: u16, tag: String, is_failing: Arc<AtomicBool>, promp
     serve_http(port, move |request| {
         if request.starts_with("GET /api/session?search=") {
             session_list(&tag)
-        } else if request.starts_with("POST /api/session/ses_1/prompt ") || request.starts_with("POST /api/session/ses_1/interrupt ") {
+        } else if request.starts_with("GET /api/session/ses_1/inbox ") {
+            prompts.lock().unwrap().push(request.to_string());
+            answer("200 OK", r#"{"data":[{"id":"msg_parked","delivery":"queue"}]}"#)
+        } else if request.starts_with("POST /api/session/ses_1/prompt ") || request.starts_with("POST /api/session/ses_1/interrupt ") || request.starts_with("PATCH /api/session/ses_1/inbox/") {
             prompts.lock().unwrap().push(request.to_string());
             match is_failing.load(Ordering::SeqCst) {
                 true => answer("500 Internal Server Error", "no"),

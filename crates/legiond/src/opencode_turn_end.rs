@@ -6,7 +6,7 @@ use legion_proto::{EntryKind, LEGION};
 
 use crate::{
     daemon::Daemon,
-    opencode_delivery::{find_session_id, interrupt_turn},
+    opencode_delivery::{find_session_id, interrupt_turn, steer_parked},
     opencode_server::OpenCodeServer,
 };
 
@@ -29,12 +29,16 @@ impl Daemon {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
         let (deployment_id, position) = (deployment_id.to_string(), position.to_string());
         runtime.spawn(async move {
-            let ended = match known {
-                Some(id) => interrupt_turn(&server, &id).await,
-                None => match find_session_id(&server).await {
-                    Ok(id) => interrupt_turn(&server, &id).await,
-                    Err(failure) => Err(failure.to_string()),
+            let id = match known {
+                Some(id) => Ok(id),
+                None => find_session_id(&server).await.map_err(|failure| failure.to_string()),
+            };
+            let ended = match id {
+                Ok(id) => match interrupt_turn(&server, &id).await {
+                    Ok(()) => steer_parked(&server, &id).await,
+                    Err(reason) => Err(reason),
                 },
+                Err(reason) => Err(reason),
             };
             if let Err(reason) = ended {
                 eprintln!("{LEGION}d: couldn't end the turn of {position} ({deployment_id}): {reason}");

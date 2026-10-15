@@ -40,6 +40,7 @@ mod opencode_context;
 mod opencode_delivery;
 mod opencode_events;
 mod opencode_push;
+mod position_reach;
 mod opencode_turn_end;
 mod opencode_server;
 mod opencode_state;

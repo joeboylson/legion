@@ -7,7 +7,7 @@ use legion_proto::{COMMANDER, HUMAN};
 
 use crate::{
     constants::{NOT_FOUND_STATUS, OPENCODE_SESSIONS_PATH},
-    opencode_server::{get, post, sessions_search_path, this_runs_session, OpenCodeServer},
+    opencode_server::{get, patch, post, sessions_search_path, this_runs_session, OpenCodeServer},
 };
 
 /// Why a message couldn't be posted just now.
@@ -65,6 +65,21 @@ impl Delivery {
 pub async fn interrupt_turn(server: &OpenCodeServer, session_id: &str) -> Result<(), String> {
     let path = format!("{OPENCODE_SESSIONS_PATH}/{session_id}/interrupt");
     post(server, &path, "").await.map(|_| ()).map_err(|error| format!("its server refused the interrupt: {error}"))
+}
+
+/// After an interrupt, queued messages stay parked in the session's inbox
+/// until the next message. Steering them makes them run now, so a handoff
+/// leaves nothing waiting.
+pub async fn steer_parked(server: &OpenCodeServer, session_id: &str) -> Result<(), String> {
+    let inbox_path = format!("{OPENCODE_SESSIONS_PATH}/{session_id}/inbox");
+    let listing = get(server, &inbox_path).await.map_err(|error| format!("can't read its inbox: {error}"))?;
+    let listing: serde_json::Value = serde_json::from_str(&listing).map_err(|error| format!("can't read its inbox: not JSON: {error}"))?;
+    let items = listing.get("data").and_then(serde_json::Value::as_array).ok_or("can't read its inbox: no data list")?;
+    let body = serde_json::json!({ "delivery": Delivery::Steer.as_str() }).to_string();
+    for id in items.iter().filter_map(|item| item.get("id").and_then(serde_json::Value::as_str)) {
+        patch(server, &format!("{inbox_path}/{id}"), &body).await.map_err(|error| format!("its server refused to steer inbox item {id}: {error}"))?;
+    }
+    Ok(())
 }
 
 /// Posts one message, to queue behind the session's turn or to steer into it.
@@ -130,6 +145,24 @@ mod tests {
         let (server, serving) = fake_server(vec![Some(http("500 Internal Server Error", ""))]);
         assert!(interrupt_turn(&server, "ses_1").await.unwrap_err().contains("500"));
         serving.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_parked_message_is_steered_after_an_interrupt() {
+        let inbox = r#"{"data":[{"id":"msg_a","delivery":"queue"},{"id":"msg_b","delivery":"queue"}]}"#;
+        let (server, serving) = fake_server(vec![ok(inbox), ok("{}"), ok("{}")]);
+        steer_parked(&server, "ses_1").await.unwrap();
+        let sent = serving.join().unwrap();
+        assert!(sent[0].starts_with("GET /api/session/ses_1/inbox HTTP/1.1\r\n"), "{}", sent[0]);
+        assert!(sent[1].starts_with("PATCH /api/session/ses_1/inbox/msg_a HTTP/1.1\r\n") && sent[1].ends_with(r#"{"delivery":"steer"}"#), "{}", sent[1]);
+        assert!(sent[2].starts_with("PATCH /api/session/ses_1/inbox/msg_b "), "{}", sent[2]);
+    }
+
+    #[tokio::test]
+    async fn an_empty_inbox_needs_no_patch() {
+        let (server, serving) = fake_server(vec![ok(r#"{"data":[]}"#)]);
+        steer_parked(&server, "ses_1").await.unwrap();
+        assert_eq!(serving.join().unwrap().len(), 1);
     }
 
     #[tokio::test]

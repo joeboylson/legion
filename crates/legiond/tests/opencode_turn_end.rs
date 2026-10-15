@@ -1,5 +1,5 @@
 //! A handoff from an OpenCode session ends its turn through its own server,
-//! and a message to a position that isn't running is refused.
+//! and its parked messages run; a message to a position that isn't running is refused.
 
 mod common;
 
@@ -39,11 +39,14 @@ async fn a_handoff_ends_the_turn_and_a_send_to_nobody_fails() {
     assert_eq!(interrupts(&requests), 0, "a note doesn't end the turn");
     session.ask(Command::Post { deployment: deployment.clone(), entry: post(EntryKind::Handoff, None, "→ done: built") }).await.unwrap();
     wait_for(|| (interrupts(&requests) == 1).then_some(()));
+    wait_for(|| requests.lock().unwrap().iter().find(|request| request.starts_with("PATCH /api/session/ses_1/inbox/msg_parked ")).cloned());
 
     let refused = session.ask(Command::Post { deployment: deployment.clone(), entry: post(EntryKind::Message, Some("ghost"), "hello?") }).await.unwrap_err();
     assert_eq!(refused, "ghost isn't running: hand off to it instead, or ask the commander to start it");
     let log = legion.send(Command::Log { deployment: deployment.clone(), filter: Default::default() }).await;
     let legion_proto::Reply::Entries { entries } = log else { panic!("no log") };
     assert!(entries.iter().any(|entry| entry.kind == EntryKind::Note && entry.text.contains("message to ghost wasn't sent")), "{entries:?}");
+    let refusal_note = entries.iter().find(|entry| entry.text.contains("message to ghost wasn't sent")).unwrap();
+    assert_eq!(refusal_note.mission, Some(1), "the note says which mission it was about");
     assert!(!entries.iter().any(|entry| entry.text == "hello?"), "the refused message isn't logged as sent");
 }

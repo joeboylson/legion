@@ -57,9 +57,12 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     rest.
     *Ending a turn:* `POST /api/session/{id}/interrupt` answers
     `{"interrupted":true}` and the session goes idle (`outcome:"interrupted"`).
-    Without `?resume=true`, prompts already queued stay parked and run with the
-    next message. Legion calls it after a handoff, done or blocked from an
-    OpenCode session.
+    Prompts already queued stay parked in the session's inbox, and `?resume=true`
+    doesn't release them (it resumes steering input and control items only).
+    They run with the next message, or at once if Legion steers them:
+    `GET /api/session/{id}/inbox`, then `PATCH .../inbox/{inboxID}` with
+    `{"delivery":"steer"}`. Legion calls the interrupt and then steers the inbox
+    after a handoff, done or blocked from an OpenCode session.
 10. **Blanks:** no gap for the `--standalone` template. #3's `harness.rs`
     only fills `{` + letters/digits + `}`, so in `{file:{systemPromptFile}}`
     only `{systemPromptFile}` is filled.
