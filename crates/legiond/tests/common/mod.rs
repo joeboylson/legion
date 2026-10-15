@@ -355,6 +355,11 @@ pub fn serve_opencode_mid_turn(port: u16, tag: String, tokens: Arc<AtomicU64>, i
             answer("200 OK", &step)
         } else if request.starts_with("GET /api/model ") {
             answer("200 OK", r#"{"data":[{"id":"m","providerID":"p","limit":{"context":100000,"output":8192}}]}"#)
+        } else if request.starts_with("GET /api/session/ses_1/inbox ") {
+            answer("200 OK", r#"{"data":[{"id":"msg_parked","delivery":"queue"}]}"#)
+        } else if request.starts_with("PATCH /api/session/ses_1/inbox/") {
+            requests.lock().unwrap().push(request.to_string());
+            answer("200 OK", "{}")
         } else if request.starts_with("POST /api/session/ses_1/prompt ") || request.starts_with("POST /api/session/ses_1/interrupt ") {
             requests.lock().unwrap().push(request.to_string());
             if request.contains("/interrupt ") {

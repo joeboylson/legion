@@ -12,7 +12,7 @@ use crate::{
     constants::{OPENCODE_STOP_POINTS_PAST_CLEAR_AT, OPENCODE_WRAP_UP_LIMIT},
     context_handover::{wrap_up_request, HandoverPhase},
     daemon::Daemon,
-    opencode_delivery::{find_session_id, interrupt_turn, post_message, Delivery},
+    opencode_delivery::{find_session_id, interrupt_turn, post_message, steer_parked, Delivery},
     opencode_server::OpenCodeServer,
 };
 
@@ -91,7 +91,10 @@ impl Daemon {
                         let text = wrap_up_request(&info.position, info.mission, percent, clear_at);
                         post_message(&server, &conversation, &text, Delivery::Steer).await.map_err(|failure| failure.to_string())
                     }
-                    MidTurnStep::StopTurn => interrupt_turn(&server, &conversation).await,
+                    MidTurnStep::StopTurn => {
+                        interrupt_turn(&server, &conversation).await?;
+                        steer_parked(&server, &conversation).await
+                    }
                 }
             };
             if let Err(reason) = done.await {

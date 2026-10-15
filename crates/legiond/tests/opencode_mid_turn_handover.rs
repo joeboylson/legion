@@ -55,6 +55,7 @@ async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and
     tokens.store(75_000, Ordering::SeqCst);
     wait_for(|| (count_of(&requests, "POST /api/session/ses_1/interrupt ") == 1).then_some(()));
 
+    wait_for(|| (count_of(&requests, "PATCH /api/session/ses_1/inbox/msg_parked") == 1).then_some(()));
     let fresh = wait_for(|| std::fs::read_to_string(legion.out.join(format!("{OPERATOR}.txt"))).ok().filter(|record| record.contains("fresh conversation")));
     assert!(fresh.contains("Read your 'Handoff:' note in mission 1"), "{fresh}");
     assert_eq!(count_of(&requests, "POST /api/session/ses_1/prompt "), 1, "asked to wrap up once");
