@@ -91,7 +91,7 @@ impl Daemon {
     pub fn handle_session_end(self: &Arc<Self>, session: &Session, how_it_ended: &str) {
         self.announce_session(&legion_proto::SessionInfo { activity: legion_proto::Activity::Ended, ..session.info() });
         let ended_text = ended_text(&session.position, session.stopped_because.as_deref(), how_it_ended);
-        self.post_legion_entry(&session.deployment, entry(EntryKind::SessionEnded, None, session.mission, ended_text));
+        self.post_legion_entry(&session.deployment, entry(EntryKind::SessionEnded, Some(&session.position), session.mission, ended_text));
         let is_deployment_open = self.state.lock().unwrap().find_open_deployment(&session.deployment).is_ok();
         if restarts_fresh(session.handover, session.stopped_because.as_deref(), is_deployment_open) {
             return self.start_fresh(session);

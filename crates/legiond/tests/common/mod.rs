@@ -6,7 +6,13 @@
 #![allow(dead_code)]
 
 use std::{
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     process::{Child, Command as Process, Stdio},
     time::{Duration, Instant},
 };
@@ -196,4 +202,66 @@ pub fn wait_for<T>(check: impl Fn() -> Option<T>) -> T {
         assert!(started.elapsed() < WAIT_LIMIT, "gave up waiting");
         std::thread::sleep(POLL_GAP);
     }
+}
+
+pub fn opencode_like_template() -> String {
+    let template = serde_json::json!({
+        "name": "fake",
+        "command": fake_harness(),
+        "args": ["--port", "{port}", "--password", "{password}", "--session", "{session}", "--prompt", "{firstPrompt}"],
+        "tools": "mcp",
+        "toolName": "legion_{tool}"
+    });
+    serde_json::to_string_pretty(&template).unwrap()
+}
+
+pub fn argument_after(launch: &str, flag: &str) -> String {
+    let arguments: Vec<&str> = launch.lines().filter_map(|line| line.strip_prefix("arg: ")).collect();
+    arguments[arguments.iter().position(|argument| *argument == flag).unwrap() + 1].to_string()
+}
+
+fn answer(status: &str, body: &str) -> String {
+    format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+}
+
+/// Plays OpenCode's server: lists one session, and takes prompts unless told to fail them.
+pub fn serve_opencode(port: u16, tag: String, is_failing: Arc<AtomicBool>, prompts: Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut raw = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let count = stream.read(&mut buffer).unwrap_or(0);
+                raw.extend_from_slice(&buffer[..count]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                let length = text.to_ascii_lowercase().split("content-length: ").nth(1).and_then(|rest| rest.split("\r\n").next()?.parse::<usize>().ok()).unwrap_or(0);
+                if count == 0 || text.split_once("\r\n\r\n").is_some_and(|(_, body)| body.len() >= length) {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&raw).to_string();
+            let reply = if request.starts_with("GET /api/session?search=") {
+                answer(
+                    "200 OK",
+                    &format!(
+                        r#"{{"data":[
+                            {{"id":"ses_foreign","title":"someone else's","time":{{"created":99999999999999}}}},
+                            {{"id":"ses_older","title":"an earlier run","time":{{"created":1}}}},
+                            {{"id":"ses_1","title":{tag:?},"time":{{"created":99999999999998}}}}]}}"#
+                    ),
+                )
+            } else if request.starts_with("POST /api/session/ses_1/prompt ") {
+                prompts.lock().unwrap().push(request.clone());
+                match is_failing.load(Ordering::SeqCst) {
+                    true => answer("500 Internal Server Error", "no"),
+                    false => answer("200 OK", "{}"),
+                }
+            } else {
+                answer("404 Not Found", "")
+            };
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
 }

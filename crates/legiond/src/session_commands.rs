@@ -281,7 +281,7 @@ impl Daemon {
         let held = info.mission.map(|number| format!(" on mission {number}")).unwrap_or_default();
         let wanted = mission.map(|number| format!(" on mission {number}")).unwrap_or_default();
         let text = format!("{} was idle{held}, so Legion ended it to start {operator}{wanted}", info.position);
-        self.post_entry(&deployment_id, legion_proto::LEGION, NewEntry { kind: EntryKind::SessionEnded, mission: info.mission, to: None, text, answers: None })?;
+        self.post_entry(&deployment_id, legion_proto::LEGION, NewEntry { kind: EntryKind::SessionEnded, mission: info.mission, to: Some(info.position.clone()), text, answers: None })?;
         Ok(())
     }
 
