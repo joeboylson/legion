@@ -122,6 +122,13 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
       which calls `fetch` without `timeout: false`. Bun's default applies.
       A bare Bun `fetch` (run with `BUN_BE_BUN=1 opencode run script.js`)
       dies at 360 seconds without `timeout: false` and lives with it.
+    - **It hits `opencode mini` too.** `mini` is a Bun client of `serve`.
+      With the variable set on `serve` only, a 450 second silent model was
+      answered (one request, no retry) but `mini` showed "Transport: The
+      operation timed out." at 5m 59s and stopped updating while `serve`
+      carried on. That is the cut Legion's operators saw. With the variable
+      on `mini` as well it ran to 7m 31s with no error. The template's
+      `env` reaches both, as one script starts them.
     - **Only silence counts.** A reply that sends something at least every
       360 seconds (even an empty chunk) was not cut: a provider that sent a
       keepalive chunk every 20 seconds finished at 482 seconds. A model that
