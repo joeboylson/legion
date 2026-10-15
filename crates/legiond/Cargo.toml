@@ -6,6 +6,9 @@ description = "Legion's background program: runs Claude sessions in terminals it
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 legion-proto = { path = "../legion-proto" }
 portable-pty = "0.9"
 rusqlite = { version = "0.37", features = ["bundled"] }

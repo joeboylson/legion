@@ -7,7 +7,7 @@ use legion_proto::NAME;
 
 use crate::{
     harness::{fill, uses_blank, Blanks, FilledCommand, HarnessTemplate},
-    opencode_state::{new_server, OpenCodeServer},
+    opencode_server::{new_server, OpenCodeServer},
     session_arguments::{session_arguments, LaunchPlan},
 };
 

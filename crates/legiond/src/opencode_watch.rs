@@ -1,10 +1,13 @@
 //! Keeps each OpenCode session's activity current by asking its server.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+
+use tokio::task::JoinSet;
 
 use crate::{
     daemon::{ActivityReport, Daemon},
-    opencode_state::{activity_from, ask_server, progress_after, OpenCodeServer, Progress, Reply},
+    opencode_server::OpenCodeServer,
+    opencode_state::{activity_from, ask_server, progress_after, Progress, Reply},
 };
 
 struct Question {
@@ -15,9 +18,11 @@ struct Question {
 }
 
 impl Daemon {
-    /// Asks every OpenCode session's server in turn, off the lock, then
-    /// applies what each said through the path a Claude session's reports take.
-    pub fn read_opencode_states(&self) {
+    /// Asks every OpenCode session's server, one task each so a hung one
+    /// delays no other, with the lock held for neither the asking nor the
+    /// applying's slow parts. Each answer goes through the path a Claude
+    /// session's reports take.
+    pub async fn read_opencode_states(self: Arc<Self>) {
         let questions: Vec<Question> = {
             let state = self.state.lock().unwrap();
             state
@@ -29,11 +34,18 @@ impl Daemon {
                 })
                 .collect()
         };
-        let answers: Vec<(Question, Reply)> = std::thread::scope(|scope| {
-            let asking: Vec<_> = questions.into_iter().map(|question| scope.spawn(move || (ask_server(&question.server, question.progress), question))).collect();
-            asking.into_iter().filter_map(|asked| asked.join().ok()).map(|(reply, question)| (question, reply)).collect()
+        let mut asking = JoinSet::new();
+        questions.into_iter().for_each(|question| {
+            asking.spawn(async move {
+                let reply = ask_server(&question.server, question.progress).await;
+                (question, reply)
+            });
         });
-        answers.into_iter().for_each(|(question, reply)| self.apply_opencode_reply(question, reply));
+        while let Some(Ok((question, reply))) = asking.join_next().await {
+            let applying = self.clone();
+            // Applying logs to the store, which blocks.
+            let _ = tokio::task::spawn_blocking(move || applying.apply_opencode_reply(question, reply)).await;
+        }
     }
 
     fn apply_opencode_reply(&self, question: Question, reply: Reply) {

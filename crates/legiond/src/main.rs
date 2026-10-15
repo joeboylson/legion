@@ -35,6 +35,7 @@ mod mission_parts;
 mod mission_status;
 mod model_choice;
 mod naming;
+mod opencode_server;
 mod opencode_state;
 mod opencode_watch;
 mod permission_answers;
@@ -185,8 +186,7 @@ async fn run() -> Result<(), String> {
         let mut interval = tokio::time::interval(OPENCODE_STATE_INTERVAL);
         loop {
             interval.tick().await;
-            let reading_daemon = opencode_daemon.clone();
-            let _ = tokio::task::spawn_blocking(move || reading_daemon.read_opencode_states()).await;
+            opencode_daemon.clone().read_opencode_states().await;
         }
     });
 
