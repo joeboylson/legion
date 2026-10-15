@@ -143,3 +143,16 @@ pub const LEGION_TOOLS_SUBCOMMAND: &str = "mcp";
 pub fn legion_tools_rule() -> String {
     format!("mcp__{NAME}")
 }
+
+/// How often legiond asks each OpenCode session's server whether it's busy.
+pub const OPENCODE_STATE_INTERVAL: Duration = Duration::from_secs(3);
+/// How long one request to that server may take before it counts as no answer.
+pub const OPENCODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// The user name OpenCode's server expects with OPENCODE_PASSWORD.
+pub const OPENCODE_USER: &str = "opencode";
+/// Sessions with a foreground turn running; the ones not in it are inactive.
+pub const OPENCODE_ACTIVE_PATH: &str = "/api/session/active";
+/// Every session the server holds; empty until `opencode mini` makes one.
+pub const OPENCODE_SESSIONS_PATH: &str = "/api/session";
+/// Random bytes in a session's server password.
+pub const OPENCODE_PASSWORD_BYTES: usize = 24;

@@ -22,6 +22,7 @@ use crate::{
     daemon::Daemon,
     harness::FilledCommand,
     ids::new_id,
+    opencode_state::{OpenCodeServer, Progress},
     session_programs::SessionProgram,
     setup::PermissionMode,
     store::RunningSession,
@@ -37,8 +38,11 @@ pub struct Session {
     pub activity: Activity,
     pub can_see_state: bool,
     /// Started from a harness template: no add-on reports what it does, so
-    /// Legion can't tell when it's busy or stuck.
+    /// Legion can't tell when it's busy or stuck, unless it has a server to ask.
     pub reports_itself: bool,
+    /// The server its state is read from, and what has been seen of it.
+    pub server: Option<OpenCodeServer>,
+    pub server_progress: Progress,
     pub detail: Option<String>,
     pub model: Option<String>,
     /// How full its conversation is, in percent, as its add-on last said.
@@ -159,7 +163,7 @@ pub struct SpawnRequest {
 fn program_name<'a>(daemon: &'a Daemon, program: &'a SessionProgram) -> &'a str {
     match program {
         SessionProgram::Claude(_) => &daemon.config.claude_command,
-        SessionProgram::Template(filled) => &filled.command,
+        SessionProgram::Template(filled, _) => &filled.command,
     }
 }
 
@@ -203,7 +207,7 @@ fn session_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) ->
     let config = &daemon.config;
     let mut command = match &request.program {
         SessionProgram::Claude(arguments) => claude_command(daemon, request, arguments, session_id),
-        SessionProgram::Template(filled) => template_command(daemon, filled, session_id),
+        SessionProgram::Template(filled, _) => template_command(daemon, filled, session_id),
     };
     command.cwd(&request.working_folder);
     command.env("TERM", TERMINAL_TYPE);
@@ -265,8 +269,10 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         mission: request.mission,
         part: request.part,
         activity: Activity::Starting,
-        can_see_state: !request.program.reports_itself(),
+        can_see_state: !request.program.reports_itself() || request.program.server().is_some(),
         reports_itself: request.program.reports_itself(),
+        server: request.program.server().cloned(),
+        server_progress: Progress::default(),
         detail: None,
         model: request.model,
         context_percent: None,

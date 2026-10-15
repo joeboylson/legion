@@ -35,6 +35,8 @@ mod mission_parts;
 mod mission_status;
 mod model_choice;
 mod naming;
+mod opencode_state;
+mod opencode_watch;
 mod permission_answers;
 mod prompts;
 mod request_replays;
@@ -70,7 +72,7 @@ use tokio::{
 
 use crate::{
     claude_version::{check_claude_supported, version_label},
-    constants::{SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
+    constants::{OPENCODE_STATE_INTERVAL, SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
     daemon::{Config, Daemon},
     machine_settings::read_machine_settings,
     server::{claim_socket, router},
@@ -175,6 +177,16 @@ async fn run() -> Result<(), String> {
             let looking_daemon = watching_daemon.clone();
             let previous = std::mem::take(&mut last_look);
             last_look = tokio::task::spawn_blocking(move || looking_daemon.report_setup_changes(&previous)).await.unwrap_or_default();
+        }
+    });
+
+    let opencode_daemon = daemon.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(OPENCODE_STATE_INTERVAL);
+        loop {
+            interval.tick().await;
+            let reading_daemon = opencode_daemon.clone();
+            let _ = tokio::task::spawn_blocking(move || reading_daemon.read_opencode_states()).await;
         }
     });
 

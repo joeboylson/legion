@@ -592,6 +592,8 @@ pub enum Activity {
     /// A person stopped its turn (Esc, or a deny, in its terminal); it waits
     /// to be told what to do next.
     Halted,
+    /// An OpenCode session whose server doesn't answer.
+    Unreachable,
     Ended,
 }
 
@@ -604,6 +606,7 @@ impl Activity {
             Activity::Permission => "waiting on a permission question",
             Activity::Limited => "waiting for its usage limit to reset",
             Activity::Halted => "halted, waiting to be told what to do next",
+            Activity::Unreachable => "can't reach its server",
             Activity::Ended => "ended",
         }
     }

@@ -13,6 +13,7 @@ export const ACTIVITY_LABELS: Record<Activity, string> = {
   permission: 'needs permission',
   limited: 'at usage limit',
   halted: 'halted',
+  unreachable: "can't reach its server",
   ended: 'ended',
 }
 
@@ -65,6 +66,7 @@ export const ACTIVITY_COLORS: Record<Activity, string> = {
   permission: 'var(--warning)',
   limited: 'var(--warning)',
   halted: 'var(--warning)',
+  unreachable: 'var(--warning)',
   ended: 'var(--danger)',
 }
 

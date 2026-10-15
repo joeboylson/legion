@@ -6,20 +6,29 @@ use std::{net::TcpListener, path::Path};
 use legion_proto::NAME;
 
 use crate::{
-    harness::{fill, Blanks, FilledCommand, HarnessTemplate},
+    harness::{fill, uses_blank, Blanks, FilledCommand, HarnessTemplate},
+    opencode_state::{new_server, OpenCodeServer},
     session_arguments::{session_arguments, LaunchPlan},
 };
 
 pub enum SessionProgram {
     /// Claude Code's arguments; legiond adds its add-on.
     Claude(Vec<String>),
-    Template(FilledCommand),
+    /// With the server Legion reads its state from, when the template runs one.
+    Template(FilledCommand, Option<OpenCodeServer>),
 }
 
 impl SessionProgram {
     /// A template session has no add-on to say what it's doing.
     pub fn reports_itself(&self) -> bool {
-        matches!(self, SessionProgram::Template(_))
+        matches!(self, SessionProgram::Template(..))
+    }
+
+    pub fn server(&self) -> Option<&OpenCodeServer> {
+        match self {
+            SessionProgram::Template(_, server) => server.as_ref(),
+            SessionProgram::Claude(_) => None,
+        }
     }
 }
 
@@ -55,7 +64,7 @@ fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn template_blanks(launch: &LaunchPlan, place: &LaunchPlace, config_file: Option<&Path>, port: u16) -> Blanks {
+fn template_blanks(launch: &LaunchPlan, place: &LaunchPlace, config_file: Option<&Path>, server: &OpenCodeServer) -> Blanks {
     let choice = &launch.model_choice;
     Blanks {
         first_prompt: Some(launch.first_prompt.clone()),
@@ -72,7 +81,8 @@ fn template_blanks(launch: &LaunchPlan, place: &LaunchPlace, config_file: Option
         position: Some(launch.position.clone()),
         socket: Some(text(place.socket_path)),
         working_folder: Some(text(place.working_folder)),
-        port: Some(port.to_string()),
+        port: Some(server.port.to_string()),
+        password: Some(server.password.clone()),
     }
 }
 
@@ -80,13 +90,16 @@ fn template_blanks(launch: &LaunchPlan, place: &LaunchPlace, config_file: Option
 /// own config file, if it has one.
 fn template_program(template: &HarnessTemplate, launch: &LaunchPlan, place: &LaunchPlace) -> Result<SessionProgram, String> {
     let config_file = template.config_file.as_ref().map(|_| place.config_file);
-    let blanks = template_blanks(launch, place, config_file, free_local_port()?);
+    let server = new_server(free_local_port()?)?;
+    let blanks = template_blanks(launch, place, config_file, &server);
     let filled = fill(template, &blanks)?;
     write_session_file(place.tools_config_file, place.tools_config)?;
     if let (Some(path), Some(config)) = (config_file, &filled.config_file) {
         write_session_file(path, config)?;
     }
-    Ok(SessionProgram::Template(filled))
+    // A template with a port and a password runs a server Legion can ask.
+    let has_server = uses_blank(template, "port") && uses_blank(template, "password");
+    Ok(SessionProgram::Template(filled, has_server.then_some(server)))
 }
 
 pub fn session_program(launch: &LaunchPlan, place: &LaunchPlace) -> Result<SessionProgram, String> {
@@ -150,9 +163,10 @@ mod tests {
             socket_path: Path::new("/s.sock"),
         };
         let launch = spark_plan(Some(serde_json::from_str(PI).unwrap()));
-        let SessionProgram::Template(filled) = session_program(&launch, &place).unwrap() else { panic!("not a template") };
+        let SessionProgram::Template(filled, server) = session_program(&launch, &place).unwrap() else { panic!("not a template") };
         let port_at = filled.args.iter().position(|argument| argument == "--port").unwrap() + 1;
         assert!(filled.args[port_at].parse::<u16>().unwrap() > 0);
+        assert_eq!(server, None, "a template with no password runs no server Legion can ask");
         assert_eq!(filled.args[..2], ["--model", "spark-fast/qwen"], "no permission mode leaves its group out");
         assert_eq!(filled.args[port_at + 1..], ["--", "Start on mission 1."]);
         assert_eq!(filled.env["PI_CONFIG"], text(&config_file));

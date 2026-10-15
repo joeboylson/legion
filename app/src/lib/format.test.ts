@@ -24,6 +24,7 @@ describe('sessionStatus', () => {
     const session = { deployment: 'd1', position: 'builder', mission: 8, activity: 'busy', can_see_state: true, detail: null, is_stuck_starting: false, model: 'claude-sonnet-5-5', context_percent: 55, part: null } as const
     expect(sessionStatus(session)).toBe('sonnet · 55% · working')
     expect(sessionStatus({ ...session, model: null, context_percent: null })).toBe('working')
+    expect(sessionStatus({ ...session, activity: 'unreachable' })).toBe("sonnet · 55% · can't reach its server")
   })
 })
 

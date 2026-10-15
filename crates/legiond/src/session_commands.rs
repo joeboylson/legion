@@ -58,14 +58,14 @@ pub fn is_busy(activity: Activity) -> bool {
     matches!(activity, Activity::Starting | Activity::Busy | Activity::Permission | Activity::Halted)
 }
 
-/// A session that reports itself never says it's idle, so it would hold a
-/// place under the machine's limit for good.
-pub fn counts_against_limit(activity: Activity, reports_itself: bool) -> bool {
-    !reports_itself && is_busy(activity)
+/// A template session with no server never says it's idle, so it would hold
+/// a place under the machine's limit for good.
+pub fn counts_against_limit(activity: Activity, reports_itself: bool, has_server: bool) -> bool {
+    (!reports_itself || has_server) && is_busy(activity)
 }
 
 pub fn busy_session_count<'a>(sessions: impl Iterator<Item = &'a Session>) -> usize {
-    sessions.filter(|session| counts_against_limit(session.activity, session.reports_itself)).count()
+    sessions.filter(|session| counts_against_limit(session.activity, session.reports_itself, session.server.is_some())).count()
 }
 
 fn started_text(position: &str, mission: Option<u32>, part: Option<u32>, starter: &str) -> String {
@@ -440,11 +440,18 @@ mod tests {
     }
 
     #[test]
-    fn a_session_that_reports_itself_never_counts_against_the_limit() {
-        assert!(counts_against_limit(Activity::Starting, false));
-        assert!(!counts_against_limit(Activity::Starting, true));
-        assert!(!counts_against_limit(Activity::Busy, true));
-        assert!(!counts_against_limit(Activity::Idle, false));
+    fn a_template_session_without_a_server_never_counts_against_the_limit() {
+        assert!(counts_against_limit(Activity::Starting, false, false));
+        assert!(!counts_against_limit(Activity::Starting, true, false));
+        assert!(!counts_against_limit(Activity::Busy, true, false));
+        assert!(!counts_against_limit(Activity::Idle, false, false));
+    }
+
+    #[test]
+    fn a_busy_session_with_a_server_counts_and_an_idle_or_unreachable_one_does_not() {
+        assert!(counts_against_limit(Activity::Busy, true, true));
+        assert!(!counts_against_limit(Activity::Idle, true, true));
+        assert!(!counts_against_limit(Activity::Unreachable, true, true));
     }
 
     #[test]

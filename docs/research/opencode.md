@@ -45,7 +45,8 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
    or after the turn if busy. `"steer"` exists but wasn't tried. It needs
    Legion to run `opencode serve --port <port>` with `OPENCODE_PASSWORD`, and
    to start `mini --server <url> --session <id>`. Three blanks are missing
-   from draft 2: **port, password, session ID** (admin: draft 11 adds them).
+   from draft 2: **port, password, session ID** (admin: draft 11 adds them;
+   mission 4 added port and password).
    *Checked:* a curl POST showed up and was answered in the running terminal.
    Plugins and ACP weren't tried.
 10. **Blanks:** no gap for the `--standalone` template. #3's `harness.rs`
@@ -56,6 +57,17 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
 12. **No leaks:** a server on the real HOME without `OPENCODE_CONFIG` had no
     `legion` agent and no MCP servers. Nothing is written to the folder or to
     `~/.config/opencode/`.
+13. **Busy or idle (replaces draft 7's `report` tool for OpenCode):**
+    `GET /api/session/active` on the session's server (basic auth, user
+    `opencode`, the `OPENCODE_PASSWORD`) answers
+    `{"data":{"ses_…":{"type":"running"}}}` while a turn runs, and
+    `{"data":{}}` when nothing does ("sessions absent are inactive"). It's
+    `{"data":{}}` before the session exists too, so Legion also reads
+    `GET /api/session` (`{"data":[…],"cursor":{…}}`, empty until
+    `opencode mini` makes one) and shows idle only once it lists one.
+    `GET /openapi.json` lists the API. `/api/event` is a stream (a
+    `server.connected` event, then heartbeats) and wasn't needed: Legion polls.
+    *Checked:* by hand on v2.0.25 with `opencode serve --port P`.
 
 **First prompt races the tool server.** With `--standalone`, the first prompt
 was sent before `legion mcp` connected. That turn had no `legion_*` tools, so

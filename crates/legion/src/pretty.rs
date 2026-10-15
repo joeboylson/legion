@@ -26,7 +26,7 @@ fn activity_cell(activity: Activity) -> Cell {
     let color = match activity {
         Activity::Busy => Color::Yellow,
         Activity::Idle => Color::Green,
-        Activity::Permission | Activity::Halted | Activity::Limited => Color::Red,
+        Activity::Permission | Activity::Halted | Activity::Limited | Activity::Unreachable => Color::Red,
         Activity::Starting => Color::Cyan,
         Activity::Ended => Color::DarkGrey,
     };
