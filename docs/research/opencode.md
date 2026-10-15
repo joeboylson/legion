@@ -215,3 +215,67 @@ Proof: a capture proxy in front of the Spark logged the template's requests.
 Each body had `chat_template_kwargs: {"enable_thinking": false}` and
 `parallel_tool_calls: true`, and (in a throwaway HOME) no `reasoning_effort`. The OpenCode session
 log of that run held only `text` and `tool` blocks, no `reasoning`.
+||||||| parent of d8b5ec5 (feat(legion): trim the opening prompt for template sessions and turn off OpenCode tools Legion doesn't use)
+
+## First request size (mission 14)
+
+A shipper's first request reached 50K tokens, and `spark-big` timed out
+reading it. To see what fills it, a fake model endpoint saved the body of the
+first chat request of an OpenCode operator on a throwaway Legion. The
+operator had a real shipper's inputs: its 10 KB definition, a 1.6 KB mission
+with 77 history notes (22 KB), the folder's 20 callouts and 8 toolbox
+tools. The saved body was then sent to `spark-fast` with `max_tokens: 1`;
+`usage.prompt_tokens` is the real count (Qwen's tokenizer, about 3.8 bytes
+per token on this text).
+
+| Part of the first request | Before | After |
+|---|---|---|
+| Legion: definition | 10.4 KB | 3.2 KB |
+| Legion: mission and history | 25.5 KB | 3.3 KB |
+| Legion: pipeline table | 0.2 KB | 0.2 KB |
+| Legion: standing rules and working habits | 1.8 KB | 1.8 KB |
+| Legion: tool list | 2.1 KB | 0.1 KB |
+| Legion: toolbox | 1.7 KB | 0.5 KB |
+| Legion: callouts | 4.2 KB | 1.3 KB |
+| OpenCode's own system text | 6.2 KB | 0.9 KB |
+| First prompt | 0.02 KB | 0.02 KB |
+| Tools array: Legion's 17 tools | 6.6 KB | 6.6 KB |
+| Tools array: OpenCode's own | 12.1 KB | 6.3 KB |
+| **Whole body** | **71.7 KB, 18,654 tokens** | **24.6 KB, 6,479 tokens** |
+
+The pipeline table here is tiny; a real one is about 3 KB and isn't cut.
+The 50K in the log came from longer histories than this one (history is the
+part that grows with every round), so the real "before" was bigger than
+18.7K.
+
+What OpenCode puts in by itself, found by reading the saved body:
+- `execute` and a "Code Mode" text that lists OpenCode's own five tools
+  (models, sessions, MCP resources): 4.5 KB of text and 1.2 KB of tool.
+- `subagent` (2.7 KB), `webfetch`, `websearch`, `skill`, and a list of two
+  skills (OpenCode's own help and bug-report skills).
+- `edit`, `read`, `write`, `glob`, `grep` and `shell` stay: Legion's
+  operators use them.
+- OpenCode v2.0.25 doesn't read `.mcp.json` or `CLAUDE.md` from the folder.
+
+How each is turned off, in the template's config (*checked:* the saved body
+no longer holds them):
+- `"websearch": false` removes `websearch`.
+- Agent `permissions` rules of `deny` for `webfetch`, `subagent`, `skill`
+  and `execute` remove those tools and their text. `skills: []` and
+  `experimental.policies` with `tool.use` did not.
+
+What Legion cuts for a template session (`crates/legiond/src/lean_prompt.rs`,
+the callouts and toolbox sections); Claude's instructions are unchanged
+(`claude_codes_text_is_unchanged`):
+- The definition: the first 3,000 characters, then the path to the file to
+  read whole.
+- The mission: whole up to 4,000 characters, then the `mission_read` tool.
+- Mission history: the newest 5 entries, each cut to 600 characters, then
+  the `log` tool for the rest.
+- The tool list: one line. OpenCode already sends each tool's description.
+  A harness that reaches tools as commands still gets each command.
+- The toolbox: the tools' names (30 at most), then the `toolbox` tool.
+- Callouts: the newest 5, then the callouts file and the `callouts` tool.
+
+A folder that already has its own copy of `opencode.json` in
+`.legion/harnesses/` keeps the old config until the new one is copied in.

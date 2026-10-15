@@ -260,6 +260,10 @@ pub fn setup_folder(folder: &Path) -> PathBuf {
     folder.join(format!(".{NAME}"))
 }
 
+pub fn definition_path(folder: &Path, operator: &str) -> PathBuf {
+    setup_folder(folder).join(OPERATORS_FOLDER_NAME).join(operator).join(DEFINITION_FILE_NAME)
+}
+
 fn write_file(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("can't create {}: {error}", parent.display()))?;

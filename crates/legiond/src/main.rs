@@ -28,6 +28,7 @@ mod folder_state;
 mod git;
 mod harness;
 mod ids;
+mod lean_prompt;
 mod log_commands;
 mod machine_settings;
 mod mission_commands;

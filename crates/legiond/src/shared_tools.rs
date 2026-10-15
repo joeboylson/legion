@@ -12,6 +12,8 @@ use crate::{prompts::ToolNaming, setup::setup_folder};
 pub const TOOLS_FOLDER_NAME: &str = "tools";
 /// How a tool's first line starts when it says what the tool does.
 const COMMENT_MARKERS: &[&str] = &["#!", "#", "//", "--"];
+/// A template session's instructions name this many tools.
+const LEAN_TOOLS_NAMED: usize = 30;
 const NO_SUMMARY: &str = "(says nothing about itself; read it)";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,6 +75,23 @@ Use these before doing anything by hand; read any of them with {toolbox}. Buildi
     )
 }
 
+/// What a template session is told about the toolbox: the tools' names, and the tool that says what each does.
+pub fn lean_shared_tools_section(tools: &[SharedTool], tools_folder: &Path, naming: &ToolNaming) -> String {
+    let folder = tools_folder.display();
+    let named = tools.iter().take(LEAN_TOOLS_NAMED).map(|tool| tool.name.as_str()).collect::<Vec<_>>().join(", ");
+    let listed = match tools.len() {
+        0 => "None yet.".to_string(),
+        count if count > LEAN_TOOLS_NAMED => format!("{named}, and {} more.", count - LEAN_TOOLS_NAMED),
+        _ => named,
+    };
+    format!(
+        "The team's toolbox, in {folder}: {listed}
+{toolbox} says what each does and reads one. Use them before doing anything by hand. When you do the same thing by hand a second time, or the next operator will need it, make it a tool (start it with a comment line saying what it does and how to run it) and share it with {share_tool}.",
+        toolbox = naming.mention("toolbox"),
+        share_tool = naming.mention("share_tool"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use legion_proto::NAME;
@@ -93,6 +112,19 @@ mod tests {
         assert!(shared_tools_section(&tools, folder, &ToolNaming::claude()).contains("- /repo/.legion/tools/browser-test.sh: Runs tests.html."));
         assert!(shared_tools_section(&[], folder, &ToolNaming::claude()).contains("None yet."));
         assert!(shared_tools_section(&[], folder, &ToolNaming::claude()).contains("share_tool"));
+    }
+
+    #[test]
+    fn a_template_session_hears_tool_names_and_the_tool_that_says_more() {
+        let folder = Path::new("/repo/.legion/tools");
+        let tools = |count: usize| (0..count).map(|number| SharedTool { name: format!("t{number}.sh"), summary: "Does a thing.".into() }).collect::<Vec<_>>();
+        let few = lean_shared_tools_section(&tools(2), folder, &ToolNaming::claude());
+        assert!(few.contains("in /repo/.legion/tools: t0.sh, t1.sh\n"));
+        assert!(!few.contains("Does a thing."));
+        assert!(few.contains("the toolbox tool says what each does") && few.contains("share_tool"));
+        let many = lean_shared_tools_section(&tools(LEAN_TOOLS_NAMED + 4), folder, &ToolNaming::claude());
+        assert!(many.contains(&format!("t{}.sh, and 4 more.", LEAN_TOOLS_NAMED - 1)));
+        assert!(lean_shared_tools_section(&[], folder, &ToolNaming::claude()).contains("None yet."));
     }
 
     #[test]

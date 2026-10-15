@@ -20,6 +20,8 @@ pub const CALLOUTS_FILE_NAME: &str = "callouts.md";
 pub const CALLOUT_MAX_LENGTH: usize = 200;
 /// The newest this many go in each session's instructions.
 pub const CALLOUTS_SHOWN: usize = 20;
+/// A template session's instructions list this many; the file has the rest.
+const LEAN_CALLOUTS_SHOWN: usize = 5;
 const CALLOUT_LINE_PREFIX: &str = "- ";
 const CALLOUTS_FILE_HEADER: &str = "# Callouts\n\nOne-line heads-ups the team called out for everyone, oldest first. Legion adds to this file.\n\n";
 
@@ -68,6 +70,27 @@ pub fn callouts_section(callouts: &[String], naming: &ToolNaming) -> String {
 {listed}
 
 When you learn something everyone working here should know (a gotcha, a slow or flaky command, a file not to touch, a setting that matters), call it out with {callout_tool} in one short line, like a kitchen calling out \"behind\". Not for status or progress: those go in handoffs and notes.",
+        callout_tool = naming.mention("callout"),
+    )
+}
+
+/// What a template session is told about callouts: the newest few, and where the rest are.
+pub fn lean_callouts_section(callouts: &[String], file: &Path, naming: &ToolNaming) -> String {
+    let newest = &callouts[callouts.len().saturating_sub(LEAN_CALLOUTS_SHOWN)..];
+    let earlier = callouts.len() - newest.len();
+    let listed = match newest {
+        [] => "None yet.".to_string(),
+        _ => newest.iter().map(|callout| format!("- {callout}")).collect::<Vec<_>>().join("\n"),
+    };
+    let rest = match earlier {
+        0 => String::new(),
+        _ => format!("\nThe {earlier} before these are in {}; {} lists them all.", file.display(), naming.mention("callouts")),
+    };
+    format!(
+        "Callouts, the team's newest heads-ups, newest last:
+{listed}{rest}
+
+When you learn something everyone working here should know (a gotcha, a slow command, a file not to touch), call it out with {callout_tool} in one short line. Not for status: that goes in handoffs and notes.",
         callout_tool = naming.mention("callout"),
     )
 }
@@ -168,6 +191,20 @@ mod tests {
         assert_eq!(date_of(0), "1970-01-01");
         assert_eq!(date_of(1_791_331_200_000), "2026-10-07");
         assert_eq!(date_of(951_782_400_000), "2000-02-29");
+    }
+
+    #[test]
+    fn a_template_session_hears_the_newest_few_and_where_the_rest_are() {
+        let many: Vec<String> = (1..=LEAN_CALLOUTS_SHOWN + 3).map(|number| format!("callout {number}")).collect();
+        let file = Path::new("/repo/.legion/callouts.md");
+        let section = lean_callouts_section(&many, file, &ToolNaming::claude());
+        assert!(!section.contains("- callout 3\n"));
+        assert!(section.contains("- callout 4\n") && section.contains(&format!("- callout {}", LEAN_CALLOUTS_SHOWN + 3)));
+        assert!(section.contains("The 3 before these are in /repo/.legion/callouts.md; the callouts tool lists them all."));
+        assert!(section.contains("call it out with the callout tool"));
+        let few = lean_callouts_section(&many[..2], file, &ToolNaming::claude());
+        assert!(!few.contains("before these"));
+        assert!(lean_callouts_section(&[], file, &ToolNaming::claude()).contains("None yet."));
     }
 
     #[test]

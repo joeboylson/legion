@@ -12,8 +12,9 @@ use crate::{
     constants::{delivery_prefix, MAX_WORKAROUND_ATTEMPTS},
     harness::{HarnessTemplate, ToolRoute, TOOL_BLANK},
     setup::{Operator, Pipeline},
-    shared_tools::{shared_tools_section, SharedTool},
-    callouts::callouts_section,
+    shared_tools::{lean_shared_tools_section, shared_tools_section, SharedTool},
+    callouts::{callouts_section, lean_callouts_section},
+    lean_prompt,
     session_lifecycle::minutes_label,
     team_changes::{copy_limits_text, Team},
 };
@@ -95,7 +96,7 @@ fn tool_lines(position: &str, naming: &ToolNaming) -> String {
     }
 }
 
-fn bulleted(lines: impl Iterator<Item = String>, when_empty: &str) -> String {
+pub fn bulleted(lines: impl Iterator<Item = String>, when_empty: &str) -> String {
     let bullets: Vec<String> = lines.map(|line| format!("- {line}")).collect();
     if bullets.is_empty() {
         when_empty.to_string()
@@ -225,8 +226,12 @@ pub struct OperatorBriefing<'a> {
     /// The branch a mission's work finishes onto, when the folder is in git.
     pub base_branch: Option<&'a str>,
     pub callouts: &'a [String],
+    /// The files a template session is pointed to for what its instructions leave out.
+    pub definition_file: &'a Path,
+    pub callouts_file: &'a Path,
     pub naming: &'a ToolNaming,
-    /// True for a session on a harness template: it gets the working habits that save its steps.
+    /// True for a session on a harness template: it gets the working habits that save its steps,
+    /// and the short form of its instructions.
     pub on_template: bool,
 }
 
@@ -237,13 +242,14 @@ const TEMPLATE_WORKING_HABITS: &str = "How to work, so each step counts:
 - Start writing early, once you know enough for the first change, instead of exploring everything first.";
 
 pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: OperatorBriefing, mission: Option<MissionBriefing>) -> String {
-    let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch, callouts, naming, on_template } = briefing;
+    let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch, callouts, definition_file, callouts_file, naming, on_template } = briefing;
     // Other missions finish onto the base meanwhile; catching up before a
     // handoff fixes clashes while this one's work is fresh, not at the finish.
     let catch_up = base_branch
         .map(|base| format!(" If you committed changes, first bring your branch up to date with {base}: run `git rebase {base}`, fix any clash, and check your work again."))
         .unwrap_or_default();
     let mission_part = match mission {
+        Some(briefing) if on_template => lean_prompt::mission(&briefing, naming),
         Some(briefing) => {
             let history_lines = briefing.history.iter().map(|entry| format!("{}: {} {}", entry.from, entry.kind.as_str(), entry.text));
             let history = bulleted(history_lines, "Nothing yet.");
@@ -251,7 +257,15 @@ pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: Operat
         }
         None => "You have no mission yet; the commander will send one.".to_string(),
     };
-    let tools = tool_lines(position, naming);
+    // A command harness has no tool list of its own, so it is still told each command.
+    let lean_tools = on_template.then(|| lean_prompt::tools_line(naming)).filter(|line| !line.is_empty());
+    let tools_section = lean_tools.unwrap_or_else(|| format!("Legion's tools, which already know your deployment and position:\n{}", tool_lines(position, naming)));
+    let definition = if on_template { lean_prompt::definition(&operator.definition, definition_file) } else { operator.definition.trim().to_string() };
+    let (shared, callouts_part) = if on_template {
+        (lean_shared_tools_section(shared_tools, shared_tools_folder, naming), lean_callouts_section(callouts, callouts_file, naming))
+    } else {
+        (shared_tools_section(shared_tools, shared_tools_folder, naming), callouts_section(callouts, naming))
+    };
     let prompt = format!(
         "You are {position}, an operator in a Legion deployment ({deployment_name}, {deployment_id}), {pipeline_name}.{first_step}
 
@@ -266,14 +280,11 @@ No one reads your screen. Anything you need answered, and anything others need t
 
 When your step is done, commit your work, then hand off to whoever the table names next.{catch_up} When the table names a list, hand off to all of them in one handoff. Others in such a list may be working on the mission at the same time as you, in the same folder: commit only the files you changed, by name, never everything. Other sessions run on this machine too: stop only processes you started, by their process ID, never with `pkill -f` or `killall` and a name. If your step ends the pipeline, report the mission done. Then stop and wait: the work may come back to you, and Legion ends your session once the mission is finished.
 
-Legion's tools, which already know your deployment and position:
-{tools}
+{tools_section}
 
 {shared}
 
-{callouts}",
-        shared = shared_tools_section(shared_tools, shared_tools_folder, naming),
-        callouts = callouts_section(callouts, naming),
+{callouts_part}",
         send = naming.mention("send"),
         flag_decision = naming.mention("flag_decision"),
         ask = naming.name("ask"),
@@ -281,7 +292,6 @@ Legion's tools, which already know your deployment and position:
         deployment_id = deployment.id,
         pipeline_name = pipeline_phrase(&deployment.pipeline),
         first_step = pipeline.first.as_ref().map(|first| format!(" The first step is {first}.")).unwrap_or_default(),
-        definition = operator.definition.trim(),
     );
     if on_template {
         format!("{prompt}\n\n{TEMPLATE_WORKING_HABITS}")
@@ -359,7 +369,7 @@ mod tests {
         let operator = Operator { definition: "# Builder\nBuild it.\n".into(), config: OperatorConfig::default() };
         let briefing = MissionBriefing { number: 3, body: "Make it work", history: &[] };
         let shared = [SharedTool { name: "browser-test.sh".into(), summary: "Runs tests.html.".into() }];
-        let operator_briefing = OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: "", shared_tools: &shared, shared_tools_folder: Path::new("/repo/.legion/tools"), base_branch: Some("main"), callouts: &[], naming: &ToolNaming::claude(), on_template: false };
+        let operator_briefing = OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: "", shared_tools: &shared, shared_tools_folder: Path::new("/repo/.legion/tools"), base_branch: Some("main"), callouts: &[], definition_file: Path::new("/repo/.legion/operators/builder/definition.md"), callouts_file: Path::new("/repo/.legion/callouts.md"), naming: &ToolNaming::claude(), on_template: false };
         let prompt = operator_prompt("builder-2", &deployment(), operator_briefing, Some(briefing));
         assert!(prompt.starts_with("You are builder-2"));
         assert!(prompt.contains("Build it."));
@@ -401,6 +411,8 @@ mod tests {
             shared_tools_folder: Path::new("/repo/.legion/tools"),
             base_branch: Some("main"),
             callouts: &["2026-10-07 tester: port 3000 is taken".into()],
+            definition_file: Path::new("/repo/.legion/operators/builder/definition.md"),
+            callouts_file: Path::new("/repo/.legion/callouts.md"),
             naming,
             on_template,
         };
@@ -422,6 +434,51 @@ mod tests {
         assert!(prompt.contains("Put related reads and searches in one step"));
         assert!(prompt.contains("Read a file only when the step you're on needs it"));
         assert!(prompt.contains("Start writing early"));
+    }
+
+    /// An operator on a template with a long definition, a long history, many callouts and many tools.
+    fn crowded_template_operator(naming: &ToolNaming) -> String {
+        let pipeline: Pipeline = serde_yaml::from_str("operators: [builder]\nfirst: builder\n").unwrap();
+        let definition = format!("# Shipper\nShip it.\n{}", "- A rule that goes on.\n".repeat(2000));
+        let operator = Operator { definition, config: OperatorConfig::default() };
+        let shared: Vec<SharedTool> = (0..40).map(|number| SharedTool { name: format!("tool-{number}.sh"), summary: "Does a thing for a long while.".into() }).collect();
+        let history: Vec<Entry> = (0..30).map(|number| postmortem(&format!("handoff {number}: {}", "details ".repeat(500)))).collect();
+        let callouts: Vec<String> = (0..30).map(|number| format!("2026-10-07 tester: callout {number}")).collect();
+        let briefing = OperatorBriefing {
+            operator: &operator,
+            pipeline: &pipeline,
+            pipeline_text: "operators: [builder]\n",
+            shared_tools: &shared,
+            shared_tools_folder: Path::new("/repo/.legion/tools"),
+            base_branch: Some("main"),
+            callouts: &callouts,
+            definition_file: Path::new("/repo/.legion/operators/shipper/definition.md"),
+            callouts_file: Path::new("/repo/.legion/callouts.md"),
+            naming,
+            on_template: true,
+        };
+        operator_prompt("shipper", &deployment(), briefing, Some(MissionBriefing { number: 3, body: "Make it work", history: &history }))
+    }
+
+    #[test]
+    fn a_template_session_gets_a_short_form_of_a_crowded_prompt() {
+        let prompt = crowded_template_operator(&ToolNaming::Pattern("legion_{tool}".into()));
+        assert!(prompt.len() < 12_000, "{} bytes", prompt.len());
+        assert!(prompt.contains("Read the whole of it in /repo/.legion/operators/shipper/definition.md"));
+        assert!(prompt.contains("the newest 5; the other 25 and the full notes are in the log tool"));
+        assert!(prompt.contains("The 25 before these are in /repo/.legion/callouts.md; the callouts tool lists them all."));
+        assert!(prompt.contains("tool-0.sh") && prompt.contains("and 10 more."));
+        assert!(prompt.contains("are in your tool list as legion_<name>."));
+        assert!(!prompt.contains("- legion_handoff:"));
+        assert!(prompt.contains("No one reads your screen"));
+        assert!(prompt.ends_with(TEMPLATE_WORKING_HABITS));
+    }
+
+    #[test]
+    fn a_command_template_is_still_told_each_command() {
+        let prompt = crowded_template_operator(&ToolNaming::Command);
+        assert!(prompt.contains("- legion handoff <mission> <next> <note>: Your step is done"));
+        assert!(prompt.contains("Read the whole of it in"));
     }
 
     #[test]

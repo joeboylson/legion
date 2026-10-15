@@ -16,7 +16,7 @@ use crate::{
     git::{create_worktree, current_branch, is_git_repo},
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
     permission_answers::answers_permission_question,
-    callouts::read_callouts,
+    callouts::{callouts_path, read_callouts},
     harness::read_harness,
     model_choice::{model_choice, CLAUDE_CODE_HARNESS},
     prompts::{commander_prompt, operator_prompt, strategist_prompt, MissionBriefing, OperatorBriefing, StrategistBriefing, ToolNaming},
@@ -24,7 +24,7 @@ use crate::{
     session_programs::{session_program, write_session_file, LaunchPlace},
     team_changes::{read_team, team_fingerprint, Team},
     sessions::{spawn_session, Session, SpawnRequest},
-    setup::{clear_at_percent, read_operator, read_pipeline, read_settings, strategist_check_minutes},
+    setup::{clear_at_percent, definition_path, read_operator, read_pipeline, read_settings, strategist_check_minutes},
     terminal_key::TerminalKey,
 };
 
@@ -195,6 +195,8 @@ fn operator_launch(
         shared_tools_folder: &tools_folder,
         base_branch: base_branch.as_deref(),
         callouts: &callouts,
+        definition_file: &definition_path(&folder.path, operator_name),
+        callouts_file: &callouts_path(&folder.path),
         naming: &naming,
         on_template: template.is_some(),
     };
