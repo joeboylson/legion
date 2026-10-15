@@ -4,27 +4,50 @@
 use std::future::Future;
 
 use crate::{
-    constants::OPENCODE_SESSIONS_PATH,
+    constants::{NOT_FOUND_STATUS, OPENCODE_SESSIONS_PATH},
     opencode_server::{get, post, sessions_search_path, this_runs_session, OpenCodeServer},
 };
 
+/// Why a message couldn't be posted just now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    /// The server is up but doesn't hold this run's conversation yet.
+    NoSessionYet,
+    /// The server no longer knows the conversation Legion had saved.
+    SessionGone,
+    Other(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::NoSessionYet => write!(formatter, "its server has no session of this run yet"),
+            Failure::SessionGone => write!(formatter, "its server no longer has the session Legion saved"),
+            Failure::Other(reason) => write!(formatter, "{reason}"),
+        }
+    }
+}
+
 /// The ID of this run's session on its server, once it has one.
-pub async fn find_session_id(server: &OpenCodeServer) -> Result<String, String> {
-    let body = get(server, &sessions_search_path(server)).await.map_err(|error| format!("can't list its server's sessions: {error}"))?;
-    let found = this_runs_session(&body, &server.tag).map_err(|error| format!("can't read its server's session list: {error}"))?;
-    found.ok_or_else(|| "its server has no session of this run yet".to_string())
+pub async fn find_session_id(server: &OpenCodeServer) -> Result<String, Failure> {
+    let body = get(server, &sessions_search_path(server)).await.map_err(|error| Failure::Other(format!("can't list its server's sessions: {error}")))?;
+    let found = this_runs_session(&body, &server.tag).map_err(|error| Failure::Other(format!("can't read its server's session list: {error}")))?;
+    found.ok_or(Failure::NoSessionYet)
 }
 
 /// Queues one message behind whatever the session is doing.
-pub async fn post_message(server: &OpenCodeServer, session_id: &str, text: &str) -> Result<(), String> {
+pub async fn post_message(server: &OpenCodeServer, session_id: &str, text: &str) -> Result<(), Failure> {
     let path = format!("{OPENCODE_SESSIONS_PATH}/{session_id}/prompt");
     let body = serde_json::json!({ "text": text, "delivery": "queue" }).to_string();
-    post(server, &path, &body).await.map(|_| ()).map_err(|error| format!("its server refused the message: {error}"))
+    post(server, &path, &body).await.map(|_| ()).map_err(|error| match error.starts_with(NOT_FOUND_STATUS) {
+        true => Failure::SessionGone,
+        false => Failure::Other(format!("its server refused the message: {error}")),
+    })
 }
 
 /// Posts messages in order, telling `on_delivered` after each success. Stops
 /// at the first failure, so none is passed over: that entry and the reason.
-pub async fn deliver_in_order<Recorded: Future<Output = ()>>(server: &OpenCodeServer, session_id: &str, messages: &[(i64, String)], mut on_delivered: impl FnMut(i64) -> Recorded) -> Option<(i64, String)> {
+pub async fn deliver_in_order<Recorded: Future<Output = ()>>(server: &OpenCodeServer, session_id: &str, messages: &[(i64, String)], mut on_delivered: impl FnMut(i64) -> Recorded) -> Option<(i64, Failure)> {
     for (entry_id, text) in messages {
         match post_message(server, session_id, text).await {
             Ok(()) => on_delivered(*entry_id).await,
@@ -77,7 +100,14 @@ mod tests {
         .await;
         serving.join().unwrap();
         assert_eq!(delivered, vec![1]);
-        assert_eq!(failure, Some((2, "its server refused the message: 500 Internal Server Error".to_string())));
+        assert_eq!(failure, Some((2, Failure::Other("its server refused the message: 500 Internal Server Error".to_string()))));
+    }
+
+    #[tokio::test]
+    async fn a_saved_session_the_server_no_longer_has_is_gone_not_refused() {
+        let (server, serving) = fake_server(vec![Some(http("404 Not Found", ""))]);
+        assert_eq!(post_message(&server, "ses_1", "hi").await, Err(Failure::SessionGone));
+        serving.join().unwrap();
     }
 
     #[tokio::test]
@@ -93,7 +123,7 @@ mod tests {
         assert!(delivered.is_empty());
         let (entry_id, reason) = failure.unwrap();
         assert_eq!(entry_id, 1);
-        assert!(reason.starts_with("its server refused the message: "), "{reason}");
+        assert!(reason.to_string().starts_with("its server refused the message: "), "{reason}");
     }
 
     #[tokio::test]
@@ -110,14 +140,14 @@ mod tests {
     #[tokio::test]
     async fn no_session_with_the_tag_yet_is_a_failure_to_retry() {
         let (server, serving) = fake_server(vec![ok(r#"{"data":[{"id":"ses_other","title":"tag-2"}]}"#)]);
-        assert_eq!(find_session_id(&server).await.unwrap_err(), "its server has no session of this run yet");
+        assert_eq!(find_session_id(&server).await.unwrap_err(), Failure::NoSessionYet);
         serving.join().unwrap();
     }
 
     #[tokio::test]
     async fn two_sessions_with_the_tag_are_not_guessed_between() {
         let (server, serving) = fake_server(vec![ok(r#"{"data":[{"id":"a","title":"tag-1"},{"id":"b","title":"tag-1"}]}"#)]);
-        let error = find_session_id(&server).await.unwrap_err();
+        let error = find_session_id(&server).await.unwrap_err().to_string();
         assert!(error.contains("more than one OpenCode session is titled tag-1"), "{error}");
         serving.join().unwrap();
     }

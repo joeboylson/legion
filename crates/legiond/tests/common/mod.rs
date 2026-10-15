@@ -10,7 +10,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     process::{Child, Command as Process, Stdio},
@@ -294,6 +294,33 @@ pub fn serve_opencode_with_context(port: u16, tag: String, tokens: u64, is_runni
         } else if request.starts_with("POST /api/session/ses_1/prompt ") {
             prompts.lock().unwrap().push(request.to_string());
             answer("200 OK", "{}")
+        } else {
+            answer("404 Not Found", "")
+        }
+    });
+}
+
+/// Plays a server whose conversation for `tag` isn't listed for the first
+/// `misses` lookups, then is listed as `live_id`. Prompts to `live_id` are
+/// kept and taken; to any other ID they get 404, as a conversation the
+/// server no longer has would.
+pub fn serve_opencode_listing_late(port: u16, tag: String, misses: Arc<AtomicUsize>, live_id: Arc<Mutex<String>>, prompts: Arc<Mutex<Vec<String>>>) {
+    serve_http(port, move |request| {
+        let live = live_id.lock().unwrap().clone();
+        if request.starts_with("GET /api/session?search=") {
+            let is_missing = misses.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1)).is_ok();
+            match is_missing {
+                true => answer("200 OK", r#"{"data":[]}"#),
+                false => answer("200 OK", &format!(r#"{{"data":[{{"id":{live:?},"title":{tag:?},"time":{{"created":1}}}}]}}"#)),
+            }
+        } else if let Some(id) = request.strip_prefix("POST /api/session/").and_then(|rest| rest.split_once("/prompt ")).map(|(id, _)| id.to_string()) {
+            match id == live {
+                true => {
+                    prompts.lock().unwrap().push(request.to_string());
+                    answer("200 OK", "{}")
+                }
+                false => answer("404 Not Found", ""),
+            }
         } else {
             answer("404 Not Found", "")
         }

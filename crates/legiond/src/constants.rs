@@ -162,6 +162,8 @@ pub const OPENCODE_STATE_INTERVAL: Duration = Duration::from_secs(3);
 /// How often messages are pushed to OpenCode sessions: the add-on's poll (INBOX_POLL_MS
 /// in addon/hooks/register.ts), so they arrive at the same moments as a Claude session's.
 pub const OPENCODE_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
+/// How an OpenCode server's error starts when it doesn't know the session asked for.
+pub const NOT_FOUND_STATUS: &str = "404";
 /// How long one request to that server may take before it counts as no answer.
 pub const OPENCODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// OpenCode's stream of what a session does, as server-sent events.

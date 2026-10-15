@@ -75,6 +75,15 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     default) and takes the one whose title equals the tag; two is an error.
     *Checked:* the POST, the title and `search` on v2.0.25 under a throwaway
     HOME; `mini --session` is from item 9.
+    *Messages and the title:* a message waits until the conversation is
+    listed, and is tried again every second. The template now makes the
+    titled conversation as soon as the server answers, before it waits for
+    Legion's tools, so the wait is short; a restart or handover starts a new
+    run with a new title, so each one has it. A wait under 60 seconds isn't
+    logged; a longer one is, once, and so is the delivery that follows. A
+    saved ID the server answers 404 to is dropped and searched for again. A
+    session that ended is logged as "ended", not as a failure. *Checked:*
+    compacting (`POST /api/session/{id}/compact`) keeps the ID and the title.
     `GET /openapi.json` lists the API. `/api/event` is a stream (a
     `server.connected` event, then heartbeats). Legion polls for busy or idle,
     and follows the stream for one log line per step: `session.step.started`

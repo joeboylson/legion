@@ -5,14 +5,16 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use legion_proto::{Entry, LEGION};
 
 use crate::{
+    constants::SESSION_START_GRACE,
     daemon::{mark_handed, pending_entries, Daemon},
     entry_routing::delivery_text,
-    opencode_delivery::{deliver_in_order, find_session_id},
+    opencode_delivery::{deliver_in_order, find_session_id, Failure},
     opencode_server::OpenCodeServer,
 };
 
@@ -36,7 +38,15 @@ struct Waiting {
     position: String,
     server: OpenCodeServer,
     opencode_session: Option<String>,
+    /// How long the session has been running.
+    waited: Duration,
     entries: Vec<Entry>,
+}
+
+/// A conversation that isn't there yet is expected while its session starts:
+/// the message is kept and tried again, and only a wait past the grace is news.
+fn is_worth_logging(failure: &Failure, waited: Duration) -> bool {
+    !matches!(failure, Failure::NoSessionYet) || waited >= SESSION_START_GRACE
 }
 
 /// True the first time this failure is seen for this entry.
@@ -70,6 +80,7 @@ impl Daemon {
             position: session.position.clone(),
             server,
             opencode_session: session.opencode_session.clone(),
+            waited: session.started_at.elapsed(),
             entries,
         })
     }
@@ -78,6 +89,17 @@ impl Daemon {
         if let Some(session) = self.state.lock().unwrap().sessions.get_mut(session_id) {
             session.opencode_session = Some(opencode_session.to_string());
         }
+    }
+
+    fn forget_opencode_session(&self, session_id: &str) {
+        if let Some(session) = self.state.lock().unwrap().sessions.get_mut(session_id) {
+            session.opencode_session = None;
+        }
+    }
+
+    /// False once the session has ended or is being ended.
+    fn is_session_live(&self, session_id: &str) -> bool {
+        self.state.lock().unwrap().sessions.get(session_id).is_some_and(|session| !session.is_stopping())
     }
 
     /// Only after its server took the message is the entry marked delivered.
@@ -91,7 +113,8 @@ impl Daemon {
     /// One tick: each OpenCode session gets a task of its own to post its
     /// waiting messages to its server, oldest first, so a hung server delays
     /// no other. A message its server doesn't take stays undelivered and is
-    /// tried again next tick; a session still being pushed is skipped.
+    /// tried again next tick; a session still being pushed is skipped. A
+    /// message is only given up on when its session has ended.
     pub async fn push_messages_to_opencode_sessions(self: &Arc<Self>, book: &Arc<Mutex<PushBook>>) {
         for session_id in self.opencode_session_ids() {
             if !book.lock().unwrap().in_flight.insert(session_id.clone()) {
@@ -106,15 +129,24 @@ impl Daemon {
                     Some(waiting) => daemon.push_to(&Arc::new(waiting.clone())).await,
                     None => None,
                 };
+                let is_live = daemon.is_session_live(&session_id);
                 let mut locked = book.lock().unwrap();
                 locked.in_flight.remove(&session_id);
-                match (failure, waiting) {
-                    (Some((entry_id, reason)), Some(waiting)) if is_new_failure(&mut locked.reported, &session_id, entry_id, &reason) => {
-                        eprintln!("{LEGION}d: couldn't deliver entry {entry_id} to {} ({}): {reason}", waiting.position, waiting.deployment_name);
-                    }
-                    (Some(_), _) => {}
-                    (None, _) => {
+                let Some(waiting) = waiting else { return };
+                let (position, deployment) = (&waiting.position, &waiting.deployment_name);
+                match failure {
+                    Some((entry_id, _)) if !is_live => {
                         locked.reported.remove(&session_id);
+                        eprintln!("{LEGION}d: entry {entry_id} to {position} ({deployment}) wasn't delivered: its session ended");
+                    }
+                    Some((entry_id, reason)) if is_worth_logging(&reason, waiting.waited) && is_new_failure(&mut locked.reported, &session_id, entry_id, &reason.to_string()) => {
+                        eprintln!("{LEGION}d: couldn't deliver entry {entry_id} to {position} ({deployment}): {reason}");
+                    }
+                    Some(_) => {}
+                    None => {
+                        if let Some((entry_id, _)) = locked.reported.remove(&session_id) {
+                            eprintln!("{LEGION}d: delivered entry {entry_id} to {position} ({deployment}) after the earlier failure");
+                        }
                     }
                 }
             });
@@ -122,13 +154,13 @@ impl Daemon {
     }
 
     /// Posts one session's waiting messages in order; the entry that failed and why.
-    async fn push_to(self: &Arc<Self>, waiting: &Arc<Waiting>) -> Option<(i64, String)> {
+    async fn push_to(self: &Arc<Self>, waiting: &Arc<Waiting>) -> Option<(i64, Failure)> {
         let opencode_session = match self.opencode_session_of(waiting).await {
             Ok(id) => id,
             Err(reason) => return waiting.entries.first().map(|entry| (entry.id, reason)),
         };
         let messages: Vec<(i64, String)> = waiting.entries.iter().map(|entry| (entry.id, delivery_text(entry))).collect();
-        deliver_in_order(&waiting.server, &opencode_session, &messages, |entry_id| {
+        let failure = deliver_in_order(&waiting.server, &opencode_session, &messages, |entry_id| {
             let (daemon, waiting) = (self.clone(), waiting.clone());
             async move {
                 // Recording writes to the store, which blocks.
@@ -140,11 +172,15 @@ impl Daemon {
                 .await;
             }
         })
-        .await
+        .await;
+        if matches!(failure, Some((_, Failure::SessionGone))) {
+            self.forget_opencode_session(&waiting.session_id);
+        }
+        failure
     }
 
     /// Its conversation's ID on its server, asked for once and kept.
-    async fn opencode_session_of(&self, waiting: &Waiting) -> Result<String, String> {
+    async fn opencode_session_of(&self, waiting: &Waiting) -> Result<String, Failure> {
         if let Some(known) = &waiting.opencode_session {
             return Ok(known.clone());
         }
@@ -157,6 +193,14 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_conversation_is_news_only_after_the_start_grace() {
+        assert!(!is_worth_logging(&Failure::NoSessionYet, SESSION_START_GRACE - Duration::from_secs(1)));
+        assert!(is_worth_logging(&Failure::NoSessionYet, SESSION_START_GRACE));
+        assert!(is_worth_logging(&Failure::SessionGone, Duration::ZERO));
+        assert!(is_worth_logging(&Failure::Other("refused".into()), Duration::ZERO));
+    }
 
     #[test]
     fn a_failure_is_new_once_per_entry_and_reason() {
