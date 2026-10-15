@@ -13,6 +13,7 @@ use crate::{
     store::PartCheckout,
     constants::{STOPPED_ON_REQUEST_REASON, STRATEGIST_DISALLOWED_TOOLS, DEFAULT_OPERATOR_COPY_LIMIT, PROMPTS_FOLDER_NAME, MISSION_BRANCH_PREFIX, RECENT_POSTMORTEM_COUNT, WORKTREES_FOLDER_NAME},
     daemon::{Daemon, State},
+    entry_filter::briefing_history,
     git::{create_worktree, current_branch, is_git_repo},
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
     permission_answers::answers_permission_question,
@@ -178,7 +179,7 @@ fn operator_launch(
     let mission_with_history = mission
         .map(|number| {
             let (_, body) = state.mission_with_body(folder_index, &deployment.id, number)?;
-            let history = folder.store.entries(&deployment.id, &LogFilter { mission: Some(number), ..Default::default() })?;
+            let history = briefing_history(folder.store.entries(&deployment.id, &LogFilter { mission: Some(number), ..Default::default() })?);
             Ok::<_, String>((number, body, history))
         })
         .transpose()?;

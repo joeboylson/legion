@@ -24,6 +24,12 @@ pub fn entries_matching(entries: Vec<Entry>, filter: &LogFilter) -> Vec<Entry> {
     entries.into_iter().filter(|entry| passes_filter(entry, filter, &answered_question_ids)).collect()
 }
 
+/// What the next operator on a mission is told happened: not the step-by-step
+/// activity lines, which would crowd out the notes and handoffs it needs.
+pub fn briefing_history(entries: Vec<Entry>) -> Vec<Entry> {
+    entries.into_iter().filter(|entry| entry.kind != EntryKind::Activity).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,6 +60,12 @@ mod tests {
     fn by_mission() {
         let filter = LogFilter { mission: Some(1), ..Default::default() };
         assert_eq!(ids(&entries_matching(sample_log(), &filter)), vec![1, 3]);
+    }
+
+    #[test]
+    fn a_briefings_history_has_no_activity_entries() {
+        let log = vec![entry(1, EntryKind::Note, "builder", None, Some(1), None), entry(2, EntryKind::Activity, "builder", None, Some(1), None), entry(3, EntryKind::Handoff, "builder", Some("checker"), Some(1), None), entry(4, EntryKind::Activity, "builder", None, Some(1), None)];
+        assert_eq!(ids(&briefing_history(log)), vec![1, 3]);
     }
 
     #[test]
