@@ -78,6 +78,8 @@ pub struct Blanks {
     pub port: Option<String>,
     /// The password Legion gave that server, so legiond can ask it too.
     pub password: Option<String>,
+    /// The title Legion gives the session's one OpenCode conversation, so it can find it.
+    pub session: Option<String>,
 }
 
 impl Blanks {
@@ -101,6 +103,7 @@ impl Blanks {
             "workingFolder" => &self.working_folder,
             "port" => &self.port,
             "password" => &self.password,
+            "session" => &self.session,
             _ => return None,
         };
         Some(field.as_deref())
@@ -426,7 +429,7 @@ mod tests {
         let folder = scratch_folder();
         write_harness(&folder, "opencode", include_str!("../../../templates/harnesses/opencode.json"));
         let harness = read_harness(&folder, "opencode").unwrap();
-        let blanks = Blanks { system_prompt_file: Some("/p/d-builder.md".into()), port: Some("4242".into()), password: Some("s3cret".into()), first_prompt: Some("Say \"hi\"; $(no)".into()), ..opencode_blanks() };
+        let blanks = Blanks { system_prompt_file: Some("/p/d-builder.md".into()), port: Some("4242".into()), password: Some("s3cret".into()), session: Some("tag-9".into()), first_prompt: Some("Say \"hi\"; $(no)".into()), ..opencode_blanks() };
         let filled = fill(&harness, &blanks).unwrap();
         assert_eq!(filled.command, "sh");
         assert_eq!(filled.args[0], "-c");
@@ -436,6 +439,7 @@ mod tests {
         assert!(!script.contains("s3cret") && !script.contains("urandom"), "Legion picks the password, the script never does: {script}");
         assert_eq!(filled.env["OPENCODE_PASSWORD"], "s3cret");
         assert!(uses_blank(&harness, "port") && uses_blank(&harness, "password"));
+        assert!(script.contains(r#"-d '{"title":"tag-9"}'"#) && script.contains("--session \"$sid\""), "{script}");
         assert!(!script.contains("qwen3") && !script.contains("spark-fast"), "names from legion.json never become shell: {script}");
         assert_eq!(filled.args[2..], ["sh".to_string(), "Say \"hi\"; $(no)".to_string(), "spark-fast/qwen3".to_string()], "the prompt and model are arguments");
         let config: Value = serde_json::from_str(filled.config_file.as_deref().unwrap()).unwrap();

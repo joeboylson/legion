@@ -136,8 +136,11 @@ Legion fills these blanks in `command`, `args`, `env` and `configFile`:
 `{model}`, `{modelProvider}` (the model's name, such as `spark-fast`),
 `{address}`, `{toolsConfig}`, `{toolsConfigFile}`, `{configFile}`,
 `{permissionMode}`, `{legionCommand}`, `{deployment}`, `{position}`,
-`{socket}`, `{workingFolder}`, `{port}` (a free local port) and `{password}`
-(a random password Legion makes for the session's server).
+`{socket}`, `{workingFolder}`, `{port}` (a free local port), `{password}`
+(a random password Legion makes for the session's server) and `{session}`
+(a tag Legion makes for the session; the OpenCode template gives its
+conversation that title, so Legion can tell it from other sessions in the
+same folder).
 
 What a harness command writes to stderr goes to the log if it ends with an
 error, not to its screen, so print error lines there.

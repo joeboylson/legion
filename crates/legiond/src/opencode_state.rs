@@ -18,13 +18,6 @@ pub struct Progress {
     pub has_session: bool,
 }
 
-/// Which of the server's sessions are this run's: made since it started, in its folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunScope {
-    pub started_ms: i64,
-    pub directory: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reply {
     /// No connection, a timeout, a refusal or something that isn't its answer.
@@ -60,13 +53,13 @@ fn is_running_in(body: &str) -> Result<bool, String> {
 }
 
 /// Asks the server. The list of sessions is only asked for while none of
-/// this run's has been seen, since a running one already shows there is one.
-pub async fn ask_server(server: &OpenCodeServer, progress: Progress, scope: &RunScope) -> Reply {
+/// ours has been seen, since a running one already shows there is one.
+pub async fn ask_server(server: &OpenCodeServer, progress: Progress) -> Reply {
     let Ok(is_running) = get(server, OPENCODE_ACTIVE_PATH).await.and_then(|body| is_running_in(&body)) else { return Reply::Silent };
     if is_running || progress.has_session {
         return Reply::Answered { is_running, has_session: true };
     }
-    match get(server, OPENCODE_SESSIONS_PATH).await.and_then(|body| this_runs_session(&body, scope.started_ms, &scope.directory)) {
+    match get(server, &format!("{OPENCODE_SESSIONS_PATH}?search={}", server.tag)).await.and_then(|body| this_runs_session(&body, &server.tag)) {
         Ok(session) => Reply::Answered { is_running, has_session: session.is_some() },
         Err(_) => Reply::Silent,
     }
@@ -84,10 +77,6 @@ mod tests {
 
     const SOON: Duration = Duration::from_secs(1);
     const LATE: Duration = SESSION_START_GRACE;
-
-    fn scope() -> RunScope {
-        RunScope { started_ms: 1000, directory: "/work".into() }
-    }
 
     fn answered(is_running: bool, has_session: bool) -> Reply {
         Reply::Answered { is_running, has_session }
@@ -140,7 +129,7 @@ mod tests {
     /// A server that answers each connection with the next reply: an empty one is a 401, None closes the connection unanswered.
     fn fake_server(replies: Vec<Option<&'static str>>) -> (OpenCodeServer, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = OpenCodeServer { port: listener.local_addr().unwrap().port(), password: "pw".into() };
+        let server = OpenCodeServer { port: listener.local_addr().unwrap().port(), password: "pw".into(), tag: "tag-1".into() };
         let serving = thread::spawn(move || {
             replies
                 .into_iter()
@@ -162,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn a_server_with_a_running_session_is_busy_and_gets_the_password() {
         let (server, serving) = fake_server(vec![Some(r#"{"data":{"ses_1":{"type":"running"}}}"#)]);
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, answered(true, true));
+        assert_eq!(ask_server(&server, Progress::default()).await, answered(true, true));
         let requests = serving.join().unwrap();
         assert!(requests[0].starts_with("GET /api/session/active HTTP/1.1"), "{}", requests[0]);
         assert!(requests[0].to_lowercase().contains("authorization: basic b3blbmnvzgu6chc="), "{}", requests[0]);
@@ -170,34 +159,34 @@ mod tests {
 
     #[tokio::test]
     async fn an_idle_server_is_asked_for_its_sessions_until_one_exists() {
-        let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#), Some(r#"{"data":[]}"#), Some(r#"{"data":{}}"#), Some(r#"{"data":[{"id":"s","time":{"created":1200},"location":{"directory":"/work"}}]}"#)]);
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, answered(false, false));
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, answered(false, true));
+        let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#), Some(r#"{"data":[]}"#), Some(r#"{"data":{}}"#), Some(r#"{"data":[{"id":"s","title":"tag-1"}]}"#)]);
+        assert_eq!(ask_server(&server, Progress::default()).await, answered(false, false));
+        assert_eq!(ask_server(&server, Progress::default()).await, answered(false, true));
         serving.join().unwrap();
     }
 
     #[tokio::test]
-    async fn sessions_of_an_earlier_run_or_another_folder_leave_it_starting() {
-        let old = r#"{"data":[{"id":"a","time":{"created":999},"location":{"directory":"/work"}},{"id":"b","time":{"created":2000},"location":{"directory":"/other"}}]}"#;
+    async fn other_sessions_leave_it_starting() {
+        let old = r#"{"data":[{"id":"a","title":"abc"},{"id":"b","title":"tag-2"}]}"#;
         let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#), Some(old)]);
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, answered(false, false));
+        assert_eq!(ask_server(&server, Progress::default()).await, answered(false, false));
         serving.join().unwrap();
     }
 
     #[tokio::test]
     async fn a_session_already_seen_isnt_listed_again() {
         let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#)]);
-        assert_eq!(ask_server(&server, Progress { has_answered: true, has_session: true }, &scope()).await, answered(false, true));
+        assert_eq!(ask_server(&server, Progress { has_answered: true, has_session: true }).await, answered(false, true));
         assert_eq!(serving.join().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn a_refusal_a_closed_connection_and_bad_json_are_silence() {
         let (server, serving) = fake_server(vec![Some(""), None, Some("not json")]);
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, Reply::Silent);
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, Reply::Silent);
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, Reply::Silent);
+        assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent);
+        assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent);
+        assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent);
         serving.join().unwrap();
-        assert_eq!(ask_server(&server, Progress::default(), &scope()).await, Reply::Silent, "nothing listens any more");
+        assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent, "nothing listens any more");
     }
 }

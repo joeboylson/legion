@@ -83,6 +83,7 @@ fn template_blanks(launch: &LaunchPlan, place: &LaunchPlace, config_file: Option
         working_folder: Some(text(place.working_folder)),
         port: Some(server.port.to_string()),
         password: Some(server.password.clone()),
+        session: Some(server.tag.clone()),
     }
 }
 

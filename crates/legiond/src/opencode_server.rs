@@ -9,13 +9,16 @@ use http_body_util::{BodyExt, Full};
 use hyper::{body::Bytes, header::AUTHORIZATION, Method, Request};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 
+use crate::ids::new_id;
 use crate::constants::{OPENCODE_PASSWORD_BYTES, OPENCODE_REQUEST_TIMEOUT, OPENCODE_USER};
 
-/// Where a session's server listens, and the password Legion gave it.
+/// Where a session's server listens, the password Legion gave it, and the
+/// title (`tag`) its one OpenCode conversation is made with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenCodeServer {
     pub port: u16,
     pub password: String,
+    pub tag: String,
 }
 
 /// A password only Legion and the session's own script know.
@@ -24,7 +27,7 @@ pub fn new_server(port: u16) -> Result<OpenCodeServer, String> {
     std::fs::File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut random))
         .map_err(|error| format!("can't make a password: {error}"))?;
-    Ok(OpenCodeServer { port, password: random.iter().map(|byte| format!("{byte:02x}")).collect() })
+    Ok(OpenCodeServer { port, password: random.iter().map(|byte| format!("{byte:02x}")).collect(), tag: new_id() })
 }
 
 const BASE64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -78,18 +81,16 @@ pub async fn post(server: &OpenCodeServer, path: &str, body: &str) -> Result<Str
     request(server, Method::POST, path, Some(body.to_string())).await
 }
 
-/// The server lists every session it has ever stored, from every folder and
-/// run, so only one made since this session started, in its folder, is this
-/// run's. Its ID, if there is one; two are an error, since which is this
-/// session's can't be told.
-pub fn this_runs_session(reply: &str, started_ms: i64, directory: &str) -> Result<Option<String>, String> {
+/// The server lists every session it has stored, from every folder and run,
+/// and two operators may share a folder, so a session is this one's only if
+/// its title is the tag Legion gave it. Its ID, if there is one; two are an
+/// error, since which is this session's can't be told.
+pub fn this_runs_session(reply: &str, tag: &str) -> Result<Option<String>, String> {
     let reply: Value = serde_json::from_str(reply).map_err(|error| format!("not JSON: {error}"))?;
     let sessions = reply.get("data").and_then(Value::as_array).ok_or("no data list")?;
-    let created = |session: &Value| session.pointer("/time/created").and_then(Value::as_f64).unwrap_or(0.0);
-    let is_this_runs = |session: &&Value| created(session) >= started_ms as f64 && session.pointer("/location/directory").and_then(Value::as_str) == Some(directory);
-    let mut matches = sessions.iter().filter(is_this_runs);
+    let mut matches = sessions.iter().filter(|session| session.get("title").and_then(Value::as_str) == Some(tag));
     match (matches.next(), matches.next()) {
-        (Some(_), Some(_)) => Err(format!("more than one OpenCode session in {directory} since this one started")),
+        (Some(_), Some(_)) => Err(format!("more than one OpenCode session is titled {tag}")),
         (Some(session), None) => Ok(session.get("id").and_then(Value::as_str).map(str::to_string)),
         (None, _) => Ok(None),
     }
@@ -110,22 +111,22 @@ mod tests {
     }
 
     #[test]
-    fn only_a_session_of_this_run_and_folder_is_this_runs() {
+    fn only_the_session_with_our_title_is_ours() {
         let list = r#"{"data":[
-            {"id":"ses_old","time":{"created":500},"location":{"directory":"/work"}},
-            {"id":"ses_other","time":{"created":2000},"location":{"directory":"/elsewhere"}},
-            {"id":"ses_a","time":{"created":1000},"location":{"directory":"/work"}},
-            {"id":"ses_b","time":{"created":1500},"location":{"directory":"/work"}}]}"#;
-        assert_eq!(this_runs_session(list, 1200, "/work"), Ok(Some("ses_b".into())));
-        assert_eq!(this_runs_session(list, 1600, "/work"), Ok(None), "all older");
-        assert_eq!(
-            this_runs_session(list, 1000, "/work"),
-            Err("more than one OpenCode session in /work since this one started".to_string()),
-            "two matches can't be told apart"
-        );
-        assert_eq!(this_runs_session(list, 0, "/nowhere"), Ok(None));
-        assert_eq!(this_runs_session(r#"{"data":[]}"#, 0, "/work"), Ok(None));
-        assert!(this_runs_session("nope", 0, "/work").is_err());
+            {"id":"ses_old","title":"abc","time":{"created":500},"location":{"directory":"/work"}},
+            {"id":"ses_other","title":"someone else","time":{"created":2000},"location":{"directory":"/work"}},
+            {"id":"ses_ours","title":"tag-1","time":{"created":1500},"location":{"directory":"/work"}},
+            {"id":"ses_later","title":"tag-2","time":{"created":3000},"location":{"directory":"/work"}}]}"#;
+        assert_eq!(this_runs_session(list, "tag-1"), Ok(Some("ses_ours".into())), "newer sessions in the same folder aren't ours");
+        assert_eq!(this_runs_session(list, "tag-3"), Ok(None));
+        assert_eq!(this_runs_session(r#"{"data":[]}"#, "tag-1"), Ok(None));
+        assert!(this_runs_session("nope", "tag-1").is_err());
+    }
+
+    #[test]
+    fn two_sessions_with_our_title_are_refused() {
+        let list = r#"{"data":[{"id":"a","title":"tag-1"},{"id":"b","title":"tag-1"}]}"#;
+        assert_eq!(this_runs_session(list, "tag-1"), Err("more than one OpenCode session is titled tag-1".to_string()));
     }
 
     #[test]
@@ -133,11 +134,12 @@ mod tests {
         let (first, second) = (new_server(1).unwrap(), new_server(1).unwrap());
         assert_eq!(first.password.len(), OPENCODE_PASSWORD_BYTES * 2);
         assert_ne!(first.password, second.password);
+        assert_ne!(first.tag, second.tag);
     }
 
     fn one_reply(reply: &'static str) -> (OpenCodeServer, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = OpenCodeServer { port: listener.local_addr().unwrap().port(), password: "pw".into() };
+        let server = OpenCodeServer { port: listener.local_addr().unwrap().port(), password: "pw".into(), tag: "tag-1".into() };
         let serving = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 4096];
@@ -169,7 +171,7 @@ mod tests {
         assert!(get(&server, "/x").await.unwrap_err().contains("401"));
         serving.join().unwrap();
         let silent = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = OpenCodeServer { port: silent.local_addr().unwrap().port(), password: "pw".into() };
+        let server = OpenCodeServer { port: silent.local_addr().unwrap().port(), password: "pw".into(), tag: "tag-1".into() };
         assert_eq!(get(&server, "/x").await.unwrap_err(), "timed out");
     }
 }

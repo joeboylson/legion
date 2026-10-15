@@ -60,9 +60,6 @@ pub struct Session {
     /// Set when Legion ends it on purpose, so its end isn't treated as a crash.
     pub stopped_because: Option<String>,
     pub started_at: Instant,
-    /// When it started, in milliseconds since 1970, and where.
-    pub started_ms: i64,
-    pub working_folder: PathBuf,
     /// Whether the admin has been told it seems stuck before starting.
     pub is_reported_stuck: bool,
     /// Messages handed to it run as its next turn, which may be after the
@@ -287,8 +284,6 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         permission_asked_at: None,
         stopped_because: None,
         started_at: Instant::now(),
-        started_ms: crate::store::now_ms(),
-        working_folder: request.working_folder.clone(),
         is_reported_stuck: false,
         next_turn_answers_announcements: None,
         is_answering_announcements: false,

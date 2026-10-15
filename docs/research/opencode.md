@@ -63,12 +63,18 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
     `{"data":{"ses_…":{"type":"running"}}}` while a turn runs, and
     `{"data":{}}` when nothing does ("sessions absent are inactive"). It's
     `{"data":{}}` before the session exists too, so Legion also reads
-    `GET /api/session` (`{"data":[{"id","time":{"created"},
+    `GET /api/session` (`{"data":[{"id","title","time":{"created"},
     "location":{"directory"}}…],"cursor":{…}}`) and shows idle only once it
-    lists this run's session. That list is global: every stored session from
-    every folder and past run (the server runs on the real HOME). Legion keeps
-    one only if `time.created` (ms) is since the session started and
-    `location.directory` is its working folder.
+    lists this session's conversation. That list is global: every stored
+    session from every folder and past run, and from other operators in the
+    same folder, so time and folder can't tell them apart. Legion gives the
+    conversation a title instead: the template makes it with
+    `POST /api/session` and `{"title": "{session}"}` (the reply has
+    `data.id`), then starts `opencode mini --session <id>`. Legion lists with
+    `GET /api/session?search=<tag>` (the list holds only the newest 50 by
+    default) and takes the one whose title equals the tag; two is an error.
+    *Checked:* the POST, the title and `search` on v2.0.25 under a throwaway
+    HOME; `mini --session` is from item 9.
     `GET /openapi.json` lists the API. `/api/event` is a stream (a
     `server.connected` event, then heartbeats) and wasn't needed: Legion polls.
     *Checked:* by hand on v2.0.25 with `opencode serve --port P`.
