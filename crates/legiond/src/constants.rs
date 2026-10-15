@@ -134,6 +134,9 @@ pub const WEBSOCKET_ROUTE: &str = "/ws";
 /// closed, so a client that never hangs up can't use up legiond's open files.
 /// An upgraded WebSocket isn't covered.
 pub const IDLE_CONNECTION_LIMIT: Duration = Duration::from_secs(300);
+/// After legiond is told to stop, requests being answered get this long to
+/// finish before the rest are cut off.
+pub const SHUTDOWN_DRAIN_LIMIT: Duration = Duration::from_secs(10);
 /// A failed accept (out of open files, say) is retried after this, not at once.
 pub const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
