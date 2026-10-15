@@ -112,7 +112,8 @@ whole machine:
 
 - **`before`** is like Claude Code's `PreToolUse`. The hook gets the envelope
   as JSON on stdin. Exit code 2 blocks the action, and what it wrote to stderr
-  goes back to whoever sent it. Printing `{"data": …}` changes the action.
+  goes back to whoever sent it. A hook can only allow or block an action,
+  never change it.
 - **`after`** is like `PostToolUse`. It sees the result or event and can't block it.
   It reads from the action record (below), not from the action as it happens.
 - **Hook types:** `command` (a shell command), `http` (POST to a URL) and
@@ -193,3 +194,35 @@ The local AI work fits this: sessions with no add-on report what they're
 doing with a `session.report` action, and an OpenCode session's messages
 can go out through an adapter-like reader of the record that posts to
 `opencode serve`.
+
+## Decisions (Joe, 2026-10-15)
+
+1. **Rename everything.** Every `Command`, `Reply` and `Event` moves to the
+   envelope and its `noun.verb` names in one go, CLI and app included.
+2. **Hooks run only in trusted folders.** Trust lives in Legion's machine
+   settings (`~/.local/share/legion/settings.json`), never in the repo: each
+   trusted folder with a fingerprint (SHA-256) of its `hooks.json`. If the
+   file changes, Legion asks again, as `direnv allow` does. Approve with
+   `legion hooks trust` or a button in the app. Until then the folder's
+   hooks don't run, and the app says so. Machine-wide hooks in Legion's own
+   data folder are trusted by being there.
+3. **`before` hooks only allow or block.** No changing an action.
+4. **The action record:**
+   - Where: one file per day in each folder's data,
+     `actions/<YYYY-MM-DD>.jsonl`.
+   - Kept 14 days, and never deleted before every `after` hook and adapter
+     has read past it; capped at about 500 MB, oldest days first. An adapter
+     that falls behind the cap shows as "fell behind" in the app.
+   - Leaving the machine: by default an adapter sends only what happened and
+     to what (`name`, `actor`, `subject`, `at`, `id`, `cause`), no text. Each
+     adapter lists the action names it may send (`"send": ["mission.*",
+     "entry.added"]`), and text fields (`data`) go only with
+     `"includeText": true`. `session.key` and `session.input` never leave the
+     machine.
+   - Local hooks on this machine see whole envelopes.
+5. **Remote actions use the channel permissions.** Envelopes arriving from
+   another machine go through the same send and receive permissions
+   channels use today (free, ask, off per deployment), and the same path:
+   channel messages become envelopes too, so there is one way in. Every
+   remote envelope carries its sending machine, and the receiver checks it
+   against the channel it came in on.
