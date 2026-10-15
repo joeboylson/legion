@@ -189,6 +189,8 @@ pub const OPENCODE_SESSIONS_PATH: &str = "/api/session";
 pub const OPENCODE_LAST_STEP_QUERY: &str = "message?type=assistant&order=desc&limit=1";
 /// The models the server knows, each with the context size it plans around.
 pub const OPENCODE_MODELS_PATH: &str = "/api/model";
+/// The agent every message Legion pushes runs under: a prompt sent before the session's first one would otherwise get OpenCode's default.
+pub const OPENCODE_AGENT: &str = "legion";
 /// Random bytes in a session's server password.
 pub const OPENCODE_PASSWORD_BYTES: usize = 24;
 /// Reopening a deployment waits this long for its sessions, still stopping from

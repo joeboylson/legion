@@ -6,7 +6,7 @@ use std::future::Future;
 use legion_proto::{COMMANDER, HUMAN};
 
 use crate::{
-    constants::{NOT_FOUND_STATUS, OPENCODE_SESSIONS_PATH},
+    constants::{NOT_FOUND_STATUS, OPENCODE_AGENT, OPENCODE_SESSIONS_PATH},
     opencode_server::{get, patch, post, sessions_search_path, this_runs_session, OpenCodeServer},
 };
 
@@ -85,7 +85,7 @@ pub async fn steer_parked(server: &OpenCodeServer, session_id: &str) -> Result<(
 /// Posts one message, to queue behind the session's turn or to steer into it.
 pub async fn post_message(server: &OpenCodeServer, session_id: &str, text: &str, delivery: Delivery) -> Result<(), Failure> {
     let path = format!("{OPENCODE_SESSIONS_PATH}/{session_id}/prompt");
-    let body = serde_json::json!({ "text": text, "delivery": delivery.as_str() }).to_string();
+    let body = serde_json::json!({ "text": text, "delivery": delivery.as_str(), "agent": OPENCODE_AGENT }).to_string();
     post(server, &path, &body).await.map(|_| ()).map_err(|error| match error.starts_with(NOT_FOUND_STATUS) {
         true => Failure::SessionGone,
         false => Failure::Other(format!("its server refused the message: {error}")),
@@ -112,14 +112,14 @@ mod tests {
     use crate::opencode_testing::{fake_server, http, ok};
 
     #[tokio::test]
-    async fn a_posted_message_goes_to_the_prompt_path_with_auth_and_queue_delivery() {
+    async fn a_posted_message_goes_to_the_prompt_path_with_auth_queue_delivery_and_the_legion_agent() {
         let (server, serving) = fake_server(vec![ok("{}")]);
         post_message(&server, "ses_1", "[legion] hi \"there\"", Delivery::Queue).await.unwrap();
         let request = serving.join().unwrap().remove(0);
         assert!(request.starts_with("POST /api/session/ses_1/prompt HTTP/1.1\r\n"), "{request}");
         assert!(request.contains("authorization: Basic b3BlbmNvZGU6cHc=\r\n"), "{request}");
         let body: serde_json::Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
-        assert_eq!(body, serde_json::json!({ "text": "[legion] hi \"there\"", "delivery": "queue" }));
+        assert_eq!(body, serde_json::json!({ "text": "[legion] hi \"there\"", "delivery": "queue", "agent": "legion" }));
     }
 
     #[test]

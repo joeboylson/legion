@@ -104,6 +104,7 @@ impl Daemon {
         };
         let (step, info, server, known) = decided;
         let (daemon, session_id) = (self.clone(), session_id.to_string());
+        let is_stop = step == MidTurnStep::StopTurn;
         self.post_legion_entry(&info.deployment, NewEntry { kind: EntryKind::Activity, mission: info.mission, to: None, text: log_text(&info.position, &step), answers: None });
         let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
         runtime.spawn(async move {
@@ -114,18 +115,24 @@ impl Daemon {
                         let text = wrap_up_request(&info.position, info.mission, percent, clear_at);
                         post_message(&server, &conversation, &text, Delivery::Steer).await.map_err(|failure| failure.to_string())
                     }
-                    MidTurnStep::StopTurn => {
-                        interrupt_turn(&server, &conversation).await?;
-                        // Not waiting to see the turn end: a message delivered now could start
-                        // another turn in the conversation being thrown away, and nothing would hand over.
-                        let daemon = daemon.clone();
-                        let _ = tokio::task::spawn_blocking(move || daemon.restart_fresh(&session_id)).await;
-                        Ok(())
-                    }
+                    MidTurnStep::StopTurn => interrupt_turn(&server, &conversation).await,
                 }
             };
-            if let Err(reason) = done.await {
-                eprintln!("{}d: couldn't hand over {} ({}) mid-turn: {reason}", legion_proto::LEGION, info.position, info.deployment);
+            let outcome = done.await;
+            if let Err(reason) = &outcome {
+                eprintln!("{}d: couldn't {} {} ({}) mid-turn: {reason}", legion_proto::LEGION, if is_stop { "stop the turn of" } else { "ask to wrap up" }, info.position, info.deployment);
+            }
+            if is_stop {
+                // Handed over even when the interrupt failed, and without waiting to see the turn
+                // end: a message delivered then could start another turn in the conversation being thrown away.
+                if let Err(reason) = outcome {
+                    let text = format!("couldn't stop {}'s turn through its server ({reason}): ending the session to hand over", info.position);
+                    let entry = NewEntry { kind: EntryKind::Activity, mission: info.mission, to: None, text, answers: None };
+                    let logging = daemon.clone();
+                    let deployment = info.deployment.clone();
+                    let _ = tokio::task::spawn_blocking(move || logging.post_legion_entry(&deployment, entry)).await;
+                }
+                let _ = tokio::task::spawn_blocking(move || daemon.restart_fresh(&session_id)).await;
             }
         });
     }

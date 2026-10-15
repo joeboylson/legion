@@ -22,9 +22,15 @@ async fn log_texts(legion: &mut ThrowawayLegion, deployment: &str) -> Vec<String
     entries.into_iter().filter(|entry| entry.kind == EntryKind::Activity).map(|entry| entry.text).collect()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and_handed_over() {
-    let mut legion = ThrowawayLegion::start("opencode-mid-turn").await;
+struct Started {
+    legion: ThrowawayLegion,
+    deployment: String,
+    launch: String,
+    port: u16,
+}
+
+async fn start_operator(name: &str) -> Started {
+    let mut legion = ThrowawayLegion::start(name).await;
     legion.set_up_folder().await;
     let settings_path = legion.setup_file("legion.json");
     let mut settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
@@ -35,18 +41,44 @@ async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and
     let deployment = legion.start_deployment_with_a_mission().await;
     legion.set_operator_model("fake-model").await;
     legion.start_operator(&deployment).await.unwrap();
-
     let launch = legion.record_of(OPERATOR);
     let port: u16 = argument_after(&launch, "--port").parse().unwrap();
+    Started { legion, deployment, launch, port }
+}
+
+async fn wait_until_busy(legion: &mut ThrowawayLegion, deployment: &str) {
+    while legion.sessions(deployment).await.iter().all(|session| session.activity != Activity::Busy) {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_interrupt_still_hands_over_and_says_so() {
+    let Started { mut legion, deployment, launch, port } = start_operator("opencode-mid-turn-500").await;
+    let tokens = Arc::new(AtomicU64::new(30_000));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    serve_opencode_mid_turn(port, argument_after(&launch, "--session"), tokens.clone(), Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(true)), requests.clone());
+    wait_until_busy(&mut legion, &deployment).await;
+    // Past clearAt + 10 at once: asked to wrap up, then stopped on the next poll.
+    tokens.store(75_000, Ordering::SeqCst);
+    wait_for(|| (count_of(&requests, "POST /api/session/ses_1/interrupt ") >= 1).then_some(()));
+
+    let fresh = wait_for(|| std::fs::read_to_string(legion.out.join(format!("{OPERATOR}.txt"))).ok().filter(|record| record.contains("fresh conversation")));
+    assert!(fresh.contains("Read your 'Handoff:' note in mission 1"), "{fresh}");
+    let lines = log_texts(&mut legion, &deployment).await;
+    assert!(lines.iter().any(|line| line.contains("couldn't stop") && line.contains("500")), "{lines:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and_handed_over() {
+    let Started { mut legion, deployment, launch, port } = start_operator("opencode-mid-turn").await;
     // A turn is running, and its conversation fills up while it does.
     let tokens = Arc::new(AtomicU64::new(30_000));
     let is_running = Arc::new(AtomicBool::new(true));
     let requests = Arc::new(Mutex::new(Vec::new()));
-    serve_opencode_mid_turn(port, argument_after(&launch, "--session"), tokens.clone(), is_running.clone(), requests.clone());
+    serve_opencode_mid_turn(port, argument_after(&launch, "--session"), tokens.clone(), is_running.clone(), Arc::new(AtomicBool::new(false)), requests.clone());
 
-    while legion.sessions(&deployment).await.iter().all(|session| session.activity != Activity::Busy) {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    wait_until_busy(&mut legion, &deployment).await;
     // A message sent during the turn waits behind it.
     let message = NewEntry { kind: EntryKind::Message, mission: Some(1), to: Some(OPERATOR.into()), text: "please also rename the helper".into(), answers: None };
     legion.send(Command::Post { deployment: deployment.clone(), entry: message }).await;
@@ -67,7 +99,7 @@ async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and
     // The message that was parked behind the old turn reaches the fresh conversation.
     let fresh_port: u16 = argument_after(&fresh, "--port").parse().unwrap();
     let fresh_requests = Arc::new(Mutex::new(Vec::new()));
-    serve_opencode_mid_turn(fresh_port, argument_after(&fresh, "--session"), Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)), fresh_requests.clone());
+    serve_opencode_mid_turn(fresh_port, argument_after(&fresh, "--session"), Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)), fresh_requests.clone());
     wait_for(|| fresh_requests.lock().unwrap().iter().find(|request| request.contains("rename the helper")).map(|_| ()));
     let lines = log_texts(&mut legion, &deployment).await;
     let said = |part: &str| lines.iter().filter(|line| line.contains(part)).count();
