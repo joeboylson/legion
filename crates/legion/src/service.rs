@@ -8,11 +8,11 @@ use legion_proto::NAME;
 pub const LOG_FILE_NAME: &str = "legiond.log";
 const LAUNCH_AGENTS_FOLDER: &str = "Library/LaunchAgents";
 const LAUNCHCTL: &str = "launchctl";
-/// launchd finishes taking an old service down after bootout returns; a
-/// bootstrap straight after can fail until it has.
 /// launchd gives a service 256 open files unless told otherwise, and each
 /// Claude session holds several connections to legiond.
 const OPEN_FILES_LIMIT: u32 = 8192;
+/// launchd finishes taking an old service down after bootout returns; a
+/// bootstrap straight after can fail until it has.
 const BOOTSTRAP_TRIES: u32 = 10;
 const BOOTSTRAP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 

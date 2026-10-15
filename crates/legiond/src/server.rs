@@ -2,7 +2,7 @@
 //! Clients use its WebSocket; the add-on in each session uses two plain
 //! routes.
 
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use axum::{
     extract::{
@@ -17,10 +17,10 @@ use axum::{
 use legion_proto::{Activity, Caller, Command, Event, Outcome, Request, ServerMessage, NAME};
 use serde::Deserialize;
 use tokio::sync::broadcast;
-use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::{set_header::SetResponseHeaderLayer, timeout::RequestBodyTimeoutLayer};
 
 use crate::{
-    constants::{ADDON_INBOX_ROUTE, ADDON_STATE_ROUTE, WEBSOCKET_ROUTE},
+    constants::{IDLE_CONNECTION_LIMIT, ADDON_INBOX_ROUTE, ADDON_STATE_ROUTE, WEBSOCKET_ROUTE},
     daemon::{ActivityReport, Daemon},
 };
 
@@ -39,13 +39,17 @@ pub fn claim_socket(path: &Path) -> Result<(), String> {
 
 pub fn router(daemon: Arc<Daemon>) -> Router {
     let addon_routes = Router::new().route(ADDON_STATE_ROUTE, post(receive_addon_report)).route(ADDON_INBOX_ROUTE, get(hand_out_deliveries));
-    Router::new().route(WEBSOCKET_ROUTE, get(upgrade_to_websocket)).merge(closing_after_each_answer(addon_routes)).with_state(daemon)
+    Router::new().route(WEBSOCKET_ROUTE, get(upgrade_to_websocket)).merge(closing_after_each_answer(addon_routes, IDLE_CONNECTION_LIMIT)).with_state(daemon)
 }
 
 /// Claude Code keeps the add-on's connections open for reuse and never
 /// closes them, about nine per session, which ran legiond out of open files.
-pub fn closing_after_each_answer<S: Clone + Send + Sync + 'static>(routes: Router<S>) -> Router<S> {
-    routes.layer(SetResponseHeaderLayer::overriding(CONNECTION, HeaderValue::from_static("close")))
+/// A body that stalls is given up on too, since the idle limit only watches
+/// for a request's headers.
+pub fn closing_after_each_answer<S: Clone + Send + Sync + 'static>(routes: Router<S>, body_stall_limit: Duration) -> Router<S> {
+    routes
+        .layer(RequestBodyTimeoutLayer::new(body_stall_limit))
+        .layer(SetResponseHeaderLayer::overriding(CONNECTION, HeaderValue::from_static("close")))
 }
 
 /// What the add-on posts. `addon` and `model` come once, when it connects;

@@ -52,7 +52,9 @@ same screens:
 starts at login, comes back if it crashes, and writes its output to
 `~/.local/share/legion/legiond.log`. Installing again replaces the service,
 which restarts legiond; `legion service remove` stops it for good. To run
-it by hand instead: `legiond --claude ~/.local/bin/claude`.
+it by hand instead: `legiond --claude ~/.local/bin/claude`. The service is
+allowed 8192 open files, and legiond closes any socket connection that has
+been silent for 5 minutes.
 
 ## Callouts
 

@@ -80,7 +80,7 @@ mod tests {
                 }
             })
         });
-        let closing = closing_after_each_answer(Router::new().route("/closing", get(|| async { "ok" })));
+        let closing = closing_after_each_answer(Router::new().route("/closing", get(|| async { "ok" })).route("/body", axum::routing::post(|body: String| async move { body })), Duration::from_millis(200));
         let router = Router::new().route("/plain", get(|| async { "ok" })).route("/ws", echo).merge(closing);
         tokio::spawn(serve_socket(listener, router, idle_limit, std::future::pending()));
         (UnixStream::connect(&file.0).await.unwrap(), file)
@@ -121,6 +121,16 @@ mod tests {
         let (mut plain, _file) = serving(Duration::from_secs(60)).await;
         plain.write_all(REQUEST.as_bytes()).await.unwrap();
         assert!(!read_some(&mut plain).await.contains("connection: close"));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_body_on_an_add_on_route_is_given_up_on() {
+        let (mut stream, _file) = serving(Duration::from_secs(60)).await;
+        stream.write_all(b"POST /body HTTP/1.1\r\nHost: legiond\r\nContent-Length: 4\r\n\r\nab").await.unwrap();
+        let answered = tokio::time::timeout(Duration::from_secs(5), read_some(&mut stream)).await.expect("still waiting for the body");
+        assert!(!answered.contains("200"), "{answered}");
+        let closed = tokio::time::timeout(Duration::from_secs(5), read_some(&mut stream)).await;
+        assert_eq!(closed.expect("still open"), "");
     }
 
     #[tokio::test]

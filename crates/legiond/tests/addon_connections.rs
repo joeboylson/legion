@@ -22,7 +22,7 @@ async fn answer_to(request: &str) -> String {
 async fn addon_answers_close_the_connection_and_the_websocket_route_does_not() {
     let _legion = ThrowawayLegion::start("addon-close").await;
 
-    let report = answer_to("POST /sessions/none/state HTTP/1.1\r\nHost: legiond\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n{\"state\":\"idle\"}  ").await;
+    let report = answer_to("POST /sessions/none/state HTTP/1.1\r\nHost: legiond\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"state\":\"idle\"}").await;
     assert!(report.starts_with("http/1.1 404"), "{report}");
     assert!(report.contains("connection: close"), "{report}");
 
