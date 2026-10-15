@@ -76,9 +76,12 @@ Kept in git, so everyone working on the folder shares it.
 - `legion.json`: `name`; `check`, a command run on a mission's work when its
   branch is replayed onto a moved base branch (such as `npm test`);
   `permissionMode` for every session; `clearAt` (see below); `strategist`
-  (below).
+  (below); `models`, named models, each with a `harness`, an optional
+  `address` and a `model`, checked when `legion.json` is read. Sessions
+  don't start on them yet.
 - `operators/<name>/definition.md`: the operator's job, in plain words.
-- `operators/<name>/operator.json` (all optional): `model`,
+- `operators/<name>/operator.json` (all optional): `model` (a Claude
+  model, or the name of one of the folder's `models`),
   `permissionMode`, `limit` (copies at once, default 1), `allowedTools`,
   `disallowedTools`, `clearAt`.
 - `pipelines/<name>.yaml`: `operators`, `first`, and `decisions`. Each

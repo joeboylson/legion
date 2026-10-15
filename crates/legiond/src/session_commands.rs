@@ -17,7 +17,7 @@ use crate::{
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
     permission_answers::answers_permission_question,
     callouts::read_callouts,
-    prompts::{commander_prompt, operator_prompt, strategist_prompt, MissionBriefing, OperatorBriefing, StrategistBriefing},
+    prompts::{commander_prompt, operator_prompt, strategist_prompt, MissionBriefing, OperatorBriefing, StrategistBriefing, ToolNaming},
     session_arguments::{legion_tools_config, session_arguments, LaunchPlan},
     team_changes::{read_team, team_fingerprint, Team},
     sessions::{spawn_session, Session, SpawnRequest},
@@ -99,7 +99,7 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
     let recent_postmortems = folder.store.recent_entries_of_kind(EntryKind::Postmortem, RECENT_POSTMORTEM_COUNT)?;
     let launch = LaunchPlan {
         position: COMMANDER.to_string(),
-        system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, &recent_postmortems, &read_callouts(&folder.path)),
+        system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, &recent_postmortems, &read_callouts(&folder.path), &ToolNaming::claude()),
         model: None,
         permission_mode: settings.permission_mode,
         allowed_tools: Vec::new(),
@@ -121,7 +121,7 @@ fn strategist_launch(state: &State, folder_index: usize, deployment: &Deployment
     let every_minutes = strategist_check_minutes(&settings).ok_or("the strategist isn't enabled in legion.json")?;
     let team = read_team(&folder.path, &deployment.pipeline)?;
     let recent_postmortems = folder.store.recent_entries_of_kind(EntryKind::Postmortem, RECENT_POSTMORTEM_COUNT)?;
-    let briefing = StrategistBriefing { team: &team, every_minutes, recent_postmortems: &recent_postmortems, callouts: &read_callouts(&folder.path) };
+    let briefing = StrategistBriefing { team: &team, every_minutes, recent_postmortems: &recent_postmortems, callouts: &read_callouts(&folder.path), naming: &ToolNaming::claude() };
     Ok(LaunchPlan {
         position: STRATEGIST.to_string(),
         system_prompt: strategist_prompt(deployment, briefing),
@@ -178,6 +178,7 @@ fn operator_launch(
         shared_tools_folder: &tools_folder,
         base_branch: base_branch.as_deref(),
         callouts: &callouts,
+        naming: &ToolNaming::claude(),
     };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
     Ok(LaunchPlan {

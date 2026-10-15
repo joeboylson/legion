@@ -129,6 +129,19 @@ pub struct Settings {
     /// unless enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategist: Option<StrategistSettings>,
+    /// Models operators can pick by name, each with the harness that runs it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, ModelEntry>,
+}
+
+/// `"spark-fast": { "harness": "opencode", "address": "http://spark:8002/v1", "model": "qwen3.6-35b-a3b" }` in legion.json's `models`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelEntry {
+    pub harness: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    pub model: String,
 }
 
 /// `"strategist": { "enabled": true, "everyMinutes": 10 }` in legion.json.
@@ -277,7 +290,10 @@ pub fn ensure_setup(folder: &Path) -> Result<bool, String> {
 pub fn read_settings(folder: &Path) -> Result<Settings, String> {
     let path = setup_folder(folder).join(SETTINGS_FILE_NAME);
     let text = fs::read_to_string(&path).map_err(|error| format!("can't read {}: {error}", path.display()))?;
-    serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))
+    // The error's path names the broken models entry, such as `models.b`.
+    let settings: Settings = serde_path_to_error::deserialize(&mut serde_json::Deserializer::from_str(&text)).map_err(|error| format!("{}: {error}", path.display()))?;
+    crate::model_choice::check_models(&settings.models).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(settings)
 }
 
 fn names_in(folder: &Path, want_folders: bool, suffix: &str) -> Vec<String> {
@@ -744,6 +760,68 @@ mod tests {
         assert!(operator_summary(&"x".repeat(500)).ends_with('…'));
     }
 
+
+    const SPARK_SETTINGS: &str = r#"{
+  "name": "app",
+  "check": "cargo test",
+  "models": {
+    "spark-big":  { "harness": "opencode", "address": "http://spark:8000/v1", "model": "qwen3.8-27b" },
+    "spark-fast": { "harness": "opencode", "address": "http://spark:8002/v1", "model": "qwen3.6-35b-a3b" }
+  }
+}"#;
+
+    fn folder_with_settings(text: &str) -> std::path::PathBuf {
+        let folder = scratch_folder();
+        fs::write(setup_folder(&folder).join(SETTINGS_FILE_NAME), text).unwrap();
+        folder
+    }
+
+    #[test]
+    fn a_broken_models_list_fails_naming_the_file_and_the_entry() {
+        let folder = folder_with_settings(r#"{"name": "app", "models": {"local": {"harness": "claude-code", "address": "http://x", "model": "opus"}}}"#);
+        let error = read_settings(&folder).err().unwrap();
+        assert!(error.contains(SETTINGS_FILE_NAME) && error.contains(r#"model "local""#), "{error}");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_models_entry_needs_a_harness_and_a_model() {
+        let missing_harness = folder_with_settings(r#"{"name": "app", "models": {"local": {"model": "qwen"}}}"#);
+        let missing_model = folder_with_settings(r#"{"name": "app", "models": {"local": {"harness": "opencode"}}}"#);
+        let unknown_key = folder_with_settings(r#"{"name": "app", "models": {"local": {"harness": "opencode", "model": "qwen", "port": 1}}}"#);
+        assert!(read_settings(&missing_harness).err().unwrap().contains("models.local: missing field `harness`"));
+        assert!(read_settings(&missing_model).err().unwrap().contains("models.local: missing field `model`"));
+        assert!(read_settings(&unknown_key).err().unwrap().contains("port"));
+        [missing_harness, missing_model, unknown_key].iter().for_each(|folder| fs::remove_dir_all(folder).unwrap());
+    }
+
+    #[test]
+    fn a_broken_entry_among_good_ones_is_named() {
+        let folder = folder_with_settings(r#"{"name": "app", "models": {"a": {"harness": "x", "model": "q"}, "b": {"model": "q"}}}"#);
+        let error = read_settings(&folder).err().unwrap();
+        assert!(error.contains(SETTINGS_FILE_NAME) && error.contains("models.b: missing field `harness`"), "{error}");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn changing_settings_keeps_the_models() {
+        let folder = folder_with_settings(SPARK_SETTINGS);
+        let before = read_settings(&folder).unwrap().models;
+        assert_eq!(before.len(), 2);
+        set_settings(&folder, Some("npm test".into()), Some(PermissionMode::Auto)).unwrap();
+        let after = read_settings(&folder).unwrap();
+        assert_eq!(after.check.as_deref(), Some("npm test"));
+        assert_eq!(serde_json::to_string(&after.models).unwrap(), serde_json::to_string(&before).unwrap());
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_folder_without_models_writes_none() {
+        let folder = folder_with_settings(r#"{"name": "app"}"#);
+        set_settings(&folder, Some("npm test".into()), None).unwrap();
+        assert!(!fs::read_to_string(setup_folder(&folder).join(SETTINGS_FILE_NAME)).unwrap().contains("models"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
 
     #[test]
     fn a_pipeline_file_is_only_replaced_by_one_that_runs() {

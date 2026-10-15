@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::setup::setup_folder;
+use crate::{prompts::ToolNaming, setup::setup_folder};
 
 pub const TOOLS_FOLDER_NAME: &str = "tools";
 /// How a tool's first line starts when it says what the tool does.
@@ -57,7 +57,7 @@ pub fn shared_tools(folder: &Path) -> Vec<SharedTool> {
 
 /// What an operator is told about the team's toolbox. `tools_folder` is the
 /// full path, since operators work in their mission's own worktree.
-pub fn shared_tools_section(tools: &[SharedTool], tools_folder: &Path) -> String {
+pub fn shared_tools_section(tools: &[SharedTool], tools_folder: &Path, naming: &ToolNaming) -> String {
     let folder = tools_folder.display();
     let listed = match tools {
         [] => "None yet.".to_string(),
@@ -67,7 +67,9 @@ pub fn shared_tools_section(tools: &[SharedTool], tools_folder: &Path) -> String
         "The team's toolbox, in {folder}:
 {listed}
 
-Use these before doing anything by hand; read any of them with the toolbox tool. Building the toolbox is part of your job: the second time you do something by hand (a browser test, a check, a setup step, a long command), or when the next operator will need it too, stop and make it a tool. Start it with a comment line saying what it does and how to run it, then share it with the share_tool tool right away; Legion tells everyone running. Improve a tool rather than copying it, and share it again after."
+Use these before doing anything by hand; read any of them with {toolbox}. Building the toolbox is part of your job: the second time you do something by hand (a browser test, a check, a setup step, a long command), or when the next operator will need it too, stop and make it a tool. Start it with a comment line saying what it does and how to run it, then share it with {share_tool} right away; Legion tells everyone running. Improve a tool rather than copying it, and share it again after.",
+        toolbox = naming.mention("toolbox"),
+        share_tool = naming.mention("share_tool"),
     )
 }
 
@@ -88,9 +90,9 @@ mod tests {
     fn the_section_lists_each_tool_or_says_there_are_none() {
         let tools = [SharedTool { name: "browser-test.sh".into(), summary: "Runs tests.html.".into() }];
         let folder = Path::new("/repo/.legion/tools");
-        assert!(shared_tools_section(&tools, folder).contains("- /repo/.legion/tools/browser-test.sh: Runs tests.html."));
-        assert!(shared_tools_section(&[], folder).contains("None yet."));
-        assert!(shared_tools_section(&[], folder).contains("share_tool"));
+        assert!(shared_tools_section(&tools, folder, &ToolNaming::claude()).contains("- /repo/.legion/tools/browser-test.sh: Runs tests.html."));
+        assert!(shared_tools_section(&[], folder, &ToolNaming::claude()).contains("None yet."));
+        assert!(shared_tools_section(&[], folder, &ToolNaming::claude()).contains("share_tool"));
     }
 
     #[test]

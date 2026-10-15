@@ -4,7 +4,7 @@
 //! command against the caller's role; the lists here only keep each session
 //! from seeing tools it can't use.
 
-use crate::{role_of_position, Command, EntryKind, LogFilter, NewEntry, Role, COMMANDER};
+use crate::{role_of_position, Command, EntryKind, LogFilter, NewEntry, Role, COMMANDER, NAME};
 use serde_json::{json, Map, Value};
 
 /// Who gets a tool, by role.
@@ -252,6 +252,11 @@ pub fn input_schema(tool: &Tool) -> Value {
     json!({ "type": "object", "properties": properties, "required": required_names })
 }
 
+/// A tool as a shell command: `flag_decision` is `legion flag-decision`.
+pub fn command_name(tool: &str) -> String {
+    format!("{NAME} {}", tool.replace('_', "-"))
+}
+
 pub fn tool_listing(tool: &Tool) -> Value {
     json!({ "name": tool.name, "description": tool.description, "inputSchema": input_schema(tool) })
 }
@@ -457,5 +462,11 @@ mod tests {
         let schema = input_schema(handoff);
         assert_eq!(schema["required"], json!(["mission", "next", "note"]));
         assert_eq!(schema["properties"]["mission"]["type"], "integer");
+    }
+
+    #[test]
+    fn a_tool_runs_as_a_dashed_legion_command() {
+        assert_eq!(command_name("flag_decision"), "legion flag-decision");
+        assert_eq!(command_name("send"), "legion send");
     }
 }
