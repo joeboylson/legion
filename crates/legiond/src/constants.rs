@@ -55,6 +55,8 @@ pub const STDERR_FILE_EXTENSION: &str = "txt";
 /// Why Legion stopped a session, as the log says it.
 pub const MISSION_FINISHED_REASON: &str = "mission finished";
 pub const RESTARTED_FRESH_REASON: &str = "restarted with a fresh conversation";
+/// Legiond stopping cuts every session off; they come back when it starts.
+pub const LEGIOND_STOPPED_REASON: &str = "legiond was stopped";
 pub const STOPPED_ON_REQUEST_REASON: &str = "stopped on request";
 pub const DEPLOYMENT_CLOSED_REASON: &str = "deployment closed";
 pub const PART_REMOVED_REASON: &str = "its mission part was removed";

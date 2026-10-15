@@ -7,7 +7,22 @@ use std::path::Path;
 use legion_proto::{Entry, EntryKind, LogFilter, Mission, NewEntry, Deployment, Part};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use crate::{entry_filter::entries_matching, mission_status::mission_standing};
+use crate::{
+    constants::{LEGIOND_STOPPED_REASON, RESTARTED_FRESH_REASON},
+    entry_filter::entries_matching,
+    mission_status::mission_standing,
+};
+
+/// SQL for a session-ended row, aliased `row`, in a query with the
+/// parameters of `is_left_by_an_earlier_session`. Rows from before they
+/// named their position say it at the start of their text.
+fn ends_the_position_for_good(row: &str) -> String {
+    format!(
+        "{row}.deployment = ?1 AND {row}.kind = ?5
+         AND ({row}.to_position = ?3 OR ({row}.to_position IS NULL AND (instr({row}.text, ?3 || '''s session') = 1 OR instr({row}.text, ?3 || ' was idle') = 1)))
+         AND instr({row}.text, ?6) = 0 AND instr({row}.text, ?7) = 0"
+    )
+}
 
 pub struct Store {
     database: Connection,
@@ -352,17 +367,31 @@ impl Store {
             .map_err(database_error)
     }
 
-    /// Posted while an earlier session of the position was running, and a
-    /// newer one started since.
+    /// Posted while an earlier session of the position was running, and the
+    /// position has since had a session end for good and a newer one start.
+    /// A handover restart and a legiond restart end a session without ending
+    /// the position's work, so what it hadn't taken goes on to the next.
     fn is_left_by_an_earlier_session(&self, entry: &Entry, position: &str) -> Result<bool, String> {
+        let ending = ends_the_position_for_good("ended");
         self.database
             .query_row(
-                "SELECT EXISTS (
-                     SELECT 1 FROM entries started WHERE started.deployment = ?1 AND started.kind = ?4 AND started.from_position = ?3 AND started.id < ?2
-                       AND NOT EXISTS (SELECT 1 FROM entries ended WHERE ended.deployment = ?1 AND ended.kind = ?5 AND ended.to_position = ?3
-                                         AND ended.id > started.id AND ended.id < ?2))
-                 AND EXISTS (SELECT 1 FROM entries newer WHERE newer.deployment = ?1 AND newer.kind = ?4 AND newer.from_position = ?3 AND newer.id > ?2)",
-                params![entry.deployment, entry.id, position, EntryKind::SessionStarted.as_str(), EntryKind::SessionEnded.as_str()],
+                &format!(
+                    "SELECT EXISTS (
+                         SELECT 1 FROM entries started WHERE started.deployment = ?1 AND started.kind = ?4 AND started.from_position = ?3 AND started.id < ?2
+                           AND NOT EXISTS (SELECT 1 FROM entries ended WHERE {ending} AND ended.id > started.id AND ended.id < ?2))
+                     AND EXISTS (
+                         SELECT 1 FROM entries ended WHERE {ending} AND ended.id > ?2
+                           AND EXISTS (SELECT 1 FROM entries newer WHERE newer.deployment = ?1 AND newer.kind = ?4 AND newer.from_position = ?3 AND newer.id > ended.id))"
+                ),
+                params![
+                    entry.deployment,
+                    entry.id,
+                    position,
+                    EntryKind::SessionStarted.as_str(),
+                    EntryKind::SessionEnded.as_str(),
+                    format!("({RESTARTED_FRESH_REASON})"),
+                    format!("({LEGIOND_STOPPED_REASON})")
+                ],
                 |row| row.get(0),
             )
             .map_err(database_error)
@@ -446,6 +475,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{constants::STOPPED_ON_REQUEST_REASON, session_lifecycle::ended_text};
 
     #[test]
     fn parts_are_kept_by_mission_and_marked_merged() {
@@ -532,6 +562,11 @@ mod tests {
 
     fn end(store: &Store, position: &str, mission: u32) {
         post(store, "legion", EntryKind::SessionEnded, Some(mission), Some(position));
+    }
+
+    fn end_because(store: &Store, position: &str, mission: u32, reason: &str) {
+        let ended = NewEntry { kind: EntryKind::SessionEnded, mission: Some(mission), to: Some(position.into()), ..note(&ended_text(position, Some(reason), "")) };
+        store.add_entry("r", "legion", &ended).unwrap();
     }
 
     fn ids_of(entries: Vec<Entry>) -> Vec<i64> {
@@ -622,6 +657,40 @@ mod tests {
         end(&store, "shipper", 57);
         start(&store, "shipper", 58);
         assert!(waiting(&store, "shipper", Some(58)).is_empty());
+    }
+
+    #[test]
+    fn an_end_logged_before_ends_named_their_position_still_counts() {
+        let store = store_with_deployment();
+        start(&store, "shipper", 57);
+        store.add_entry("r", "legion", &NewEntry { kind: EntryKind::SessionEnded, mission: Some(57), to: None, ..note("shipper's session stopped (stopped on request)") }).unwrap();
+        store.add_entry("r", "legion", &NewEntry { kind: EntryKind::SessionEnded, mission: Some(57), to: None, ..note("shipper-2's session ended (exit status 1)") }).unwrap();
+        let sent_while_idle = post(&store, "commander", EntryKind::Message, Some(58), Some("shipper"));
+        start(&store, "shipper", 58);
+        assert_eq!(waiting(&store, "shipper", Some(58)), vec![sent_while_idle.id]);
+    }
+
+    #[test]
+    fn a_handover_restart_carries_over_what_the_old_session_had_not_taken() {
+        let store = store_with_deployment();
+        start(&store, "shipper", 57);
+        let pause = post(&store, "commander", EntryKind::Paused, Some(57), Some("shipper"));
+        end_because(&store, "shipper", 57, RESTARTED_FRESH_REASON);
+        start(&store, "shipper", 57);
+        assert_eq!(waiting(&store, "shipper", Some(57)), vec![pause.id]);
+        end_because(&store, "shipper", 57, STOPPED_ON_REQUEST_REASON);
+        start(&store, "shipper", 57);
+        assert!(waiting(&store, "shipper", Some(57)).is_empty(), "a stop after the handover still leaves it behind");
+    }
+
+    #[test]
+    fn a_legiond_restart_carries_over_what_the_cut_off_session_had_not_taken() {
+        let store = store_with_deployment();
+        start(&store, "shipper", 57);
+        let pause = post(&store, "commander", EntryKind::Paused, Some(57), Some("shipper"));
+        end_because(&store, "shipper", 57, LEGIOND_STOPPED_REASON);
+        start(&store, "shipper", 57);
+        assert_eq!(waiting(&store, "shipper", Some(57)), vec![pause.id]);
     }
 
     #[test]

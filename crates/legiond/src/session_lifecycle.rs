@@ -2,7 +2,7 @@
 //! stuck starting or working a long while, when work stalls, when a
 //! permission request goes unanswered, and when a mission is finished.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::{atomic::Ordering, Arc}, time::Duration};
 
 use legion_proto::{role_of_position, EntryKind, LogFilter, NewEntry, Role, COMMANDER, HUMAN, LEGION, STRATEGIST};
 
@@ -12,7 +12,7 @@ use crate::{
     setup::{read_operator, read_pipeline},
     check_ins::{check_in_request, is_check_in_due},
     context_handover::{fresh_start_prompt, HandoverPhase},
-    constants::{DEPLOYMENT_CLOSED_REASON, MISSION_FINISHED_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
+    constants::{DEPLOYMENT_CLOSED_REASON, LEGIOND_STOPPED_REASON, MISSION_FINISHED_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
     naming::operator_of_position,
     sessions::Session,
@@ -90,7 +90,9 @@ impl Daemon {
     /// most once per gap), or hears that its operator's session ended.
     pub fn handle_session_end(self: &Arc<Self>, session: &Session, how_it_ended: &str) {
         self.announce_session(&legion_proto::SessionInfo { activity: legion_proto::Activity::Ended, ..session.info() });
-        let ended_text = ended_text(&session.position, session.stopped_because.as_deref(), how_it_ended);
+        // Said in the log so the next session of the position carries over what this one hadn't taken.
+        let cut_off_by_shutdown = self.is_shutting_down.load(Ordering::SeqCst).then_some(LEGIOND_STOPPED_REASON);
+        let ended_text = ended_text(&session.position, session.stopped_because.as_deref().or(cut_off_by_shutdown), how_it_ended);
         self.post_legion_entry(&session.deployment, entry(EntryKind::SessionEnded, Some(&session.position), session.mission, ended_text));
         let is_deployment_open = self.state.lock().unwrap().find_open_deployment(&session.deployment).is_ok();
         if restarts_fresh(session.handover, session.stopped_because.as_deref(), is_deployment_open) {

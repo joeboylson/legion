@@ -74,9 +74,10 @@ impl Pair {
     }
 
     /// Pauses both missions, stops both copies, resumes the first mission
-    /// only, and starts a fresh copy on each. Returns their positions, in
-    /// mission order. The old launch records go first, so the new ones are
-    /// the fresh copies'.
+    /// only, and starts a fresh copy on each, the second mission first so the
+    /// copies swap positions as in the incident. Returns the fresh copies'
+    /// positions, in mission order. The old launch records go first, so the
+    /// new ones are the fresh copies'.
     async fn pause_stop_resume_start(&mut self) -> (String, String) {
         let first = self.start_on(1).await;
         let second = self.start_on(2).await;
@@ -89,7 +90,10 @@ impl Pair {
         [&first, &second].iter().for_each(|position| {
             let _ = fs::remove_file(self.legion.out.join(format!("{position}.txt")));
         });
-        (self.start_on(1).await, self.start_on(2).await)
+        let fresh_second = self.start_on(2).await;
+        let fresh_first = self.start_on(1).await;
+        assert_eq!((&fresh_first, &fresh_second), (&second, &first), "the copies swapped missions");
+        (fresh_first, fresh_second)
     }
 }
 
