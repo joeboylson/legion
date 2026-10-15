@@ -15,9 +15,10 @@ use tokio::{net::{UnixListener, UnixStream}, sync::watch, task::JoinSet};
 use crate::constants::ACCEPT_RETRY_DELAY;
 
 /// Answers connections until `stop` finishes, then lets the requests being
-/// answered finish (a handed-out inbox message would be lost otherwise).
-/// An upgraded WebSocket isn't waited for.
-pub async fn serve_socket(listener: UnixListener, router: Router, idle_limit: Duration, stop: impl Future<Output = ()>) {
+/// answered finish (a handed-out inbox message would be lost otherwise), up
+/// to `drain_limit`. A connection's task ends when it upgrades to a
+/// WebSocket, so those aren't waited for.
+pub async fn serve_socket(listener: UnixListener, router: Router, idle_limit: Duration, drain_limit: Duration, stop: impl Future<Output = ()>) {
     tokio::pin!(stop);
     let (stopping, stopped) = watch::channel(false);
     let mut connections = JoinSet::new();
@@ -44,7 +45,11 @@ pub async fn serve_socket(listener: UnixListener, router: Router, idle_limit: Du
     }
     drop(listener);
     let _ = stopping.send(true);
-    while connections.join_next().await.is_some() {}
+    let drained = tokio::time::timeout(drain_limit, async { while connections.join_next().await.is_some() {} }).await;
+    if drained.is_err() {
+        eprintln!("{NAME}d: {} connections were still open {drain_limit:?} after stopping; cut off", connections.len());
+        connections.abort_all();
+    }
 }
 
 /// hyper-util's graceful helper doesn't take connections that allow
@@ -99,7 +104,7 @@ mod tests {
         });
         let closing = closing_after_each_answer(Router::new().route("/closing", get(|| async { "ok" })).route("/body", axum::routing::post(|body: String| async move { body })), Duration::from_millis(200));
         let router = Router::new().route("/plain", get(|| async { "ok" })).route("/ws", echo).merge(closing);
-        tokio::spawn(serve_socket(listener, router, idle_limit, std::future::pending()));
+        tokio::spawn(serve_socket(listener, router, idle_limit, Duration::from_secs(10), std::future::pending()));
         (UnixStream::connect(&file.0).await.unwrap(), file)
     }
 
@@ -159,13 +164,34 @@ mod tests {
             "done"
         });
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let serving = tokio::spawn(serve_socket(listener, Router::new().route("/slow", slow), Duration::from_secs(60), async { let _ = stopped.await; }));
+        let serving = tokio::spawn(serve_socket(listener, Router::new().route("/slow", slow), Duration::from_secs(60), Duration::from_secs(10), async { let _ = stopped.await; }));
         let mut stream = UnixStream::connect(&file.0).await.unwrap();
         stream.write_all(b"GET /slow HTTP/1.1\r\nHost: legiond\r\n\r\n").await.unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         stop.send(()).unwrap();
         assert!(read_some(&mut stream).await.contains("200"));
         tokio::time::timeout(Duration::from_secs(5), serving).await.expect("didn't finish stopping").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_handler_that_never_returns_and_half_sent_requests_and_an_open_websocket_do_not_hold_stopping_past_the_limit() {
+        let file = SocketFile(std::env::temp_dir().join(format!("legiond-serving-{}-drain.sock", std::process::id())));
+        let listener = UnixListener::bind(&file.0).unwrap();
+        let stuck = get(|| std::future::pending::<&'static str>());
+        let websocket = get(|upgrade: WebSocketUpgrade| async { upgrade.on_upgrade(|mut socket| async move { while socket.recv().await.is_some() {} }) });
+        let router = Router::new().route("/stuck", stuck).route("/ws", websocket);
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving = tokio::spawn(serve_socket(listener, router, Duration::from_secs(60), Duration::from_millis(300), async { let _ = stopped.await; }));
+        let mut open = Vec::new();
+        for request in ["GET /stuck HTTP/1.1\r\nHost: legiond\r\n\r\n", "GET /plain HTT", ""] {
+            let mut stream = UnixStream::connect(&file.0).await.unwrap();
+            stream.write_all(request.as_bytes()).await.unwrap();
+            open.push(stream);
+        }
+        let (_websocket, _) = tokio_tungstenite::client_async("ws://legiond/ws", UnixStream::connect(&file.0).await.unwrap()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), serving).await.expect("held past the drain limit").unwrap();
     }
 
     #[tokio::test]
