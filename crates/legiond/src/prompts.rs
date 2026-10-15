@@ -10,6 +10,7 @@ use legion_proto::{
 
 use crate::{
     constants::{delivery_prefix, MAX_WORKAROUND_ATTEMPTS},
+    harness::TOOL_BLANK,
     setup::{Operator, Pipeline},
     shared_tools::{shared_tools_section, SharedTool},
     callouts::callouts_section,
@@ -22,9 +23,6 @@ pub struct MissionBriefing<'a> {
     pub body: &'a str,
     pub history: &'a [Entry],
 }
-
-/// Where a tool's name goes in a naming pattern, as in `mcp__legion__{tool}`.
-pub const TOOL_BLANK: &str = "{tool}";
 
 /// Said after the tool list when tools are commands.
 const ARGUMENTS_AS_FLAGS: &str = "Each argument can also be given as `--name value`.";

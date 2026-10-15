@@ -21,7 +21,7 @@ use crate::{model_choice::CLAUDE_CODE_HARNESS, setup::setup_folder};
 pub const HARNESSES_FOLDER_NAME: &str = "harnesses";
 const HARNESS_FILE_EXTENSION: &str = ".json";
 /// The blank in `toolName` that stands for one of Legion's tool names.
-const TOOL_BLANK: &str = "{tool}";
+pub const TOOL_BLANK: &str = "{tool}";
 
 /// How a harness reaches Legion's tools: the MCP tool server, or the
 /// `legion` command with the three settings in its environment.
