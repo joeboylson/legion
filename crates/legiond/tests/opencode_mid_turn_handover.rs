@@ -11,7 +11,7 @@ use std::sync::{
 use std::time::Duration;
 
 use common::{argument_after, opencode_like_template, serve_opencode_mid_turn, wait_for, ThrowawayLegion, OPERATOR};
-use legion_proto::{Activity, Command, EntryKind, Reply};
+use legion_proto::{Activity, Command, EntryKind, NewEntry, Reply};
 
 fn count_of(requests: &Mutex<Vec<String>>, start: &str) -> usize {
     requests.lock().unwrap().iter().filter(|request| request.starts_with(start)).count()
@@ -47,6 +47,10 @@ async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and
     while legion.sessions(&deployment).await.iter().all(|session| session.activity != Activity::Busy) {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    // A message sent during the turn waits behind it.
+    let message = NewEntry { kind: EntryKind::Message, mission: Some(1), to: Some(OPERATOR.into()), text: "please also rename the helper".into(), answers: None };
+    legion.send(Command::Post { deployment: deployment.clone(), entry: message }).await;
+    wait_for(|| requests.lock().unwrap().iter().find(|request| request.contains("rename the helper")).map(|_| ()));
     // Past clearAt (60%), not yet clearAt + 10.
     tokens.store(65_000, Ordering::SeqCst);
     wait_for(|| requests.lock().unwrap().iter().find(|request| request.contains("Wrap up now") && request.contains(r#""delivery":"steer""#)).map(|_| ()));
@@ -58,7 +62,13 @@ async fn a_turn_that_fills_the_conversation_is_asked_to_wrap_up_then_stopped_and
     assert_eq!(count_of(&requests, "PATCH /api/session/ses_1/inbox/"), 0, "parked messages aren't steered into the conversation being thrown away");
     let fresh = wait_for(|| std::fs::read_to_string(legion.out.join(format!("{OPERATOR}.txt"))).ok().filter(|record| record.contains("fresh conversation")));
     assert!(fresh.contains("Read your 'Handoff:' note in mission 1"), "{fresh}");
-    assert_eq!(count_of(&requests, "POST /api/session/ses_1/prompt "), 1, "asked to wrap up once");
+    let wrap_ups = requests.lock().unwrap().iter().filter(|request| request.contains("Wrap up now")).count();
+    assert_eq!(wrap_ups, 1, "asked to wrap up once");
+    // The message that was parked behind the old turn reaches the fresh conversation.
+    let fresh_port: u16 = argument_after(&fresh, "--port").parse().unwrap();
+    let fresh_requests = Arc::new(Mutex::new(Vec::new()));
+    serve_opencode_mid_turn(fresh_port, argument_after(&fresh, "--session"), Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)), fresh_requests.clone());
+    wait_for(|| fresh_requests.lock().unwrap().iter().find(|request| request.contains("rename the helper")).map(|_| ()));
     let lines = log_texts(&mut legion, &deployment).await;
     let said = |part: &str| lines.iter().filter(|line| line.contains(part)).count();
     assert_eq!((said("asked it to wrap up"), said("stopped it, to hand over"), said("handing over to a fresh conversation")), (1, 1, 1), "{lines:?}");

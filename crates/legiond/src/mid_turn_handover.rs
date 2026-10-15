@@ -59,13 +59,25 @@ async fn conversation_on(server: &OpenCodeServer, known: Option<String>) -> Resu
 }
 
 impl Daemon {
-    /// Hands over now: the session is ended and its position starts again fresh.
-    /// Messages parked for it are not steered into the old conversation; they stay in the mission's log, which the fresh one reads.
-    fn restart_fresh(&self, session_id: &str) {
-        match self.state.lock().unwrap().sessions.get_mut(session_id) {
-            Some(session) => session.handover = HandoverPhase::Restarting,
-            None => return,
+    fn give_back_entries(&self, deployment_id: &str, entry_ids: &[i64]) {
+        let state = self.state.lock().unwrap();
+        let Ok((folder_index, _)) = state.find_deployment(deployment_id) else { return };
+        if let Err(error) = state.folders[folder_index].store.mark_undelivered(entry_ids) {
+            eprintln!("{}d: couldn't put back the messages parked for a session being handed over: {error}", legion_proto::LEGION);
         }
+    }
+
+    /// Hands over now: the session is ended and its position starts again fresh.
+    /// Messages parked for it are not steered into the old conversation; they are marked undelivered, so the fresh session gets them.
+    fn restart_fresh(&self, session_id: &str) {
+        let parked = {
+            let mut state = self.state.lock().unwrap();
+            let Some(session) = state.sessions.get_mut(session_id) else { return };
+            session.handover = HandoverPhase::Restarting;
+            let (deployment, parked) = (session.deployment.clone(), std::mem::take(&mut session.parked_entries));
+            (deployment, parked)
+        };
+        self.give_back_entries(&parked.0, &parked.1);
         self.end_for_fresh_start(session_id);
     }
 

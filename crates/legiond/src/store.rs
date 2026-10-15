@@ -403,6 +403,11 @@ impl Store {
             .try_for_each(|entry_id| self.execute("INSERT OR IGNORE INTO delivered_entries (entry) VALUES (?1)", [entry_id]))
     }
 
+    /// Puts entries back among those not yet delivered, so the next session at their position gets them.
+    pub fn mark_undelivered(&self, entry_ids: &[i64]) -> Result<(), String> {
+        entry_ids.iter().try_for_each(|entry_id| self.execute("DELETE FROM delivered_entries WHERE entry = ?1", [entry_id]))
+    }
+
     pub fn worktree(&self, mission: u32) -> Result<Option<Worktree>, String> {
         self.database
             .query_row(

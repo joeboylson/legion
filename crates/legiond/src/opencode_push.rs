@@ -105,6 +105,9 @@ impl Daemon {
     /// Only after its server took the message is the entry marked delivered.
     fn record_pushed(&self, waiting: &Waiting, entry: &Entry) {
         let mut state = self.state.lock().unwrap();
+        if let Some(session) = state.sessions.get_mut(&waiting.session_id) {
+            session.parked_entries.push(entry.id);
+        }
         if let Err(error) = mark_handed(&mut state, &waiting.deployment, &waiting.session_id, std::slice::from_ref(entry)) {
             eprintln!("{LEGION}d: delivered entry {} to {} ({}) but couldn't record it: {error}", entry.id, waiting.position, waiting.deployment_name);
         }

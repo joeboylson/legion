@@ -56,6 +56,9 @@ pub struct Session {
     pub handover: HandoverPhase,
     /// Set when it was asked to wrap up in the middle of a turn.
     pub wrap_up: Option<WrapUp>,
+    /// Messages pushed to it since its turn began: they wait behind that turn, so if it is
+    /// ended for a fresh start they are among the ones the fresh session must get again.
+    pub parked_entries: Vec<i64>,
     /// When its current turn began, in milliseconds since 1970.
     pub turn_started_ms: Option<i64>,
     /// When the commander was last asked to look in on it.
@@ -286,6 +289,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         clear_at: request.clear_at,
         handover: HandoverPhase::Working,
         wrap_up: None,
+        parked_entries: Vec::new(),
         turn_started_ms: None,
         last_check_in_ms: None,
         permission_asked_at: None,

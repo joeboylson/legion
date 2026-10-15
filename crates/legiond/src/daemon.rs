@@ -190,6 +190,7 @@ impl Daemon {
             }
             session.turn_started_ms = if is_turn_starting { Some(crate::store::now_ms()) } else { session.turn_started_ms };
             if is_turn_starting {
+                session.parked_entries.clear();
                 session.is_answering_announcements = session.next_turn_answers_announcements.take().unwrap_or(false);
             }
             let is_new_permission_question = matches!(logged, Some((legion_proto::EntryKind::Permission, _)));
