@@ -215,7 +215,6 @@ Proof: a capture proxy in front of the Spark logged the template's requests.
 Each body had `chat_template_kwargs: {"enable_thinking": false}` and
 `parallel_tool_calls: true`, and (in a throwaway HOME) no `reasoning_effort`. The OpenCode session
 log of that run held only `text` and `tool` blocks, no `reasoning`.
-||||||| parent of d8b5ec5 (feat(legion): trim the opening prompt for template sessions and turn off OpenCode tools Legion doesn't use)
 
 ## First request size (mission 14)
 
