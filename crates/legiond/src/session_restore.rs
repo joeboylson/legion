@@ -9,7 +9,7 @@ use legion_proto::{EntryKind, MissionStatus, NewEntry, COMMANDER, HUMAN, LEGION}
 use crate::{
     daemon::{Daemon, PendingRestore},
     naming::operator_of_position,
-    session_commands::{is_busy, StartRequest},
+    session_commands::{busy_session_count, StartRequest},
     store::RunningSession,
 };
 
@@ -89,7 +89,7 @@ impl Daemon {
     /// Whether one more busy session fits under the machine's limit.
     fn has_room_for_a_session(&self) -> Result<bool, String> {
         let limit = self.machine_settings()?.max_busy_sessions;
-        let busy_count = self.state.lock().unwrap().sessions.values().filter(|session| is_busy(session.activity)).count();
+        let busy_count = busy_session_count(self.state.lock().unwrap().sessions.values());
         Ok(busy_count < limit)
     }
 

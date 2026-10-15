@@ -61,6 +61,12 @@ pub fn refusal_messages(position: &str, timeout_minutes: u64, request: &str) -> 
     (to_operator, to_commander)
 }
 
+/// Not yet told, and still starting past the grace time. A session that
+/// reports itself stays "starting" for good, and has no trust question.
+fn is_stuck_starting(activity: legion_proto::Activity, reports_itself: bool, is_reported_stuck: bool, waited: Duration) -> bool {
+    activity == legion_proto::Activity::Starting && !reports_itself && !is_reported_stuck && waited >= SESSION_START_GRACE
+}
+
 pub fn stuck_starting_text(position: &str) -> String {
     let grace = SESSION_START_GRACE.as_secs();
     format!(
@@ -136,8 +142,7 @@ impl Daemon {
             state
                 .sessions
                 .values_mut()
-                .filter(|session| session.activity == legion_proto::Activity::Starting && !session.is_reported_stuck)
-                .filter(|session| session.started_at.elapsed() >= SESSION_START_GRACE)
+                .filter(|session| is_stuck_starting(session.activity, session.reports_itself, session.is_reported_stuck, session.started_at.elapsed()))
                 .map(|session| {
                     session.is_reported_stuck = true;
                     (session.info(), session.mission)
@@ -273,6 +278,16 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_session_with_an_add_on_is_reported_stuck_starting() {
+        let starting = legion_proto::Activity::Starting;
+        assert!(is_stuck_starting(starting, false, false, SESSION_START_GRACE));
+        assert!(!is_stuck_starting(starting, true, false, SESSION_START_GRACE * 10), "a template session is never stuck before it starts");
+        assert!(!is_stuck_starting(starting, false, true, SESSION_START_GRACE), "told once");
+        assert!(!is_stuck_starting(starting, false, false, SESSION_START_GRACE / 2));
+        assert!(!is_stuck_starting(legion_proto::Activity::Busy, false, false, SESSION_START_GRACE));
+    }
 
     #[test]
     fn a_commander_restarts_once_per_gap() {

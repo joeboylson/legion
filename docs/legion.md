@@ -76,20 +76,83 @@ Kept in git, so everyone working on the folder shares it.
 - `legion.json`: `name`; `check`, a command run on a mission's work when its
   branch is replayed onto a moved base branch (such as `npm test`);
   `permissionMode` for every session; `clearAt` (see below); `strategist`
-  (below); `models`, named models, each with a `harness`, an optional
-  `address` and a `model`, checked when `legion.json` is read. Sessions
-  don't start on them yet.
+  (below); `models`, named models (see "Operators on other models" below).
 - `operators/<name>/definition.md`: the operator's job, in plain words.
 - `operators/<name>/operator.json` (all optional): `model` (a Claude
   model, or the name of one of the folder's `models`),
   `permissionMode`, `limit` (copies at once, default 1), `allowedTools`,
-  `disallowedTools`, `clearAt`.
+  `disallowedTools`, `clearAt`. `allowedTools`, `disallowedTools` and
+  `clearAt` apply only to Claude Code.
+- `harnesses/<name>.json`: how to start a program other than Claude Code
+  (below).
 - `pipelines/<name>.yaml`: `operators`, `first`, and `decisions`. Each
   operator lists conditions and who's `next`: an operator, `done`,
   `commander`, or a list of operators who work at the same time (the
   commander waits for all of them).
 - `tools/`: the team's toolbox (below).
 - `callouts.md`: the team's callouts (below). Legion writes it.
+
+## Operators on other models
+
+An operator can run on a model other than Claude, in another program (a
+harness), such as OpenCode on a local model:
+
+```json
+"models": {
+  "spark-fast": { "harness": "opencode", "address": "http://spark:8002/v1", "model": "qwen3.6-35b-a3b" }
+}
+```
+
+in `legion.json`, and `"model": "spark-fast"` in the operator's
+`operator.json`. A `model` that isn't one of these names (`opus`, `sonnet` …)
+runs on Claude Code as before. The harness `claude-code` is Claude Code too.
+
+Any other harness needs `.legion/harnesses/<harness>.json`, or the operator
+won't start ("no harness opencode in .legion/harnesses/"). Legion ships one for
+OpenCode in `templates/harnesses/opencode.json`; copy it in by hand.
+`legion setup init` doesn't.
+
+A harness file says how to start the program:
+
+- `name`: the file's name, without `.json`.
+- `command`, `args`: what to run, in the mission's folder. An item in `args`
+  can be a list, such as `["--mode", "{permissionMode}"]`: it's left out
+  whole when one of its blanks has no value.
+- `env`: settings to add to its environment.
+- `configFile` (optional): JSON that Legion writes for each session next to
+  its instructions; `{configFile}` is its path.
+- `tools`: how it reaches Legion's tools. `mcp` is Legion's tool server: the
+  template passes it on with `{toolsConfig}` (the server's JSON),
+  `{toolsConfigFile}` (that JSON in a file) or in its `configFile`.
+  `commands` is the `legion` command, which every session has on its `PATH`.
+- `toolName` (optional, `mcp` only): how the program names Legion's tools to
+  the model, such as `legion_{tool}`. The session's instructions use these
+  names.
+
+Legion fills these blanks in `command`, `args`, `env` and `configFile`:
+`{firstPrompt}`, `{systemPromptFile}` (the session's instructions),
+`{model}`, `{modelProvider}` (the model's name, such as `spark-fast`),
+`{address}`, `{toolsConfig}`, `{toolsConfigFile}`, `{configFile}`,
+`{permissionMode}`, `{legionCommand}`, `{deployment}`, `{position}`,
+`{socket}`, `{workingFolder}` and `{port}` (a free local port).
+
+Every session gets `LEGION_DEPLOYMENT`, `LEGION_POSITION` and
+`LEGION_SOCKET` in its environment, so `legion handoff` and the rest work in
+it.
+
+The OpenCode template starts OpenCode's server on `{port}`, waits until
+Legion's tools are connected (up to 60 seconds, then the session ends with
+the reason), then starts OpenCode on it with the first prompt.
+
+What a session on another harness can't do yet:
+
+- Get messages. Only one-step missions that need no message work.
+- Say whether it's busy or idle. It shows "can't see this session's state",
+  and doesn't count against the machine's limit of busy sessions once
+  started.
+- Use `allowedTools` and `disallowedTools`, or hand over to a fresh
+  conversation at `clearAt`.
+- Run the commander or the strategist. They stay on Claude Code.
 
 ## The strategist
 

@@ -1,4 +1,5 @@
-//! Claude sessions in terminals legiond owns, each with the add-on loaded.
+//! Sessions in terminals legiond owns: Claude Code with the add-on loaded,
+//! or a harness template's command.
 //! Terminals and processes are state and I/O, so this file isn't functional.
 
 use std::{
@@ -8,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use legion_proto::{Activity, SessionInfo, ENV_DEPLOYMENT, ENV_POSITION, LEGION};
+use legion_proto::{Activity, SessionInfo, ENV_DEPLOYMENT, ENV_POSITION, ENV_SOCKET, LEGION};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
 use crate::{
@@ -19,7 +20,9 @@ use crate::{
     },
     context_handover::{autocompact_percent, HandoverPhase},
     daemon::Daemon,
+    harness::FilledCommand,
     ids::new_id,
+    session_programs::SessionProgram,
     setup::PermissionMode,
     store::RunningSession,
     terminal_key::TerminalKey,
@@ -33,6 +36,9 @@ pub struct Session {
     pub part: Option<u32>,
     pub activity: Activity,
     pub can_see_state: bool,
+    /// Started from a harness template: no add-on reports what it does, so
+    /// Legion can't tell when it's busy or stuck.
+    pub reports_itself: bool,
     pub detail: Option<String>,
     pub model: Option<String>,
     /// How full its conversation is, in percent, as its add-on last said.
@@ -136,31 +142,61 @@ pub struct SpawnRequest {
     pub mission: Option<u32>,
     pub part: Option<u32>,
     pub working_folder: PathBuf,
-    pub arguments: Vec<String>,
+    pub program: SessionProgram,
+    /// The model to show before the session says which it runs.
+    pub model: Option<String>,
     pub clear_at: Option<u8>,
     pub permission_mode: Option<PermissionMode>,
 }
 
-fn claude_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> CommandBuilder {
+/// The program's name, as a failed start names it.
+fn program_name<'a>(daemon: &'a Daemon, program: &'a SessionProgram) -> &'a str {
+    match program {
+        SessionProgram::Claude(_) => &daemon.config.claude_command,
+        SessionProgram::Template(filled) => &filled.command,
+    }
+}
+
+/// Claude Code with the add-on, and the add-on's settings.
+fn claude_command(daemon: &Daemon, request: &SpawnRequest, arguments: &[String], session_id: &str) -> CommandBuilder {
     let config = &daemon.config;
     let mut command = CommandBuilder::new(&config.claude_command);
     command.arg("--plugin-dir");
     command.arg(&config.addon_folder);
-    command.args(&request.arguments);
-    command.cwd(&request.working_folder);
-    command.env("TERM", TERMINAL_TYPE);
-    CHILD_SESSION_MARKERS.iter().for_each(|marker| command.env_remove(marker));
+    command.args(arguments);
     command.env(ADDON_SOCKET_ENV, &config.socket_path);
     command.env(ADDON_SESSION_ENV, session_id);
     if let Some(mode) = request.permission_mode {
         command.env(ADDON_PERMISSION_MODE_ENV, mode.flag_value());
     }
-    command.env(HINDSIGHT_NO_CAPTURE.0, HINDSIGHT_NO_CAPTURE.1);
-    command.env(ENV_DEPLOYMENT, &request.deployment);
-    command.env(ENV_POSITION, &request.position);
     if let Some(clear_at) = request.clear_at {
         command.env(AUTOCOMPACT_PERCENT_ENV, autocompact_percent(clear_at).to_string());
     }
+    command
+}
+
+/// A template's command, with the three settings `legion` reads.
+fn template_command(daemon: &Daemon, filled: &FilledCommand) -> CommandBuilder {
+    let mut command = CommandBuilder::new(&filled.command);
+    command.args(&filled.args);
+    command.env(ENV_SOCKET, &daemon.config.socket_path);
+    filled.env.iter().for_each(|(name, value)| command.env(name, value));
+    command
+}
+
+/// The command for a session, with what every session gets.
+fn session_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) -> CommandBuilder {
+    let config = &daemon.config;
+    let mut command = match &request.program {
+        SessionProgram::Claude(arguments) => claude_command(daemon, request, arguments, session_id),
+        SessionProgram::Template(filled) => template_command(daemon, filled),
+    };
+    command.cwd(&request.working_folder);
+    command.env("TERM", TERMINAL_TYPE);
+    CHILD_SESSION_MARKERS.iter().for_each(|marker| command.env_remove(marker));
+    command.env(HINDSIGHT_NO_CAPTURE.0, HINDSIGHT_NO_CAPTURE.1);
+    command.env(ENV_DEPLOYMENT, &request.deployment);
+    command.env(ENV_POSITION, &request.position);
     // So the session finds the legion command next to legiond.
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     command.env("PATH", format!("{}:{inherited_path}", config.binary_folder.display()));
@@ -173,11 +209,11 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     let terminal_size = PtySize { rows: TERMINAL_ROWS, cols: TERMINAL_COLUMNS, pixel_width: 0, pixel_height: 0 };
     let terminal = native_pty_system().openpty(terminal_size).map_err(|error| format!("can't open a terminal: {error}"))?;
     let session_id = new_id();
-    let command = claude_command(daemon, &request, &session_id);
+    let command = session_command(daemon, &request, &session_id);
     let mut child = terminal
         .slave
         .spawn_command(command)
-        .map_err(|error| format!("can't start {}: {error}", daemon.config.claude_command))?;
+        .map_err(|error| format!("can't start {}: {error}", program_name(daemon, &request.program)))?;
     drop(terminal.slave);
     let killer = child.clone_killer();
     let mut output = terminal.master.try_clone_reader().map_err(|error| format!("can't read the terminal: {error}"))?;
@@ -189,9 +225,10 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         mission: request.mission,
         part: request.part,
         activity: Activity::Starting,
-        can_see_state: true,
+        can_see_state: !request.program.reports_itself(),
+        reports_itself: request.program.reports_itself(),
         detail: None,
-        model: None,
+        model: request.model,
         context_percent: None,
         clear_at: request.clear_at,
         handover: HandoverPhase::Working,

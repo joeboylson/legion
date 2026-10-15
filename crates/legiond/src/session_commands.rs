@@ -17,8 +17,11 @@ use crate::{
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
     permission_answers::answers_permission_question,
     callouts::read_callouts,
+    harness::read_harness,
+    model_choice::{model_choice, CLAUDE_CODE_HARNESS},
     prompts::{commander_prompt, operator_prompt, strategist_prompt, MissionBriefing, OperatorBriefing, StrategistBriefing, ToolNaming},
-    session_arguments::{legion_tools_config, session_arguments, LaunchPlan},
+    session_arguments::{legion_tools_config, LaunchPlan},
+    session_programs::{session_program, write_session_file, LaunchPlace},
     team_changes::{read_team, team_fingerprint, Team},
     sessions::{spawn_session, Session, SpawnRequest},
     setup::{clear_at_percent, read_operator, read_pipeline, read_settings, strategist_check_minutes},
@@ -43,16 +46,20 @@ pub struct StartRequest<'a> {
 const STRATEGIST_FIRST_PROMPT: &str = "Wait for Legion's first speed check.";
 const COMMANDER_FIRST_PROMPT: &str = "Your deployment has started. Check its missions with the missions tool and start on any that are waiting.";
 
-fn write_prompt_file(path: &Path, prompt: &str) -> Result<(), String> {
-    let folder = path.parent().ok_or_else(|| format!("{} has no folder", path.display()))?;
-    std::fs::create_dir_all(folder).map_err(|error| format!("can't make {}: {error}", folder.display()))?;
-    std::fs::write(path, prompt).map_err(|error| format!("can't write {}: {error}", path.display()))
-}
-
 /// A waiting session costs nothing, so only starting, busy and asking ones
 /// count, and a halted one, which holds its work until a person answers.
 pub fn is_busy(activity: Activity) -> bool {
     matches!(activity, Activity::Starting | Activity::Busy | Activity::Permission | Activity::Halted)
+}
+
+/// A session that reports itself never says it's idle, so it would hold a
+/// place under the machine's limit for good.
+pub fn counts_against_limit(activity: Activity, reports_itself: bool) -> bool {
+    !reports_itself && is_busy(activity)
+}
+
+pub fn busy_session_count<'a>(sessions: impl Iterator<Item = &'a Session>) -> usize {
+    sessions.filter(|session| counts_against_limit(session.activity, session.reports_itself)).count()
 }
 
 fn started_text(position: &str, mission: Option<u32>, part: Option<u32>, starter: &str) -> String {
@@ -100,7 +107,8 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
     let launch = LaunchPlan {
         position: COMMANDER.to_string(),
         system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, &recent_postmortems, &read_callouts(&folder.path), &ToolNaming::claude()),
-        model: None,
+        model_choice: model_choice(None, &settings.models),
+        template: None,
         permission_mode: settings.permission_mode,
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
@@ -125,7 +133,8 @@ fn strategist_launch(state: &State, folder_index: usize, deployment: &Deployment
     Ok(LaunchPlan {
         position: STRATEGIST.to_string(),
         system_prompt: strategist_prompt(deployment, briefing),
-        model: None,
+        model_choice: model_choice(None, &settings.models),
+        template: None,
         permission_mode: settings.permission_mode,
         allowed_tools: Vec::new(),
         disallowed_tools: STRATEGIST_DISALLOWED_TOOLS.iter().map(|tool| tool.to_string()).collect(),
@@ -145,8 +154,7 @@ fn operator_launch(
     let folder = &state.folders[folder_index];
     let operator_name = request.operator;
     let mission = request.mission;
-    let busy_session_count = state.sessions.values().filter(|session| is_busy(session.activity)).count();
-    if busy_session_count >= max_busy_sessions {
+    if busy_session_count(state.sessions.values()) >= max_busy_sessions {
         return Err(format!("the machine is at its limit of {max_busy_sessions} busy sessions; start {operator_name} once one is free"));
     }
     let (pipeline, pipeline_text) = read_pipeline(&folder.path, &deployment.pipeline)?;
@@ -155,6 +163,9 @@ fn operator_launch(
     }
     let operator = read_operator(&folder.path, operator_name)?;
     let settings = read_settings(&folder.path)?;
+    let choice = model_choice(operator.config.model.as_deref(), &settings.models);
+    let template = (choice.harness != CLAUDE_CODE_HARNESS).then(|| read_harness(&folder.path, &choice.harness)).transpose()?;
+    let naming = template.as_ref().map_or_else(ToolNaming::claude, ToolNaming::of_template);
     let copy_limit = operator.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
     let position = choose_position(&copy_positions(operator_name, copy_limit), &state.running_positions(&deployment.id), request.position)
         .ok_or_else(|| format!("{operator_name} is at its limit of {copy_limit} running at once"))?;
@@ -178,15 +189,21 @@ fn operator_launch(
         shared_tools_folder: &tools_folder,
         base_branch: base_branch.as_deref(),
         callouts: &callouts,
-        naming: &ToolNaming::claude(),
+        naming: &naming,
     };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
+    // A template session has no add-on to say how full its conversation is.
+    let clear_at = match template {
+        Some(_) => None,
+        None => clear_at_percent(operator.config.clear_at, settings.clear_at),
+    };
     Ok(LaunchPlan {
         position,
         system_prompt,
-        model: operator.config.model,
+        model_choice: choice,
+        template,
         permission_mode: operator.config.permission_mode.or(settings.permission_mode),
-        clear_at: clear_at_percent(operator.config.clear_at, settings.clear_at),
+        clear_at,
         allowed_tools: operator.config.allowed_tools,
         disallowed_tools: operator.config.disallowed_tools,
         first_prompt: first_prompt.unwrap_or_else(|| operator_first_prompt(mission)),
@@ -303,13 +320,33 @@ impl Daemon {
             }
             let tools_config = legion_tools_config(&self.config.binary_folder, &self.config.socket_path, &deployment.id, &launch.position);
             let prompt_file = self.config.data_folder.join(PROMPTS_FOLDER_NAME).join(format!("{}-{}.md", deployment.id, launch.position));
-            write_prompt_file(&prompt_file, &launch.system_prompt)?;
-            let arguments = session_arguments(&launch, &tools_config, &prompt_file);
+            write_session_file(&prompt_file, &launch.system_prompt)?;
             let working_folder = match &part_checkout {
                 Some(checkout) => PathBuf::from(&checkout.path),
                 None => mission_working_folder(&state, folder_index, &deployment.id, mission)?,
             };
-            let spawn_request = SpawnRequest { deployment: deployment.id, position: launch.position, mission, part, working_folder, arguments, clear_at: launch.clear_at, permission_mode: launch.permission_mode };
+            let place = LaunchPlace {
+                deployment_id: &deployment.id,
+                tools_config: &tools_config,
+                prompt_file: &prompt_file,
+                working_folder: &working_folder,
+                binary_folder: &self.config.binary_folder,
+                socket_path: &self.config.socket_path,
+            };
+            let program = session_program(&launch, &place)?;
+            // Claude's model is shown once its add-on says which it runs.
+            let model = program.reports_itself().then(|| launch.model_choice.name.clone()).flatten();
+            let spawn_request = SpawnRequest {
+                deployment: deployment.id,
+                position: launch.position,
+                mission,
+                part,
+                working_folder,
+                program,
+                model,
+                clear_at: launch.clear_at,
+                permission_mode: launch.permission_mode,
+            };
             (spawn_request, commanders_team)
         };
         let deployment_id = spawn_request.deployment.clone();
@@ -392,6 +429,14 @@ mod tests {
     fn only_working_sessions_are_busy() {
         assert!(is_busy(Activity::Busy) && is_busy(Activity::Permission) && is_busy(Activity::Starting) && is_busy(Activity::Halted));
         assert!(!is_busy(Activity::Idle) && !is_busy(Activity::Ended));
+    }
+
+    #[test]
+    fn a_session_that_reports_itself_never_counts_against_the_limit() {
+        assert!(counts_against_limit(Activity::Starting, false));
+        assert!(!counts_against_limit(Activity::Starting, true));
+        assert!(!counts_against_limit(Activity::Busy, true));
+        assert!(!counts_against_limit(Activity::Idle, false));
     }
 
     #[test]

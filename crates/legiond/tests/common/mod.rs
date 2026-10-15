@@ -2,6 +2,9 @@
 //! the fake harness standing in for Claude Code, and a git folder set up
 //! with one operator on a one-step pipeline.
 
+// Each test file uses its own share of these.
+#![allow(dead_code)]
+
 use std::{
     path::{Path, PathBuf},
     process::{Child, Command as Process, Stdio},
@@ -94,15 +97,37 @@ impl ThrowawayLegion {
         self.send(Command::PipelineAdd { folder, name: PIPELINE.into(), operators: vec![OPERATOR.into()], in_order: true }).await;
     }
 
-    /// Starts a deployment and the operator on its first mission. Returns
-    /// the deployment's ID.
-    pub async fn start_operator_on_a_mission(&mut self) -> String {
+    /// Starts a deployment with one mission. Returns the deployment's ID.
+    pub async fn start_deployment_with_a_mission(&mut self) -> String {
         let Reply::Deployment { deployment } = self.send(Command::DeploymentStart { folder: self.folder(), pipeline: PIPELINE.into(), name: None }).await else {
             panic!("no deployment");
         };
         self.send(Command::MissionAdd { deployment: deployment.id.clone(), title: "tiny".into(), body: "Say echo.".into() }).await;
-        self.send(Command::SessionStart { deployment: deployment.id.clone(), operator: OPERATOR.into(), mission: Some(1), part: None }).await;
         deployment.id
+    }
+
+    pub async fn start_operator(&mut self, deployment: &str) -> Result<Reply, String> {
+        self.client.ask(Command::SessionStart { deployment: deployment.into(), operator: OPERATOR.into(), mission: Some(1), part: None }).await
+    }
+
+    /// Starts a deployment and the operator on its first mission. Returns
+    /// the deployment's ID.
+    pub async fn start_operator_on_a_mission(&mut self) -> String {
+        let deployment = self.start_deployment_with_a_mission().await;
+        self.start_operator(&deployment).await.unwrap();
+        deployment
+    }
+
+    pub async fn set_operator_model(&mut self, model: &str) {
+        self.send(Command::OperatorSet { folder: self.folder(), name: OPERATOR.into(), limit: None, model: Some(model.into()), permission_mode: None }).await;
+    }
+
+    pub fn setup_file(&self, name: &str) -> PathBuf {
+        self.repo.join(".legion").join(name)
+    }
+
+    pub fn data_file(&self, name: &str) -> PathBuf {
+        self.home.join(".local/share/legion").join(name)
     }
 
     pub async fn sessions(&mut self, deployment: &str) -> Vec<SessionInfo> {

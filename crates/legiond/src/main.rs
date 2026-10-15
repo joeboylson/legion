@@ -42,6 +42,7 @@ mod server;
 mod session_arguments;
 mod session_commands;
 mod session_lifecycle;
+mod session_programs;
 mod session_restore;
 mod strategist_checks;
 mod sessions;

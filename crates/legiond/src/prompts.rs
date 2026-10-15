@@ -10,7 +10,7 @@ use legion_proto::{
 
 use crate::{
     constants::{delivery_prefix, MAX_WORKAROUND_ATTEMPTS},
-    harness::TOOL_BLANK,
+    harness::{HarnessTemplate, ToolRoute, TOOL_BLANK},
     setup::{Operator, Pipeline},
     shared_tools::{shared_tools_section, SharedTool},
     callouts::callouts_section,
@@ -38,6 +38,15 @@ impl ToolNaming {
     /// Claude Code's names for the legion MCP server's tools.
     pub fn claude() -> Self {
         Self::Pattern(format!("mcp__{NAME}__{TOOL_BLANK}"))
+    }
+
+    /// A template's names: its `toolName`, or the bare tool name when it
+    /// gives none; `legion` commands when it reaches the tools that way.
+    pub fn of_template(template: &HarnessTemplate) -> Self {
+        match template.tools {
+            ToolRoute::Mcp => Self::Pattern(template.tool_name.clone().unwrap_or_else(|| TOOL_BLANK.to_string())),
+            ToolRoute::Commands => Self::Command,
+        }
     }
 
     /// A tool named in a sentence. MCP harnesses keep the bare name, as
@@ -399,6 +408,16 @@ mod tests {
         assert!(operator.contains("with the send tool"));
         assert!(fixed_commander(&naming).contains("- legion_finish: "));
         assert!(fixed_strategist(&naming).contains("- legion_suggest_speedup: "));
+    }
+
+    #[test]
+    fn a_template_names_tools_by_its_route() {
+        let naming = |json: &str| ToolNaming::of_template(&serde_json::from_str::<HarnessTemplate>(json).unwrap());
+        let named = naming(r#"{"name": "pi", "command": "pi", "args": [], "tools": "mcp", "toolName": "legion_{tool}"}"#);
+        assert!(matches!(named, ToolNaming::Pattern(pattern) if pattern == "legion_{tool}"));
+        let bare = naming(r#"{"name": "pi", "command": "pi", "args": [], "tools": "mcp"}"#);
+        assert!(matches!(bare, ToolNaming::Pattern(pattern) if pattern == TOOL_BLANK));
+        assert!(matches!(naming(r#"{"name": "pi", "command": "pi", "args": [], "tools": "commands"}"#), ToolNaming::Command));
     }
 
     #[test]

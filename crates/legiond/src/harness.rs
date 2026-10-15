@@ -2,9 +2,6 @@
 //! can run a session. Legion fills in a template's `{blanks}` to get the
 //! command to run.
 
-// Nothing starts a session from a template yet; draft 5 does.
-#![allow(dead_code)]
-
 use std::{
     collections::BTreeMap,
     fs,
@@ -77,6 +74,8 @@ pub struct Blanks {
     pub position: Option<String>,
     pub socket: Option<String>,
     pub working_folder: Option<String>,
+    /// A free localhost port, for a harness that runs its own server.
+    pub port: Option<String>,
 }
 
 impl Blanks {
@@ -98,6 +97,7 @@ impl Blanks {
             "position" => &self.position,
             "socket" => &self.socket,
             "workingFolder" => &self.working_folder,
+            "port" => &self.port,
             _ => return None,
         };
         Some(field.as_deref())
@@ -119,6 +119,8 @@ fn harnesses_folder(folder: &Path) -> PathBuf {
 
 /// The harness templates in the folder, by name. They're read, and checked,
 /// only when used. No harnesses folder means none.
+// Sessions read one template by name; listing them waits for the app's model screens.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn harness_names(folder: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(harnesses_folder(folder))
         .into_iter()
@@ -425,6 +427,25 @@ mod tests {
   }
 }"#;
         assert_eq!(filled.config_file.as_deref(), Some(config));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn the_shipped_opencode_template_waits_for_legions_tools_then_prompts() {
+        let folder = scratch_folder();
+        write_harness(&folder, "opencode", include_str!("../../../templates/harnesses/opencode.json"));
+        let harness = read_harness(&folder, "opencode").unwrap();
+        let blanks = Blanks { system_prompt_file: Some("/p/d-builder.md".into()), port: Some("4242".into()), first_prompt: Some("Say \"hi\"; $(no)".into()), ..opencode_blanks() };
+        let filled = fill(&harness, &blanks).unwrap();
+        assert_eq!(filled.command, "sh");
+        assert_eq!(filled.args[0], "-c");
+        let script = &filled.args[1];
+        assert!(script.contains("opencode serve --port 4242 ") && script.contains("server=http://127.0.0.1:4242\n"), "{script}");
+        assert!(script.contains(r#"--model "spark-fast/qwen3" --agent legion --prompt "$1""#), "{script}");
+        assert_eq!(filled.args[2..], ["sh".to_string(), "Say \"hi\"; $(no)".to_string()], "the prompt is an argument, never part of the script");
+        let config: Value = serde_json::from_str(filled.config_file.as_deref().unwrap()).unwrap();
+        assert_eq!(config["agents"]["legion"]["system"], "{file:/p/d-builder.md}");
+        assert_eq!(config["mcp"]["servers"]["legion"]["command"], serde_json::json!(["/bin/legion", "mcp"]));
         fs::remove_dir_all(&folder).unwrap();
     }
 
