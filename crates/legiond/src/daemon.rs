@@ -242,7 +242,7 @@ impl Daemon {
 
     /// Ends a session that has written its handoff note; handle_session_end
     /// starts its position again.
-    fn end_for_fresh_start(&self, session_id: &str) {
+    pub fn end_for_fresh_start(&self, session_id: &str) {
         let mut state = self.state.lock().unwrap();
         let Some(session) = state.sessions.get_mut(session_id) else { return };
         let was_wrapped_up_mid_turn = session.wrap_up.is_some();

@@ -62,7 +62,7 @@ impl Daemon {
         }
     }
 
-    fn apply_opencode_answer(&self, question: Question, answer: Answer) {
+    fn apply_opencode_answer(self: &Arc<Self>, question: Question, answer: Answer) {
         let activity = activity_from(answer.reply, question.progress, question.waited);
         let progress = progress_after(answer.reply, question.progress);
         match self.state.lock().unwrap().sessions.get_mut(&question.session_id) {

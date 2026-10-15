@@ -4,7 +4,7 @@
 //! wrap up, and if the turn doesn't end soon, or the conversation keeps
 //! growing, it stops the turn. The turn ending then hands over as usual.
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use legion_proto::{Activity, EntryKind, NewEntry, COMMANDER};
 
@@ -12,7 +12,7 @@ use crate::{
     constants::{OPENCODE_STOP_POINTS_PAST_CLEAR_AT, OPENCODE_WRAP_UP_LIMIT},
     context_handover::{wrap_up_request, HandoverPhase},
     daemon::Daemon,
-    opencode_delivery::{find_session_id, interrupt_turn, post_message, steer_parked, Delivery},
+    opencode_delivery::{find_session_id, interrupt_turn, post_message, Delivery},
     opencode_server::OpenCodeServer,
 };
 
@@ -59,9 +59,19 @@ async fn conversation_on(server: &OpenCodeServer, known: Option<String>) -> Resu
 }
 
 impl Daemon {
+    /// Hands over now: the session is ended and its position starts again fresh.
+    /// Messages parked for it are not steered into the old conversation; they stay in the mission's log, which the fresh one reads.
+    fn restart_fresh(&self, session_id: &str) {
+        match self.state.lock().unwrap().sessions.get_mut(session_id) {
+            Some(session) => session.handover = HandoverPhase::Restarting,
+            None => return,
+        }
+        self.end_for_fresh_start(session_id);
+    }
+
     /// Called after each poll of an OpenCode session: acts if its conversation
     /// has filled up while it is still in a turn.
-    pub fn hand_over_mid_turn(&self, session_id: &str) {
+    pub fn hand_over_mid_turn(self: &Arc<Self>, session_id: &str) {
         let decided = {
             let mut state = self.state.lock().unwrap();
             let Some(session) = state.sessions.get_mut(session_id) else { return };
@@ -81,6 +91,7 @@ impl Daemon {
             (step, session.info(), server, session.opencode_session.clone())
         };
         let (step, info, server, known) = decided;
+        let (daemon, session_id) = (self.clone(), session_id.to_string());
         self.post_legion_entry(&info.deployment, NewEntry { kind: EntryKind::Activity, mission: info.mission, to: None, text: log_text(&info.position, &step), answers: None });
         let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
         runtime.spawn(async move {
@@ -93,7 +104,11 @@ impl Daemon {
                     }
                     MidTurnStep::StopTurn => {
                         interrupt_turn(&server, &conversation).await?;
-                        steer_parked(&server, &conversation).await
+                        // Not waiting to see the turn end: a message delivered now could start
+                        // another turn in the conversation being thrown away, and nothing would hand over.
+                        let daemon = daemon.clone();
+                        let _ = tokio::task::spawn_blocking(move || daemon.restart_fresh(&session_id)).await;
+                        Ok(())
                     }
                 }
             };

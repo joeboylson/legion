@@ -340,8 +340,8 @@ pub fn serve_opencode_listing_late(port: u16, tag: String, misses: Arc<AtomicUsi
     });
 }
 
-/// Like `serve_opencode_with_context`, but the tokens can grow while a turn runs, and an
-/// interrupt (kept with the prompts) ends the turn, as OpenCode's does.
+/// Like `serve_opencode_with_context`, but the tokens can grow while a turn runs, and the turn
+/// keeps running after an interrupt (a parked message starting a new one), so only Legion can end the session.
 pub fn serve_opencode_mid_turn(port: u16, tag: String, tokens: Arc<AtomicU64>, is_running: Arc<AtomicBool>, requests: Arc<Mutex<Vec<String>>>) {
     serve_http(port, move |request| {
         if request.starts_with("GET /api/session/active ") {
@@ -362,9 +362,6 @@ pub fn serve_opencode_mid_turn(port: u16, tag: String, tokens: Arc<AtomicU64>, i
             answer("200 OK", "{}")
         } else if request.starts_with("POST /api/session/ses_1/prompt ") || request.starts_with("POST /api/session/ses_1/interrupt ") {
             requests.lock().unwrap().push(request.to_string());
-            if request.contains("/interrupt ") {
-                is_running.store(false, Ordering::SeqCst);
-            }
             answer("200 OK", "{}")
         } else {
             answer("404 Not Found", "")
