@@ -15,7 +15,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use crate::{
     constants::{
         ADDON_PERMISSION_MODE_ENV, ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
-        CHILD_SESSION_MARKERS, ENDED_SCREEN_DRAIN_LIMIT, ENDED_STDERR_LINES, HINDSIGHT_NO_CAPTURE, STDERR_FOLDER_NAME, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
+        CHILD_SESSION_MARKERS, ENDED_SCREEN_DRAIN_LIMIT, ENDED_STDERR_LINES, HINDSIGHT_NO_CAPTURE, STDERR_FILE_EXTENSION, STDERR_FOLDER_NAME, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
     context_handover::{autocompact_percent, HandoverPhase},
@@ -177,13 +177,13 @@ fn claude_command(daemon: &Daemon, request: &SpawnRequest, arguments: &[String],
 
 /// Where a template session's stderr goes: its terminal shows only the screen, which holds a status bar by the end.
 fn stderr_path(daemon: &Daemon, session_id: &str) -> PathBuf {
-    daemon.config.data_folder.join(STDERR_FOLDER_NAME).join(format!("{session_id}.txt"))
+    daemon.config.data_folder.join(STDERR_FOLDER_NAME).join(format!("{session_id}.{STDERR_FILE_EXTENSION}"))
 }
 
 /// A template's command, with the three settings `legion` reads, run so its stderr lands in a file.
 fn template_command(daemon: &Daemon, filled: &FilledCommand, session_id: &str) -> CommandBuilder {
     let mut command = CommandBuilder::new("sh");
-    command.args(["-c", r#"exec 2>>"$0"; exec "$@""#]);
+    command.args(["-c", r#"exec 2>>"$1"; shift; exec "$@""#, "sh"]);
     command.arg(stderr_path(daemon, session_id));
     command.arg(&filled.command);
     command.args(&filled.args);
@@ -222,8 +222,8 @@ fn ended_with_last_line(how_it_ended: String, screen: &str) -> String {
 /// Why a session ended, for the log. One Legion stops on purpose, and a
 /// Claude session, say only its exit status. A template that ended on its own
 /// with an error says what it wrote to stderr, else the last line on its screen.
-fn ended_reason(how_it_ended: String, is_stopping: bool, reports_itself: bool, stderr: &str, screen: &str) -> String {
-    if is_stopping || !reports_itself || how_it_ended == "exit status 0" {
+fn ended_reason(how_it_ended: String, exited_cleanly: bool, is_stopping: bool, reports_itself: bool, stderr: &str, screen: &str) -> String {
+    if is_stopping || !reports_itself || exited_cleanly {
         return how_it_ended;
     }
     let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
@@ -313,9 +313,9 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     let waiting_daemon = daemon.clone();
     let stderr_file = stderr_path(daemon, &session_id);
     std::thread::spawn(move || {
-        let how_it_ended = match child.wait() {
-            Ok(status) => format!("exit status {}", status.exit_code()),
-            Err(error) => error.to_string(),
+        let (how_it_ended, exited_cleanly) = match child.wait() {
+            Ok(status) => (format!("exit status {}", status.exit_code()), status.success()),
+            Err(error) => (error.to_string(), false),
         };
         if reports_itself {
             let _ = screen_drained_signal.recv_timeout(ENDED_SCREEN_DRAIN_LIMIT);
@@ -334,7 +334,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             state.sessions.remove(&session_id)
         };
         if let Some(session) = ended_session {
-            let how_it_ended = ended_reason(how_it_ended, session.is_stopping, session.reports_itself, &stderr, &session.screen_text());
+            let how_it_ended = ended_reason(how_it_ended, exited_cleanly, session.is_stopping, session.reports_itself, &stderr, &session.screen_text());
             waiting_daemon.handle_session_end(&session, &how_it_ended);
         }
     });
@@ -356,27 +356,27 @@ mod tests {
 
     #[test]
     fn a_stopped_session_says_only_its_exit_status_on_any_harness() {
-        assert_eq!(ended_reason("exit status 1".into(), true, true, "boom\n", STATUS_BAR), "exit status 1");
-        assert_eq!(ended_reason("exit status 1".into(), true, false, "", STATUS_BAR), "exit status 1");
+        assert_eq!(ended_reason("exit status 1".into(), false, true, true, "boom\n", STATUS_BAR), "exit status 1");
+        assert_eq!(ended_reason("exit status 1".into(), false, true, false, "", STATUS_BAR), "exit status 1");
     }
 
     #[test]
     fn a_crashed_template_gives_its_stderr_over_its_screen() {
         let stderr = "\nopencode isn't on PATH\n  \n";
-        assert_eq!(ended_reason("exit status 1".into(), false, true, stderr, STATUS_BAR), "exit status 1: opencode isn't on PATH");
+        assert_eq!(ended_reason("exit status 1".into(), false, false, true, stderr, STATUS_BAR), "exit status 1: opencode isn't on PATH");
         let long = "a\nb\nc\nd\n";
-        assert_eq!(ended_reason("exit status 1".into(), false, true, long, STATUS_BAR), "exit status 1: b / c / d");
+        assert_eq!(ended_reason("exit status 1".into(), false, false, true, long, STATUS_BAR), "exit status 1: b / c / d");
     }
 
     #[test]
     fn a_crashed_template_without_stderr_gives_its_screen_line() {
-        assert_eq!(ended_reason("exit status 1".into(), false, true, " \n", "Starting\nfailed to start\n"), "exit status 1: failed to start");
+        assert_eq!(ended_reason("exit status 1".into(), false, false, true, " \n", "Starting\nfailed to start\n"), "exit status 1: failed to start");
     }
 
     #[test]
     fn claude_and_a_clean_exit_are_unchanged() {
-        assert_eq!(ended_reason("exit status 1".into(), false, false, "x", "y"), "exit status 1");
-        assert_eq!(ended_reason("exit status 0".into(), false, true, "x", STATUS_BAR), "exit status 0");
+        assert_eq!(ended_reason("exit status 1".into(), false, false, false, "x", "y"), "exit status 1");
+        assert_eq!(ended_reason("exit status 0".into(), true, false, true, "x", STATUS_BAR), "exit status 0");
     }
 
     #[test]

@@ -136,6 +136,9 @@ Legion fills these blanks in `command`, `args`, `env` and `configFile`:
 `{permissionMode}`, `{legionCommand}`, `{deployment}`, `{position}`,
 `{socket}`, `{workingFolder}` and `{port}` (a free local port).
 
+What a harness command writes to stderr goes to the log if it ends with an
+error, not to its screen, so print error lines there.
+
 Every session gets `LEGION_DEPLOYMENT`, `LEGION_POSITION` and
 `LEGION_SOCKET` in its environment, so `legion handoff` and the rest work in
 it.

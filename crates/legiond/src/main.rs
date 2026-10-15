@@ -120,6 +120,8 @@ async fn run() -> Result<(), String> {
     let claude_version = check_claude_supported(&arguments.claude_command)?;
     let data_folder = legion_proto::data_dir().ok_or("HOME isn't set")?;
     std::fs::create_dir_all(&data_folder).map_err(|error| format!("can't create {}: {error}", data_folder.display()))?;
+    // A dead legiond's sessions are gone, and so is what they wrote.
+    let _ = std::fs::remove_dir_all(data_folder.join(constants::STDERR_FOLDER_NAME));
     let socket_path = legion_proto::socket_path().ok_or("HOME isn't set")?;
     claim_socket(&socket_path)?;
     let listener = UnixListener::bind(&socket_path).map_err(|error| format!("can't listen on {}: {error}", socket_path.display()))?;
