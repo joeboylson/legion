@@ -48,6 +48,7 @@ mod request_replays;
 mod deployment_commands;
 mod server;
 mod session_arguments;
+mod socket_serving;
 mod session_commands;
 mod session_lifecycle;
 mod session_programs;
@@ -77,10 +78,11 @@ use tokio::{
 
 use crate::{
     claude_version::{check_claude_supported, version_label},
-    constants::{OPENCODE_DELIVERY_INTERVAL, OPENCODE_STATE_INTERVAL, SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
+    constants::{IDLE_CONNECTION_LIMIT, OPENCODE_DELIVERY_INTERVAL, OPENCODE_STATE_INTERVAL, SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
     daemon::{Config, Daemon},
     machine_settings::read_machine_settings,
     server::{claim_socket, router},
+    socket_serving::serve_socket,
     web_server::{web_address, web_router},
 };
 
@@ -242,13 +244,12 @@ async fn run() -> Result<(), String> {
         let Some((web_listener, port)) = web_listener else { return Ok(()) };
         axum::serve(web_listener, web_router(web_daemon, &app_folder, port)).with_graceful_shutdown(stop_signal(web_stopped)).await
     };
-    let socket_served = axum::serve(listener, router(daemon)).with_graceful_shutdown(stop_signal(stopped));
-    let (served, web_result) = tokio::join!(socket_served, web_served);
+    let socket_served = serve_socket(listener, router(daemon), IDLE_CONNECTION_LIMIT, stop_signal(stopped));
+    let ((), web_result) = tokio::join!(socket_served, web_served);
     if let Err(error) = web_result {
         eprintln!("{NAME}d: the app's web address failed: {error}");
     }
-    std::fs::remove_file(&socket_path).map_err(|error| format!("can't remove {}: {error}", socket_path.display()))?;
-    served.map_err(|error| error.to_string())
+    std::fs::remove_file(&socket_path).map_err(|error| format!("can't remove {}: {error}", socket_path.display()))
 }
 
 #[cfg(test)]

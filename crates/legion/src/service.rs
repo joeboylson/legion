@@ -10,6 +10,9 @@ const LAUNCH_AGENTS_FOLDER: &str = "Library/LaunchAgents";
 const LAUNCHCTL: &str = "launchctl";
 /// launchd finishes taking an old service down after bootout returns; a
 /// bootstrap straight after can fail until it has.
+/// launchd gives a service 256 open files unless told otherwise, and each
+/// Claude session holds several connections to legiond.
+const OPEN_FILES_LIMIT: u32 = 8192;
 const BOOTSTRAP_TRIES: u32 = 10;
 const BOOTSTRAP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -71,6 +74,16 @@ pub fn launch_agent_plist(plan: &ServicePlan) -> String {
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>{open_files}</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>{open_files}</integer>
+    </dict>
     <key>StandardOutPath</key>
     {log_file}
     <key>StandardErrorPath</key>
@@ -80,6 +93,7 @@ pub fn launch_agent_plist(plan: &ServicePlan) -> String {
 "#,
         label = plist_string(&service_label()),
         path = plist_string(&plan.path_variable),
+        open_files = OPEN_FILES_LIMIT,
     )
 }
 
@@ -182,6 +196,15 @@ mod tests {
         assert!(plist.contains("<key>PATH</key>\n        <string>/usr/bin:/bin</string>"));
         assert!(plist.contains("<key>SuccessfulExit</key>\n        <false/>"));
         assert_eq!(plist.matches("<string>/data/legiond.log</string>").count(), 2);
+    }
+
+    #[test]
+    fn the_plist_raises_the_open_files_limit_softly_and_hard() {
+        assert_eq!(OPEN_FILES_LIMIT, 8192);
+        let plist = launch_agent_plist(&plan(None));
+        for key in ["SoftResourceLimits", "HardResourceLimits"] {
+            assert!(plist.contains(&format!("<key>{key}</key>\n    <dict>\n        <key>NumberOfFiles</key>\n        <integer>8192</integer>")), "{key}");
+        }
     }
 
     #[test]

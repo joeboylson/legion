@@ -130,6 +130,12 @@ pub const MACHINE_SETTINGS_FILE_NAME: &str = "settings.json";
 pub const ADDON_STATE_ROUTE: &str = "/sessions/{id}/state";
 pub const ADDON_INBOX_ROUTE: &str = "/sessions/{id}/inbox";
 pub const WEBSOCKET_ROUTE: &str = "/ws";
+/// A plain HTTP connection on the socket that sends nothing for this long is
+/// closed, so a client that never hangs up can't use up legiond's open files.
+/// An upgraded WebSocket isn't covered.
+pub const IDLE_CONNECTION_LIMIT: Duration = Duration::from_secs(300);
+/// A failed accept (out of open files, say) is retried after this, not at once.
+pub const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Every message legiond hands a session starts with this.
 pub fn delivery_prefix() -> String {

@@ -9,7 +9,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path as UrlPath, State,
     },
-    http::StatusCode,
+    http::{header::CONNECTION, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -17,6 +17,7 @@ use axum::{
 use legion_proto::{Activity, Caller, Command, Event, Outcome, Request, ServerMessage, NAME};
 use serde::Deserialize;
 use tokio::sync::broadcast;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::{
     constants::{ADDON_INBOX_ROUTE, ADDON_STATE_ROUTE, WEBSOCKET_ROUTE},
@@ -37,11 +38,14 @@ pub fn claim_socket(path: &Path) -> Result<(), String> {
 }
 
 pub fn router(daemon: Arc<Daemon>) -> Router {
-    Router::new()
-        .route(WEBSOCKET_ROUTE, get(upgrade_to_websocket))
-        .route(ADDON_STATE_ROUTE, post(receive_addon_report))
-        .route(ADDON_INBOX_ROUTE, get(hand_out_deliveries))
-        .with_state(daemon)
+    let addon_routes = Router::new().route(ADDON_STATE_ROUTE, post(receive_addon_report)).route(ADDON_INBOX_ROUTE, get(hand_out_deliveries));
+    Router::new().route(WEBSOCKET_ROUTE, get(upgrade_to_websocket)).merge(closing_after_each_answer(addon_routes)).with_state(daemon)
+}
+
+/// Claude Code keeps the add-on's connections open for reuse and never
+/// closes them, about nine per session, which ran legiond out of open files.
+pub fn closing_after_each_answer<S: Clone + Send + Sync + 'static>(routes: Router<S>) -> Router<S> {
+    routes.layer(SetResponseHeaderLayer::overriding(CONNECTION, HeaderValue::from_static("close")))
 }
 
 /// What the add-on posts. `addon` and `model` come once, when it connects;
