@@ -44,6 +44,8 @@ pub struct Session {
     /// The server its state is read from, and what has been seen of it.
     pub server: Option<OpenCodeServer>,
     pub server_progress: Progress,
+    /// The ID of its conversation on that server, once the server has one.
+    pub opencode_session: Option<String>,
     pub detail: Option<String>,
     pub model: Option<String>,
     /// How full its conversation is, in percent, as its add-on last said.
@@ -274,6 +276,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         reports_itself: request.program.reports_itself(),
         server: request.program.server().cloned(),
         server_progress: Progress::default(),
+        opencode_session: None,
         detail: None,
         model: request.model,
         context_percent: None,

@@ -146,13 +146,17 @@ pub fn legion_tools_rule() -> String {
 
 /// How often legiond asks each OpenCode session's server whether it's busy.
 pub const OPENCODE_STATE_INTERVAL: Duration = Duration::from_secs(3);
+/// How often messages are pushed to OpenCode sessions: the add-on's poll (INBOX_POLL_MS
+/// in addon/hooks/register.ts), so they arrive at the same moments as a Claude session's.
+pub const OPENCODE_DELIVERY_INTERVAL: Duration = Duration::from_secs(1);
 /// How long one request to that server may take before it counts as no answer.
 pub const OPENCODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 /// The user name OpenCode's server expects with OPENCODE_PASSWORD.
 pub const OPENCODE_USER: &str = "opencode";
 /// Sessions with a foreground turn running; the ones not in it are inactive.
 pub const OPENCODE_ACTIVE_PATH: &str = "/api/session/active";
-/// Every session the server holds; empty until `opencode mini` makes one.
+/// Every session OpenCode has stored for this repo, from every worktree and every earlier
+/// server, not just this one's, so a session in it is only ours after checking when and where it began.
 pub const OPENCODE_SESSIONS_PATH: &str = "/api/session";
 /// Random bytes in a session's server password.
 pub const OPENCODE_PASSWORD_BYTES: usize = 24;

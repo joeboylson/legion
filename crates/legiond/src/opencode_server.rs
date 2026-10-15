@@ -10,7 +10,7 @@ use hyper::{body::Bytes, header::AUTHORIZATION, Method, Request};
 use hyper_util::{client::legacy::Client, rt::TokioExecutor};
 
 use crate::ids::new_id;
-use crate::constants::{OPENCODE_PASSWORD_BYTES, OPENCODE_REQUEST_TIMEOUT, OPENCODE_USER};
+use crate::constants::{OPENCODE_PASSWORD_BYTES, OPENCODE_REQUEST_TIMEOUT, OPENCODE_SESSIONS_PATH, OPENCODE_USER};
 
 /// Where a session's server listens, the password Legion gave it, and the
 /// title (`tag`) its one OpenCode conversation is made with.
@@ -75,8 +75,12 @@ pub async fn get(server: &OpenCodeServer, path: &str) -> Result<String, String> 
     request(server, Method::GET, path, None).await
 }
 
-/// For the next mission, which sends prompts to the server.
-#[allow(dead_code)]
+/// Where to ask for the sessions titled with this server's tag: the plain list holds only the newest few.
+pub fn sessions_search_path(server: &OpenCodeServer) -> String {
+    format!("{OPENCODE_SESSIONS_PATH}?search={}", server.tag)
+}
+
+/// Posts a JSON body.
 pub async fn post(server: &OpenCodeServer, path: &str, body: &str) -> Result<String, String> {
     request(server, Method::POST, path, Some(body.to_string())).await
 }
@@ -98,9 +102,10 @@ pub fn this_runs_session(reply: &str, tag: &str) -> Result<Option<String>, Strin
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, net::TcpListener, thread};
+    use std::net::TcpListener;
 
     use super::*;
+    use crate::opencode_testing::fake_server;
 
     #[test]
     fn base64_pads_like_the_standard() {
@@ -137,37 +142,24 @@ mod tests {
         assert_ne!(first.tag, second.tag);
     }
 
-    fn one_reply(reply: &'static str) -> (OpenCodeServer, thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = OpenCodeServer { port: listener.local_addr().unwrap().port(), password: "pw".into(), tag: "tag-1".into() };
-        let serving = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0u8; 4096];
-            let read = stream.read(&mut request).unwrap();
-            stream.write_all(reply.as_bytes()).unwrap();
-            String::from_utf8_lossy(&request[..read]).into_owned()
-        });
-        (server, serving)
-    }
-
     #[tokio::test]
     async fn a_chunked_reply_is_joined() {
-        let (server, serving) = one_reply("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\n{\"dat\r\n4\r\na\":1\r\n0\r\n\r\n");
+        let (server, serving) = fake_server(vec![Some("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\n{\"dat\r\n4\r\na\":1\r\n0\r\n\r\n".to_string())]);
         assert_eq!(get(&server, "/x").await.unwrap(), "{\"data\":1");
-        assert!(serving.join().unwrap().contains("authorization: Basic b3BlbmNvZGU6cHc="));
+        assert!(serving.join().unwrap()[0].contains("authorization: Basic b3BlbmNvZGU6cHc="));
     }
 
     #[tokio::test]
     async fn a_post_sends_its_body() {
-        let (server, serving) = one_reply("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        let (server, serving) = fake_server(vec![Some("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_string())]);
         assert_eq!(post(&server, "/api/x", r#"{"a":1}"#).await.unwrap(), "{}");
-        let request = serving.join().unwrap();
+        let request = serving.join().unwrap().remove(0);
         assert!(request.starts_with("POST /api/x HTTP/1.1") && request.ends_with(r#"{"a":1}"#), "{request}");
     }
 
     #[tokio::test]
     async fn a_refusal_is_an_error_and_a_silent_server_times_out() {
-        let (server, serving) = one_reply("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let (server, serving) = fake_server(vec![Some("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string())]);
         assert!(get(&server, "/x").await.unwrap_err().contains("401"));
         serving.join().unwrap();
         let silent = TcpListener::bind("127.0.0.1:0").unwrap();

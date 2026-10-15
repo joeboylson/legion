@@ -163,9 +163,15 @@ server whether the session is busy or idle, and shows that in the app and
 "can't reach its server". A busy one counts against the machine's limit of
 busy sessions.
 
+Messages reach an OpenCode session the same way and at the same moments as a
+Claude session's: each second Legion posts what's waiting for it to its
+server, oldest first, as queued prompts, and the session takes them after its
+turn. A message is marked delivered only once the server has taken it. If the
+server is gone or refuses, the message stays undelivered, Legion logs why once,
+and it tries again the next second.
+
 What a session on another harness can't do yet:
 
-- Get messages. Only one-step missions that need no message work.
 - Say whether it's busy or idle, unless it runs a server Legion can ask, as
   OpenCode does. Without one it shows "can't see this session's state", and
   doesn't count against the machine's limit of busy sessions once started.

@@ -7,8 +7,8 @@ use legion_proto::Activity;
 use serde_json::Value;
 
 use crate::{
-    constants::{OPENCODE_ACTIVE_PATH, OPENCODE_SESSIONS_PATH, SESSION_START_GRACE},
-    opencode_server::{get, this_runs_session, OpenCodeServer},
+    constants::{OPENCODE_ACTIVE_PATH, SESSION_START_GRACE},
+    opencode_server::{get, sessions_search_path, this_runs_session, OpenCodeServer},
 };
 
 /// What Legion has seen of a server so far.
@@ -59,7 +59,7 @@ pub async fn ask_server(server: &OpenCodeServer, progress: Progress) -> Reply {
     if is_running || progress.has_session {
         return Reply::Answered { is_running, has_session: true };
     }
-    match get(server, &format!("{OPENCODE_SESSIONS_PATH}?search={}", server.tag)).await.and_then(|body| this_runs_session(&body, &server.tag)) {
+    match get(server, &sessions_search_path(server)).await.and_then(|body| this_runs_session(&body, &server.tag)) {
         Ok(session) => Reply::Answered { is_running, has_session: session.is_some() },
         Err(_) => Reply::Silent,
     }
@@ -67,13 +67,8 @@ pub async fn ask_server(server: &OpenCodeServer, progress: Progress) -> Reply {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-        thread,
-    };
-
     use super::*;
+    use crate::opencode_testing::{fake_server, http, ok};
 
     const SOON: Duration = Duration::from_secs(1);
     const LATE: Duration = SESSION_START_GRACE;
@@ -126,31 +121,9 @@ mod tests {
         assert!(is_running_in(r#"{"error":"x"}"#).is_err());
     }
 
-    /// A server that answers each connection with the next reply: an empty one is a 401, None closes the connection unanswered.
-    fn fake_server(replies: Vec<Option<&'static str>>) -> (OpenCodeServer, thread::JoinHandle<Vec<String>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = OpenCodeServer { port: listener.local_addr().unwrap().port(), password: "pw".into(), tag: "tag-1".into() };
-        let serving = thread::spawn(move || {
-            replies
-                .into_iter()
-                .map(|reply| {
-                    let (mut stream, _) = listener.accept().unwrap();
-                    let mut request = [0u8; 2048];
-                    let read = stream.read(&mut request).unwrap();
-                    if let Some(body) = reply {
-                        let status = if body.is_empty() { "401 Unauthorized" } else { "200 OK" };
-                        write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-                    }
-                    String::from_utf8_lossy(&request[..read]).into_owned()
-                })
-                .collect()
-        });
-        (server, serving)
-    }
-
     #[tokio::test]
     async fn a_server_with_a_running_session_is_busy_and_gets_the_password() {
-        let (server, serving) = fake_server(vec![Some(r#"{"data":{"ses_1":{"type":"running"}}}"#)]);
+        let (server, serving) = fake_server(vec![ok(r#"{"data":{"ses_1":{"type":"running"}}}"#)]);
         assert_eq!(ask_server(&server, Progress::default()).await, answered(true, true));
         let requests = serving.join().unwrap();
         assert!(requests[0].starts_with("GET /api/session/active HTTP/1.1"), "{}", requests[0]);
@@ -159,7 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_idle_server_is_asked_for_its_sessions_until_one_exists() {
-        let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#), Some(r#"{"data":[]}"#), Some(r#"{"data":{}}"#), Some(r#"{"data":[{"id":"s","title":"tag-1"}]}"#)]);
+        let (server, serving) = fake_server(vec![ok(r#"{"data":{}}"#), ok(r#"{"data":[]}"#), ok(r#"{"data":{}}"#), ok(r#"{"data":[{"id":"s","title":"tag-1"}]}"#)]);
         assert_eq!(ask_server(&server, Progress::default()).await, answered(false, false));
         assert_eq!(ask_server(&server, Progress::default()).await, answered(false, true));
         serving.join().unwrap();
@@ -168,21 +141,21 @@ mod tests {
     #[tokio::test]
     async fn other_sessions_leave_it_starting() {
         let old = r#"{"data":[{"id":"a","title":"abc"},{"id":"b","title":"tag-2"}]}"#;
-        let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#), Some(old)]);
+        let (server, serving) = fake_server(vec![ok(r#"{"data":{}}"#), ok(old)]);
         assert_eq!(ask_server(&server, Progress::default()).await, answered(false, false));
         serving.join().unwrap();
     }
 
     #[tokio::test]
     async fn a_session_already_seen_isnt_listed_again() {
-        let (server, serving) = fake_server(vec![Some(r#"{"data":{}}"#)]);
+        let (server, serving) = fake_server(vec![ok(r#"{"data":{}}"#)]);
         assert_eq!(ask_server(&server, Progress { has_answered: true, has_session: true }).await, answered(false, true));
         assert_eq!(serving.join().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn a_refusal_a_closed_connection_and_bad_json_are_silence() {
-        let (server, serving) = fake_server(vec![Some(""), None, Some("not json")]);
+        let (server, serving) = fake_server(vec![Some(http("401 Unauthorized", "")), None, ok("not json")]);
         assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent);
         assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent);
         assert_eq!(ask_server(&server, Progress::default()).await, Reply::Silent);

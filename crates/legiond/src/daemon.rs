@@ -47,6 +47,27 @@ pub struct Daemon {
     pub is_shutting_down: AtomicBool,
 }
 
+/// Entries addressed to a session's position that none has had yet, oldest
+/// first. None when legiond doesn't know the session.
+pub fn pending_entries(state: &State, session_id: &str) -> Result<Option<Vec<Entry>>, String> {
+    let Some(session) = state.sessions.get(session_id) else { return Ok(None) };
+    let (folder_index, _) = state.find_deployment(&session.deployment)?;
+    state.folders[folder_index].store.undelivered_entries(&session.deployment, &session.position).map(Some)
+}
+
+/// Records that these entries reached the session, and whether its next
+/// turn will only answer heads-ups.
+pub fn mark_handed(state: &mut State, deployment: &str, session_id: &str, entries: &[Entry]) -> Result<(), String> {
+    let (folder_index, _) = state.find_deployment(deployment)?;
+    let entry_ids: Vec<i64> = entries.iter().map(|entry| entry.id).collect();
+    state.folders[folder_index].store.mark_delivered(&entry_ids)?;
+    let handed_kinds: Vec<legion_proto::EntryKind> = entries.iter().map(|entry| entry.kind).collect();
+    if let (Some(only_announcements), Some(session)) = (is_announcements_only(&handed_kinds), state.sessions.get_mut(session_id)) {
+        session.next_turn_answers_announcements = Some(next_turn_is_announcements_only(session.next_turn_answers_announcements, only_announcements));
+    }
+    Ok(())
+}
+
 pub struct State {
     pub folders: Vec<FolderState>,
     /// By session ID.
@@ -257,16 +278,9 @@ impl Daemon {
     /// that no session has had yet. None when legiond doesn't know the session.
     pub fn take_deliveries(&self, session_id: &str) -> Result<Option<Vec<String>>, String> {
         let mut state = self.state.lock().unwrap();
-        let Some(session) = state.sessions.get(session_id) else { return Ok(None) };
-        let (folder_index, _) = state.find_deployment(&session.deployment)?;
-        let store = &state.folders[folder_index].store;
-        let entries = store.undelivered_entries(&session.deployment, &session.position)?;
-        let entry_ids: Vec<i64> = entries.iter().map(|entry| entry.id).collect();
-        store.mark_delivered(&entry_ids)?;
-        let handed_kinds: Vec<legion_proto::EntryKind> = entries.iter().map(|entry| entry.kind).collect();
-        if let (Some(only_announcements), Some(session)) = (is_announcements_only(&handed_kinds), state.sessions.get_mut(session_id)) {
-            session.next_turn_answers_announcements = Some(next_turn_is_announcements_only(session.next_turn_answers_announcements, only_announcements));
-        }
+        let Some(entries) = pending_entries(&state, session_id)? else { return Ok(None) };
+        let deployment = state.sessions[session_id].deployment.clone();
+        mark_handed(&mut state, &deployment, session_id, &entries)?;
         Ok(Some(entries.iter().map(delivery_text).collect()))
     }
 

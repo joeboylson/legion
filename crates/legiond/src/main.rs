@@ -35,8 +35,12 @@ mod mission_parts;
 mod mission_status;
 mod model_choice;
 mod naming;
+mod opencode_delivery;
+mod opencode_push;
 mod opencode_server;
 mod opencode_state;
+#[cfg(test)]
+mod opencode_testing;
 mod opencode_watch;
 mod permission_answers;
 mod prompts;
@@ -73,7 +77,7 @@ use tokio::{
 
 use crate::{
     claude_version::{check_claude_supported, version_label},
-    constants::{OPENCODE_STATE_INTERVAL, SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
+    constants::{OPENCODE_DELIVERY_INTERVAL, OPENCODE_STATE_INTERVAL, SETUP_WATCH_INTERVAL, WAITING_SESSIONS_CHECK_INTERVAL},
     daemon::{Config, Daemon},
     machine_settings::read_machine_settings,
     server::{claim_socket, router},
@@ -187,6 +191,17 @@ async fn run() -> Result<(), String> {
         loop {
             interval.tick().await;
             opencode_daemon.clone().read_opencode_states().await;
+        }
+    });
+
+    let pushing_daemon = daemon.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(OPENCODE_DELIVERY_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let book = std::sync::Arc::new(std::sync::Mutex::new(opencode_push::PushBook::default()));
+        loop {
+            interval.tick().await;
+            pushing_daemon.push_messages_to_opencode_sessions(&book).await;
         }
     });
 
