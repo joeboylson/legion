@@ -12,7 +12,7 @@ use crate::{
     setup::{read_operator, read_pipeline},
     check_ins::{check_in_request, is_check_in_due},
     context_handover::{fresh_start_prompt, HandoverPhase},
-    constants::{MISSION_FINISHED_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
+    constants::{DEPLOYMENT_CLOSED_REASON, MISSION_FINISHED_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
     naming::operator_of_position,
     sessions::Session,
@@ -24,6 +24,12 @@ const COMMANDER_RESTARTED_PROMPT: &str = "Your last session ended by itself, and
 
 pub fn can_restart_commander(last_restart_ms: Option<i64>, now: i64) -> bool {
     last_restart_ms.is_none_or(|last| now - last >= COMMANDER_RESTART_GAP_MS)
+}
+
+/// A handover restart is dropped if the deployment was closed meanwhile: the close
+/// overwrites the reason, and a reopen may already have started its own commander.
+fn restarts_fresh(handover: HandoverPhase, stopped_because: Option<&str>, is_deployment_open: bool) -> bool {
+    handover == HandoverPhase::Restarting && is_deployment_open && stopped_because != Some(DEPLOYMENT_CLOSED_REASON)
 }
 
 fn entry(kind: EntryKind, to: Option<&str>, mission: Option<u32>, text: String) -> NewEntry {
@@ -87,7 +93,7 @@ impl Daemon {
         let ended_text = ended_text(&session.position, session.stopped_because.as_deref(), how_it_ended);
         self.post_legion_entry(&session.deployment, entry(EntryKind::SessionEnded, None, session.mission, ended_text));
         let is_deployment_open = self.state.lock().unwrap().find_open_deployment(&session.deployment).is_ok();
-        if session.handover == HandoverPhase::Restarting && is_deployment_open {
+        if restarts_fresh(session.handover, session.stopped_because.as_deref(), is_deployment_open) {
             return self.start_fresh(session);
         }
         // The strategist isn't the commander's to start; Legion's timer brings it back.
@@ -294,6 +300,15 @@ mod tests {
                 assert!(!text.contains("exit status"));
             }
         }
+    }
+
+    #[test]
+    fn a_handover_restart_is_dropped_once_the_deployment_was_closed() {
+        let restarting = HandoverPhase::Restarting;
+        assert!(restarts_fresh(restarting, Some(RESTARTED_FRESH_REASON), true));
+        assert!(!restarts_fresh(restarting, Some(DEPLOYMENT_CLOSED_REASON), true), "closed, then reopened");
+        assert!(!restarts_fresh(restarting, Some(RESTARTED_FRESH_REASON), false));
+        assert!(!restarts_fresh(HandoverPhase::default(), None, true));
     }
 
     #[test]
