@@ -18,6 +18,12 @@ const SHELL_ACTION: &str = "shell";
 /// A shell command with a redirect is checked whole, so `cat a > b` would match
 /// `cat *`. Denying the redirect keeps a command allow-list read-only.
 const REDIRECT_PATTERN: &str = "*>*";
+/// An allowed command's own flags can still write a file or run a program, and
+/// a pattern on the command's start can't see them. Git takes any unique start
+/// of a flag, so these are the shortest starts: `--ou` is only `--output`
+/// (`git log` writes a file); on `ls-remote`, `--u` is `--upload-pack` and
+/// `--e` is `--exec` (each runs a program).
+const FLAG_ESCAPE_PATTERNS: [&str; 3] = ["git*--ou*", "git ls-remote*--u*", "git ls-remote*--e*"];
 
 /// Claude tools that are one OpenCode action, by name only.
 const PLAIN_TOOLS: &[(&str, &str)] = &[
@@ -95,8 +101,8 @@ fn parse(rule: &str) -> Result<Rule, String> {
 }
 
 /// Edit, Write and MultiEdit are one action, so listing all of them says it once.
-fn parse_all(rules: &[String]) -> Result<Vec<Rule>, String> {
-    let parsed = rules.iter().map(|rule| parse(rule)).collect::<Result<Vec<_>, _>>()?;
+fn parse_all(rules: &[String], field: &str) -> Result<Vec<Rule>, String> {
+    let parsed = rules.iter().map(|rule| parse(rule)).collect::<Result<Vec<_>, _>>().map_err(|error| format!("{field}: {error}"))?;
     Ok(parsed.into_iter().fold(Vec::new(), |mut kept, rule| {
         if !kept.iter().any(|other: &Rule| other.action == rule.action && other.resource == rule.resource) {
             kept.push(rule);
@@ -107,20 +113,24 @@ fn parse_all(rules: &[String]) -> Result<Vec<Rule>, String> {
 
 /// The rules to add after a template's own defaults, so an operator's deny wins.
 pub fn opencode_permissions(allowed: &[String], disallowed: &[String], mode: Option<PermissionMode>) -> Result<Vec<Value>, String> {
-    let allowed = parse_all(allowed)?;
-    let disallowed = parse_all(disallowed)?;
+    let allowed = parse_all(allowed, "allowedTools")?;
+    let disallowed = parse_all(disallowed, "disallowedTools")?;
     let is_shell = |rule: &&Rule| rule.action == SHELL_ACTION;
     let shell_allows: Vec<&Rule> = allowed.iter().filter(is_shell).collect();
     // Listing some commands means only those; listing `Bash` itself leaves them all open.
     let shell_restricted = !shell_allows.is_empty() && shell_allows.iter().all(|rule| rule.resource != ANY);
     let restriction = shell_restricted.then(|| Rule { action: SHELL_ACTION.into(), resource: ANY.into() });
-    let redirect = shell_restricted.then(|| Rule { action: SHELL_ACTION.into(), resource: REDIRECT_PATTERN.into() });
+    let shell_denies: Vec<Rule> = if shell_restricted {
+        std::iter::once(REDIRECT_PATTERN).chain(FLAG_ESCAPE_PATTERNS).map(|resource| Rule { action: SHELL_ACTION.into(), resource: resource.into() }).collect()
+    } else {
+        Vec::new()
+    };
     let plan_mode = (mode == Some(PermissionMode::Plan)).then(|| Rule { action: EDIT_ACTION.into(), resource: ANY.into() });
     let rules = restriction
         .iter()
         .map(|rule| effect_rule(rule, "deny"))
         .chain(allowed.iter().map(|rule| effect_rule(rule, "allow")))
-        .chain(redirect.iter().chain(plan_mode.iter()).chain(disallowed.iter()).map(|rule| effect_rule(rule, "deny")))
+        .chain(shell_denies.iter().chain(plan_mode.iter()).chain(disallowed.iter()).map(|rule| effect_rule(rule, "deny")))
         .collect();
     Ok(rules)
 }
@@ -209,6 +219,27 @@ mod tests {
         for command in ["rm -rf x", "git push", "git logfoo", "sh -c ls", "cat a > b", "ls >> notes"] {
             assert_eq!(decide(&rules, "shell", command), "deny", "{command}");
         }
+    }
+
+    #[test]
+    fn a_read_only_operator_cant_write_or_run_a_program_through_an_allowed_commands_flags() {
+        let rules = read_only();
+        for command in [
+            "git log --output=x",
+            "git log -5 --output x",
+            "git log --out=x",
+            "git ls-remote --upload-pack=sh origin",
+            "git ls-remote origin --upload-pack=sh",
+            "git ls-remote --upl=sh origin",
+            "git ls-remote --u=sh origin",
+            "git ls-remote --exec=sh origin",
+            "git ls-remote --e=sh origin",
+        ] {
+            assert_eq!(decide(&rules, "shell", command), "deny", "{command}");
+        }
+        for command in ["git log --oneline -5", "git log --author=ann --until=2020", "git ls-remote origin", "git ls-remote --heads origin"] {
+            assert_eq!(decide(&rules, "shell", command), "allow", "{command}");
+        }
         assert_eq!(decide(&rules, "read", "src/main.rs"), "allow");
     }
 
@@ -246,7 +277,9 @@ mod tests {
             assert!(error.contains(&format!("{rule:?}")), "{error}");
         }
         let denied = opencode_permissions(&[], &texts(&["WebWiggle"]), None).unwrap_err();
-        assert!(denied.contains("\"WebWiggle\""), "{denied}");
+        assert!(denied.starts_with("disallowedTools: ") && denied.contains("\"WebWiggle\""), "{denied}");
+        let allowed = opencode_permissions(&texts(&["Frobnicate"]), &[], None).unwrap_err();
+        assert!(allowed.starts_with("allowedTools: "), "{allowed}");
     }
 
     #[test]

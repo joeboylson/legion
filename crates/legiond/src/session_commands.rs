@@ -25,7 +25,8 @@ use crate::{
     session_programs::{session_program, write_session_file, LaunchPlace},
     team_changes::{read_team, team_fingerprint, Team},
     sessions::{spawn_session, Session, SpawnRequest},
-    setup::{clear_at_percent, definition_path, read_operator, read_pipeline, read_settings, strategist_check_minutes},
+    permission_rules::opencode_permissions,
+    setup::{clear_at_percent, definition_path, read_operator, read_pipeline, read_settings, strategist_check_minutes, OPERATORS_FOLDER_NAME, OPERATOR_CONFIG_FILE_NAME},
     terminal_key::TerminalKey,
 };
 
@@ -172,6 +173,13 @@ fn operator_launch(
     let settings = read_settings(&folder.path)?;
     let choice = model_choice(operator.config.model.as_deref(), &settings.models);
     let template = (choice.harness != CLAUDE_CODE_HARNESS).then(|| read_harness(&folder.path, &choice.harness)).transpose()?;
+    // A template session's rules are turned into OpenCode's when it starts; checking
+    // them here lets the error name the operator's file.
+    if template.is_some() {
+        let permission_mode = operator.config.permission_mode.or(settings.permission_mode);
+        opencode_permissions(&operator.config.allowed_tools, &operator.config.disallowed_tools, permission_mode)
+            .map_err(|error| format!("{OPERATORS_FOLDER_NAME}/{operator_name}/{OPERATOR_CONFIG_FILE_NAME}: {error}"))?;
+    }
     let naming = template.as_ref().map_or_else(ToolNaming::claude, ToolNaming::of_template);
     let copy_limit = operator.config.limit.unwrap_or(DEFAULT_OPERATOR_COPY_LIMIT);
     let position = choose_position(&copy_positions(operator_name, copy_limit), &state.running_positions(&deployment.id), request.position)

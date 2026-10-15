@@ -196,9 +196,9 @@ mod tests {
         session_program(&launch, &place).unwrap();
         let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_file).unwrap()).unwrap();
         let rules = config["agents"]["legion"]["permissions"].as_array().unwrap();
-        let ends = rules.iter().rev().take(4).rev().map(|rule| ["action", "resource", "effect"].map(|key| rule[key].as_str().unwrap()).join(" ")).collect::<Vec<_>>();
+        let ends = rules.iter().rev().take(7).rev().map(|rule| ["action", "resource", "effect"].map(|key| rule[key].as_str().unwrap()).join(" ")).collect::<Vec<_>>();
         assert_eq!(rules[0], serde_json::json!({ "action": "*", "resource": "*", "effect": "allow" }));
-        assert_eq!(ends, ["shell * deny", "shell git log * allow", "shell *>* deny", "edit * deny"]);
+        assert_eq!(ends, ["shell * deny", "shell git log * allow", "shell *>* deny", "shell git*--ou* deny", "shell git ls-remote*--u* deny", "shell git ls-remote*--e* deny", "edit * deny"]);
         std::fs::remove_dir_all(&folder).unwrap();
     }
 

@@ -264,6 +264,12 @@ Legion with a Spark model:
   `$(c)` are three resources). `cd` isn't one. A command with a redirect is
   checked whole, as `cat a > b`, so `cat *` allows it: a command allow-list
   also needs `{"action": "shell", "resource": "*>*", "effect": "deny"}`.
+- A pattern on the start of a command can't see its flags. Git takes any
+  unique start of a flag, so `git log --output=f` (or `--out=f`) writes a file
+  and `git ls-remote --upload-pack=cmd` (`--upl`, `--u`) or `--exec=cmd`
+  (`--e`) runs a program. Legion denies `git*--ou*`, `git ls-remote*--u*` and
+  `git ls-remote*--e*` after the allows. *Checked:* on OpenCode in #23's
+  check, before these denies.
 - The built-in `plan` agent is `edit * deny` plus an allow for its own plan
   folder.
 
@@ -282,14 +288,20 @@ the config after the template's rules:
 { "action": "shell", "resource": "ls *", "effect": "allow" },
 { "action": "legion_*", "resource": "*", "effect": "allow" },
 { "action": "shell", "resource": "*>*", "effect": "deny" },
+{ "action": "shell", "resource": "git*--ou*", "effect": "deny" },
+{ "action": "shell", "resource": "git ls-remote*--u*", "effect": "deny" },
+{ "action": "shell", "resource": "git ls-remote*--e*", "effect": "deny" },
 { "action": "edit", "resource": "*", "effect": "deny" }
 ```
 
 *Checked:* a throwaway Legion with this operator on spark-fast: `git log
 --oneline` ran; `echo hi > hello.txt`, `touch` and `pwd` were refused with
-"Permission denied: shell". The model was asked to write a file with its
-edit tool and said it had none: a tool whose action is denied for everything
-isn't offered to the model at all, as with `webfetch` above.
+"Permission denied: shell". A scripted model (`scripted-model.py`) then made fixed calls: `git log
+--oneline` and `ls` ran; `git log --output=f`, `git ls-remote --upload-pack=`
+and `--exec=`, and `rm` were refused with "Permission denied: shell" (no file
+written); `write` and `edit` came back "No tool named ... is currently
+available": a tool whose action is denied for everything isn't offered to the
+model at all, as with `webfetch` above.
 
 ## Parallel tool calls
 

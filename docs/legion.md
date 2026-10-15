@@ -200,16 +200,24 @@ rule that matches decide, so an operator's deny wins.
 | `permissionMode: "plan"` | action `edit` denied |
 
 - Listing commands in `allowedTools` means only those commands: Legion denies
-  every other command first, and denies any command with a `>` in it, since
-  OpenCode checks `cat a > b` as one command that starts with `cat`. Listing
-  plain `Bash` leaves every command open.
+  every other command first. It also denies any command with a `>` in it,
+  since OpenCode checks `cat a > b` as one command that starts with `cat`.
+  Listing plain `Bash` leaves every command open.
+- An allow-list trusts each allowed command's own flags. Legion closes the
+  ones it knows write a file or run a program: `git ... --output` (and its
+  short starts, like `--out`) and `git ls-remote` with a flag starting
+  `--u` or `--e` (`--upload-pack`, `--exec`). `git status`, `git rev-parse`,
+  `cat` and `ls` have none. Any other command you list is trusted as it is, so
+  list commands whose flags you've read.
 - A pipeline is checked one command at a time, and each must be allowed.
 - Other `permissionMode` values add nothing: the template already allows
   everything it doesn't deny.
 - A rule Legion can't map, such as a path pattern (`Edit(src/**)`) or a tool
-  OpenCode doesn't have, stops the session from starting. The log names the
-  rule. So does a harness with no `agents.legion.permissions` list in its
-  config file.
+  OpenCode doesn't have, stops the session from starting. The error names
+  `operators/<name>/operator.json`, the field and the rule, and comes back to
+  whoever started the session (the commander's `start`); it isn't written to
+  the deployment log. So does a harness with no
+  `agents.legion.permissions` list in its config file.
 
 A read-only operator, for a question like "look but never write":
 

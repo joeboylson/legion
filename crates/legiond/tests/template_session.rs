@@ -90,3 +90,19 @@ async fn a_template_session_starts_its_filled_command() {
     let commander = sessions.iter().find(|session| session.position == "commander").unwrap();
     assert!(commander.can_see_state, "the commander stays on Claude Code");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tool_rule_that_cant_be_mapped_stops_the_start_and_names_the_operators_file() {
+    let mut legion = ThrowawayLegion::start("template-rules").await;
+    legion.set_up_folder().await;
+    add_models(&legion);
+    let deployment = legion.start_deployment_with_a_mission().await;
+    legion.set_operator_model("fake-model").await;
+    let path = legion.setup_file(&format!("operators/{OPERATOR}/operator.json"));
+    let mut config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into())).unwrap();
+    config["disallowedTools"] = serde_json::json!(["Frobnicate"]);
+    std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+    let error = legion.start_operator(&deployment).await.unwrap_err();
+    assert!(error.starts_with("operators/echoer/operator.json: disallowedTools: ") && error.contains("\"Frobnicate\""), "{error}");
+}
