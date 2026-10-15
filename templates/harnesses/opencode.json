@@ -28,7 +28,10 @@
         },
         "models": {
           "{model}": {
-            "name": "{model}"
+            "name": "{model}",
+            "body": {
+              "parallel_tool_calls": true
+            }
           }
         }
       }

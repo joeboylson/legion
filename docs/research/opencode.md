@@ -170,3 +170,26 @@ HOME. The model listed, from inside OpenCode: `legion_ask`,
 `legion_send`, `legion_sessions`, `legion_share_tool`, `legion_suggest`,
 `legion_toolbox`. `legion_missions` reached the test legiond and returned
 `no deployment "test"`, because no deployment was made.
+
+## Parallel tool calls
+
+OpenCode 2.0.25 has no named setting for them on `@ai-sdk/openai-compatible`.
+`parallelToolCalls` and `parallel_tool_calls` in a model's or provider's
+`settings` are accepted and then dropped: the request to the model had no
+`parallel_tool_calls` and no `tool_choice` (checked against a capture server
+that logs each request body). The raw `body` object on the model is merged
+into every request, so the template sets it there:
+
+```json
+"models": { "{model}": { "name": "{model}", "body": { "parallel_tool_calls": true } } }
+```
+
+With that, the capture server saw `"parallel_tool_calls": true` on the
+request that carries tools. vLLM already runs several tool calls per reply;
+this only states it.
+
+Proof on a throwaway Legion, one OpenCode operator on `spark-fast`, asked to
+read four files: its OpenCode session log (`session_message`, assistant
+rows) has steps with 4 reads together and with 4 mixed calls together
+(`shell` and 3 `glob`). The step habits come from the extra section in its
+instructions (`crates/legiond/src/prompts.rs`).

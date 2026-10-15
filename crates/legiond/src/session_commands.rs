@@ -196,6 +196,7 @@ fn operator_launch(
         base_branch: base_branch.as_deref(),
         callouts: &callouts,
         naming: &naming,
+        on_template: template.is_some(),
     };
     let system_prompt = operator_prompt(&position, deployment, operator_briefing, briefing);
     // A template session has no add-on to say how full its conversation is.

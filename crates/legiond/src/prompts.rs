@@ -226,10 +226,18 @@ pub struct OperatorBriefing<'a> {
     pub base_branch: Option<&'a str>,
     pub callouts: &'a [String],
     pub naming: &'a ToolNaming,
+    /// True for a session on a harness template: it gets the working habits that save its steps.
+    pub on_template: bool,
 }
 
+/// Template models pay for every step by rereading their whole context, so they work in fewer, bigger steps.
+const TEMPLATE_WORKING_HABITS: &str = "How to work, so each step counts:
+- Put related reads and searches in one step: call several tools in one reply when none needs another's result.
+- Read a file only when the step you're on needs it.
+- Start writing early, once you know enough for the first change, instead of exploring everything first.";
+
 pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: OperatorBriefing, mission: Option<MissionBriefing>) -> String {
-    let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch, callouts, naming } = briefing;
+    let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch, callouts, naming, on_template } = briefing;
     // Other missions finish onto the base meanwhile; catching up before a
     // handoff fixes clashes while this one's work is fresh, not at the finish.
     let catch_up = base_branch
@@ -244,7 +252,7 @@ pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: Operat
         None => "You have no mission yet; the commander will send one.".to_string(),
     };
     let tools = tool_lines(position, naming);
-    format!(
+    let prompt = format!(
         "You are {position}, an operator in a Legion deployment ({deployment_name}, {deployment_id}), {pipeline_name}.{first_step}
 
 Who you are:
@@ -274,7 +282,12 @@ Legion's tools, which already know your deployment and position:
         pipeline_name = pipeline_phrase(&deployment.pipeline),
         first_step = pipeline.first.as_ref().map(|first| format!(" The first step is {first}.")).unwrap_or_default(),
         definition = operator.definition.trim(),
-    )
+    );
+    if on_template {
+        format!("{prompt}\n\n{TEMPLATE_WORKING_HABITS}")
+    } else {
+        prompt
+    }
 }
 
 #[cfg(test)]
@@ -346,7 +359,7 @@ mod tests {
         let operator = Operator { definition: "# Builder\nBuild it.\n".into(), config: OperatorConfig::default() };
         let briefing = MissionBriefing { number: 3, body: "Make it work", history: &[] };
         let shared = [SharedTool { name: "browser-test.sh".into(), summary: "Runs tests.html.".into() }];
-        let operator_briefing = OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: "", shared_tools: &shared, shared_tools_folder: Path::new("/repo/.legion/tools"), base_branch: Some("main"), callouts: &[], naming: &ToolNaming::claude() };
+        let operator_briefing = OperatorBriefing { operator: &operator, pipeline: &pipeline, pipeline_text: "", shared_tools: &shared, shared_tools_folder: Path::new("/repo/.legion/tools"), base_branch: Some("main"), callouts: &[], naming: &ToolNaming::claude(), on_template: false };
         let prompt = operator_prompt("builder-2", &deployment(), operator_briefing, Some(briefing));
         assert!(prompt.starts_with("You are builder-2"));
         assert!(prompt.contains("Build it."));
@@ -372,6 +385,10 @@ mod tests {
     }
 
     fn fixed_operator(naming: &ToolNaming) -> String {
+        operator_with(naming, false)
+    }
+
+    fn operator_with(naming: &ToolNaming, on_template: bool) -> String {
         let pipeline: Pipeline = serde_yaml::from_str("operators: [builder]\nfirst: builder\n").unwrap();
         let operator = Operator { definition: "# Builder\nBuild it.\n".into(), config: OperatorConfig::default() };
         let shared = [SharedTool { name: "browser-test.sh".into(), summary: "Runs tests.html.".into() }];
@@ -385,6 +402,7 @@ mod tests {
             base_branch: Some("main"),
             callouts: &["2026-10-07 tester: port 3000 is taken".into()],
             naming,
+            on_template,
         };
         operator_prompt("builder-2", &deployment(), briefing, Some(MissionBriefing { number: 3, body: "Make it work", history: &history }))
     }
@@ -395,6 +413,21 @@ mod tests {
         assert_eq!(fixed_commander(&claude), include_str!("testdata/commander_prompt_claude.txt"));
         assert_eq!(fixed_strategist(&claude), include_str!("testdata/strategist_prompt_claude.txt"));
         assert_eq!(fixed_operator(&claude), include_str!("testdata/operator_prompt_claude.txt"));
+    }
+
+    #[test]
+    fn a_template_session_is_told_to_batch_and_start_writing() {
+        let prompt = operator_with(&ToolNaming::Pattern("legion_{tool}".into()), true);
+        assert!(prompt.ends_with(TEMPLATE_WORKING_HABITS));
+        assert!(prompt.contains("Put related reads and searches in one step"));
+        assert!(prompt.contains("Read a file only when the step you're on needs it"));
+        assert!(prompt.contains("Start writing early"));
+    }
+
+    #[test]
+    fn a_session_off_a_template_hears_nothing_of_it() {
+        assert!(!operator_with(&ToolNaming::claude(), false).contains("Start writing early"));
+        assert!(!fixed_commander(&ToolNaming::Command).contains("Start writing early"));
     }
 
     #[test]
