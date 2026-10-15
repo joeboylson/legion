@@ -3,6 +3,8 @@
 
 use std::future::Future;
 
+use legion_proto::{COMMANDER, HUMAN};
+
 use crate::{
     constants::{NOT_FOUND_STATUS, OPENCODE_SESSIONS_PATH},
     opencode_server::{get, post, sessions_search_path, this_runs_session, OpenCodeServer},
@@ -35,10 +37,40 @@ pub async fn find_session_id(server: &OpenCodeServer) -> Result<String, Failure>
     found.ok_or(Failure::NoSessionYet)
 }
 
-/// Queues one message behind whatever the session is doing.
-pub async fn post_message(server: &OpenCodeServer, session_id: &str, text: &str) -> Result<(), Failure> {
+/// How a message meets a session that is busy: behind its turn, or into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Queue,
+    Steer,
+}
+
+impl Delivery {
+    fn as_str(self) -> &'static str {
+        match self {
+            Delivery::Queue => "queue",
+            Delivery::Steer => "steer",
+        }
+    }
+
+    /// The commander and the admin steer a running turn, so a correction isn't stuck behind it; the rest queue.
+    pub fn from_sender(sender: &str) -> Self {
+        match sender == COMMANDER || sender == HUMAN {
+            true => Delivery::Steer,
+            false => Delivery::Queue,
+        }
+    }
+}
+
+/// Ends the session's current turn, if it is in one. Its parked messages wait for the next one.
+pub async fn interrupt_turn(server: &OpenCodeServer, session_id: &str) -> Result<(), String> {
+    let path = format!("{OPENCODE_SESSIONS_PATH}/{session_id}/interrupt");
+    post(server, &path, "").await.map(|_| ()).map_err(|error| format!("its server refused the interrupt: {error}"))
+}
+
+/// Posts one message, to queue behind the session's turn or to steer into it.
+pub async fn post_message(server: &OpenCodeServer, session_id: &str, text: &str, delivery: Delivery) -> Result<(), Failure> {
     let path = format!("{OPENCODE_SESSIONS_PATH}/{session_id}/prompt");
-    let body = serde_json::json!({ "text": text, "delivery": "queue" }).to_string();
+    let body = serde_json::json!({ "text": text, "delivery": delivery.as_str() }).to_string();
     post(server, &path, &body).await.map(|_| ()).map_err(|error| match error.starts_with(NOT_FOUND_STATUS) {
         true => Failure::SessionGone,
         false => Failure::Other(format!("its server refused the message: {error}")),
@@ -47,9 +79,9 @@ pub async fn post_message(server: &OpenCodeServer, session_id: &str, text: &str)
 
 /// Posts messages in order, telling `on_delivered` after each success. Stops
 /// at the first failure, so none is passed over: that entry and the reason.
-pub async fn deliver_in_order<Recorded: Future<Output = ()>>(server: &OpenCodeServer, session_id: &str, messages: &[(i64, String)], mut on_delivered: impl FnMut(i64) -> Recorded) -> Option<(i64, Failure)> {
-    for (entry_id, text) in messages {
-        match post_message(server, session_id, text).await {
+pub async fn deliver_in_order<Recorded: Future<Output = ()>>(server: &OpenCodeServer, session_id: &str, messages: &[(i64, String, Delivery)], mut on_delivered: impl FnMut(i64) -> Recorded) -> Option<(i64, Failure)> {
+    for (entry_id, text, delivery) in messages {
+        match post_message(server, session_id, text, *delivery).await {
             Ok(()) => on_delivered(*entry_id).await,
             Err(reason) => return Some((*entry_id, reason)),
         }
@@ -67,7 +99,7 @@ mod tests {
     #[tokio::test]
     async fn a_posted_message_goes_to_the_prompt_path_with_auth_and_queue_delivery() {
         let (server, serving) = fake_server(vec![ok("{}")]);
-        post_message(&server, "ses_1", "[legion] hi \"there\"").await.unwrap();
+        post_message(&server, "ses_1", "[legion] hi \"there\"", Delivery::Queue).await.unwrap();
         let request = serving.join().unwrap().remove(0);
         assert!(request.starts_with("POST /api/session/ses_1/prompt HTTP/1.1\r\n"), "{request}");
         assert!(request.contains("authorization: Basic b3BlbmNvZGU6cHc=\r\n"), "{request}");
@@ -75,11 +107,36 @@ mod tests {
         assert_eq!(body, serde_json::json!({ "text": "[legion] hi \"there\"", "delivery": "queue" }));
     }
 
+    #[test]
+    fn only_the_commander_and_the_admin_steer() {
+        assert_eq!(["commander", "admin"].map(Delivery::from_sender), [Delivery::Steer; 2]);
+        assert_eq!(["builder", "builder-2", "checker", "legion"].map(Delivery::from_sender), [Delivery::Queue; 4]);
+    }
+
+    #[tokio::test]
+    async fn a_steered_message_says_steer() {
+        let (server, serving) = fake_server(vec![ok("{}")]);
+        post_message(&server, "ses_1", "stop", Delivery::Steer).await.unwrap();
+        let request = serving.join().unwrap().remove(0);
+        assert!(request.contains(r#""delivery":"steer""#), "{request}");
+    }
+
+    #[tokio::test]
+    async fn an_interrupt_posts_to_the_sessions_interrupt_path() {
+        let (server, serving) = fake_server(vec![ok(r#"{"interrupted":true}"#)]);
+        interrupt_turn(&server, "ses_1").await.unwrap();
+        let request = serving.join().unwrap().remove(0);
+        assert!(request.starts_with("POST /api/session/ses_1/interrupt HTTP/1.1\r\n"), "{request}");
+        let (server, serving) = fake_server(vec![Some(http("500 Internal Server Error", ""))]);
+        assert!(interrupt_turn(&server, "ses_1").await.unwrap_err().contains("500"));
+        serving.join().unwrap();
+    }
+
     #[tokio::test]
     async fn messages_are_posted_in_order_and_each_success_is_reported() {
         let (server, serving) = fake_server(vec![ok("{}"), ok("{}")]);
         let mut delivered = Vec::new();
-        let failure = deliver_in_order(&server, "ses_1", &[(4, "first".into()), (9, "second".into())], |id| {
+        let failure = deliver_in_order(&server, "ses_1", &[(4, "first".into(), Delivery::Queue), (9, "second".into(), Delivery::Queue)], |id| {
             delivered.push(id);
             async {}
         })
@@ -93,7 +150,7 @@ mod tests {
     async fn a_server_error_stops_delivery_and_gives_the_reason() {
         let (server, serving) = fake_server(vec![ok("{}"), Some(http("500 Internal Server Error", "boom"))]);
         let mut delivered = Vec::new();
-        let failure = deliver_in_order(&server, "ses_1", &[(1, "a".into()), (2, "b".into()), (3, "c".into())], |id| {
+        let failure = deliver_in_order(&server, "ses_1", &[(1, "a".into(), Delivery::Queue), (2, "b".into(), Delivery::Queue), (3, "c".into(), Delivery::Queue)], |id| {
             delivered.push(id);
             async {}
         })
@@ -106,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn a_saved_session_the_server_no_longer_has_is_gone_not_refused() {
         let (server, serving) = fake_server(vec![Some(http("404 Not Found", ""))]);
-        assert_eq!(post_message(&server, "ses_1", "hi").await, Err(Failure::SessionGone));
+        assert_eq!(post_message(&server, "ses_1", "hi", Delivery::Queue).await, Err(Failure::SessionGone));
         serving.join().unwrap();
     }
 
@@ -115,7 +172,7 @@ mod tests {
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let server = OpenCodeServer { port, password: "x".into(), tag: "tag-1".into() };
         let mut delivered = Vec::new();
-        let failure = deliver_in_order(&server, "ses_1", &[(1, "a".into())], |id| {
+        let failure = deliver_in_order(&server, "ses_1", &[(1, "a".into(), Delivery::Queue)], |id| {
             delivered.push(id);
             async {}
         })

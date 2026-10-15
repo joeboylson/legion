@@ -14,7 +14,7 @@ use crate::{
     constants::SESSION_START_GRACE,
     daemon::{mark_handed, pending_entries, Daemon},
     entry_routing::delivery_text,
-    opencode_delivery::{deliver_in_order, find_session_id, Failure},
+    opencode_delivery::{deliver_in_order, find_session_id, Delivery, Failure},
     opencode_server::OpenCodeServer,
 };
 
@@ -159,7 +159,7 @@ impl Daemon {
             Ok(id) => id,
             Err(reason) => return waiting.entries.first().map(|entry| (entry.id, reason)),
         };
-        let messages: Vec<(i64, String)> = waiting.entries.iter().map(|entry| (entry.id, delivery_text(entry))).collect();
+        let messages: Vec<(i64, String, Delivery)> = waiting.entries.iter().map(|entry| (entry.id, delivery_text(entry), Delivery::from_sender(&entry.from))).collect();
         let failure = deliver_in_order(&waiting.server, &opencode_session, &messages, |entry_id| {
             let (daemon, waiting) = (self.clone(), waiting.clone());
             async move {

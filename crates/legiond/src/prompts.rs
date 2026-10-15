@@ -240,7 +240,8 @@ const TEMPLATE_WORKING_HABITS: &str = "How to work, so each step counts:
 - Put related reads and searches in one step: call several tools in one reply when none needs another's result.
 - Read a file only when the step you're on needs it.
 - Start writing early, once you know enough for the first change, instead of exploring everything first.
-- Commit after each piece of work that builds and passes its tests, with a one-line message, so a lost session never loses more than the last piece.";
+- Commit after each piece of work that builds and passes its tests, with a one-line message, so a lost session never loses more than the last piece.
+- After a handoff, done or blocked, end your turn. Never sleep, poll or wait for a reply: Legion starts a new turn when someone writes to you.";
 
 pub fn operator_prompt(position: &str, deployment: &Deployment, briefing: OperatorBriefing, mission: Option<MissionBriefing>) -> String {
     let OperatorBriefing { operator, pipeline, pipeline_text, shared_tools, shared_tools_folder, base_branch, callouts, definition_file, callouts_file, naming, on_template } = briefing;
@@ -436,6 +437,13 @@ mod tests {
         assert!(prompt.contains("Read a file only when the step you're on needs it"));
         assert!(prompt.contains("Start writing early"));
         assert!(prompt.contains("Commit after each piece of work that builds and passes its tests, with a one-line message"));
+    }
+
+    #[test]
+    fn a_template_session_is_told_to_end_its_turn_after_a_handoff() {
+        let prompt = operator_with(&ToolNaming::Pattern("legion_{tool}".into()), true);
+        assert!(prompt.contains("After a handoff, done or blocked, end your turn. Never sleep, poll or wait for a reply"));
+        assert!(!operator_with(&ToolNaming::claude(), false).contains("Never sleep, poll or wait"));
     }
 
     /// An operator on a template with a long definition, a long history, many callouts and many tools.

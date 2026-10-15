@@ -49,6 +49,6 @@ async fn a_message_reaches_the_sessions_server_and_is_retried_until_taken() {
     let taken = prompts.lock().unwrap().iter().rev().find(|request| request.contains(MESSAGE)).cloned().unwrap();
     assert!(taken.contains("authorization: Basic "), "{taken}");
     let body: serde_json::Value = serde_json::from_str(taken.split_once("\r\n\r\n").unwrap().1).unwrap();
-    assert_eq!(body["delivery"], "queue");
+    assert_eq!(body["delivery"], "steer", "the admin's messages steer a running turn");
     assert!(body["text"].as_str().unwrap().ends_with(MESSAGE), "{body}");
 }

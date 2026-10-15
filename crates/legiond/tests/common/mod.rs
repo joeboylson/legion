@@ -90,6 +90,16 @@ impl ThrowawayLegion {
         self.repo.to_string_lossy().into_owned()
     }
 
+    /// A second connection that speaks as the session at `position`, the way its tools do.
+    pub async fn client_as(&self, deployment: &str, position: &str) -> Client {
+        std::env::set_var(ENV_DEPLOYMENT, deployment);
+        std::env::set_var(ENV_POSITION, position);
+        let client = Client::connect().await.unwrap();
+        std::env::remove_var(ENV_DEPLOYMENT);
+        std::env::remove_var(ENV_POSITION);
+        client
+    }
+
     pub async fn send(&mut self, command: Command) -> Reply {
         self.client.ask(command).await.unwrap()
     }
@@ -264,7 +274,7 @@ pub fn serve_opencode(port: u16, tag: String, is_failing: Arc<AtomicBool>, promp
     serve_http(port, move |request| {
         if request.starts_with("GET /api/session?search=") {
             session_list(&tag)
-        } else if request.starts_with("POST /api/session/ses_1/prompt ") {
+        } else if request.starts_with("POST /api/session/ses_1/prompt ") || request.starts_with("POST /api/session/ses_1/interrupt ") {
             prompts.lock().unwrap().push(request.to_string());
             match is_failing.load(Ordering::SeqCst) {
                 true => answer("500 Internal Server Error", "no"),

@@ -42,13 +42,24 @@ Found by running `/opt/homebrew/bin/opencode` by hand on 2026-10-14/15.
    queues ("1 pending") and runs after the turn. *Checked:* `tmux send-keys`.
 9. **Messages without typing (decision 6):** `POST /api/session/{id}/prompt`
    with `{"text", "delivery": "queue"}`. It runs now if the session is idle,
-   or after the turn if busy. `"steer"` exists but wasn't tried. It needs
+   or after the turn if busy. `"steer"` goes into a running turn (see below). It needs
    Legion to run `opencode serve --port <port>` with `OPENCODE_PASSWORD`, and
    to start `mini --server <url> --session <id>`. Three blanks are missing
    from draft 2: **port, password, session ID** (admin: draft 11 adds them;
    mission 4 added port and password).
    *Checked:* a curl POST showed up and was answered in the running terminal.
    Plugins and ACP weren't tried.
+    *Steer, checked (mission 20):* a `"steer"` prompt posted 8 seconds into a
+    turn of five 10-second sleeps was in the conversation by the end of the
+    first one, and the model dropped the rest and answered it. It lands at the
+    next step boundary, not mid-step: during one long text answer it waited.
+    Legion steers messages from the commander and the admin, and queues the
+    rest.
+    *Ending a turn:* `POST /api/session/{id}/interrupt` answers
+    `{"interrupted":true}` and the session goes idle (`outcome:"interrupted"`).
+    Without `?resume=true`, prompts already queued stay parked and run with the
+    next message. Legion calls it after a handoff, done or blocked from an
+    OpenCode session.
 10. **Blanks:** no gap for the `--standalone` template. #3's `harness.rs`
     only fills `{` + letters/digits + `}`, so in `{file:{systemPromptFile}}`
     only `{systemPromptFile}` is filled.
