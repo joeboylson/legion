@@ -20,10 +20,40 @@ fn run_git(folder: &Path, arguments: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+const CHECK_IGNORE_IS_IGNORED: i32 = 0;
+const CHECK_IGNORE_NOT_IGNORED: i32 = 1;
+
+/// Whether git ignores this path. Any answer but yes or no (not a repo, bad
+/// path) is an error, not a guess.
+fn is_ignored(folder: &Path, path: &Path) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(folder)
+        .args(["check-ignore", "-q", "--"])
+        .arg(path)
+        .output()
+        .map_err(|error| format!("can't run git: {error}"))?;
+    match output.status.code() {
+        Some(CHECK_IGNORE_IS_IGNORED) => Ok(true),
+        Some(CHECK_IGNORE_NOT_IGNORED) => Ok(false),
+        _ => Err(format!("git check-ignore -- {}: {}", path.display(), String::from_utf8_lossy(&output.stderr).trim())),
+    }
+}
+
 /// Commits just these paths, leaving anything else staged as it was. A path
-/// with no change commits nothing, which isn't a problem.
+/// with no change commits nothing, which isn't a problem. An ignored path is
+/// left uncommitted and never force-added: the owner ignored it to keep it out of git.
 pub fn commit_paths(folder: &Path, paths: &[&Path], message: &str) -> Result<(), String> {
-    let path_arguments: Vec<String> = paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
+    let mut tracked_paths = Vec::new();
+    for path in paths {
+        if !is_ignored(folder, path)? {
+            tracked_paths.push(*path);
+        }
+    }
+    if tracked_paths.is_empty() {
+        return Ok(());
+    }
+    let path_arguments: Vec<String> = tracked_paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
     let add: Vec<&str> = ["add", "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect();
     run_git(folder, &add)?;
     let unchanged = run_git(folder, &["diff", "--cached", "--quiet", "--"].into_iter().chain(path_arguments.iter().map(String::as_str)).collect::<Vec<_>>()).is_ok();
@@ -231,6 +261,46 @@ mod tests {
         let outcome = merge_branch(Path::new(&mission.path), "mission/test--part-2").unwrap();
         assert_eq!(outcome, MergeOutcome::Clash { files: vec!["page.html".into()] });
         assert_eq!(run_git(Path::new(&mission.path), &["status", "--porcelain"]).unwrap(), "");
+    }
+
+    fn commit_count(folder: &Path) -> usize {
+        run_git(folder, &["rev-list", "--count", "HEAD"]).unwrap().parse().unwrap()
+    }
+
+    fn write_legion_file(folder: &Path) -> PathBuf {
+        let path = folder.join(".legion/callouts.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "- heads up\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn an_ignored_path_is_left_uncommitted_without_error() {
+        let repo = temporary_repo("ignored");
+        commit_file(&repo, ".gitignore", ".legion/\n");
+        let path = write_legion_file(&repo);
+        let commits_before = commit_count(&repo);
+        assert_eq!(commit_paths(&repo, &[&path], "callout"), Ok(()));
+        assert!(path.exists());
+        assert_eq!(commit_count(&repo), commits_before);
+        assert_eq!(run_git(&repo, &["ls-files", ".legion"]).unwrap(), "");
+    }
+
+    #[test]
+    fn a_tracked_path_is_committed_with_the_message() {
+        let repo = temporary_repo("tracked");
+        let path = write_legion_file(&repo);
+        assert_eq!(commit_paths(&repo, &[&path], "callout: heads up"), Ok(()));
+        assert_eq!(run_git(&repo, &["log", "-1", "--format=%s"]).unwrap(), "callout: heads up");
+        assert_eq!(run_git(&repo, &["ls-files", ".legion"]).unwrap(), ".legion/callouts.md");
+    }
+
+    #[test]
+    fn a_folder_that_isnt_a_repo_still_fails() {
+        let folder = std::env::temp_dir().join(format!("legion-git-test-norepo-{}", std::process::id()));
+        fs::create_dir_all(&folder).unwrap();
+        let path = write_legion_file(&folder);
+        assert!(commit_paths(&folder, &[&path], "callout").is_err());
     }
 
     #[test]
