@@ -141,8 +141,8 @@ Every session gets `LEGION_DEPLOYMENT`, `LEGION_POSITION` and
 it.
 
 The OpenCode template starts OpenCode's server on `{port}`, waits until
-Legion's tools are connected (up to 60 seconds, then the session ends with
-the reason), then starts OpenCode on it with the first prompt.
+Legion's tools are connected (up to 60 seconds; if they don't, or OpenCode
+is missing or its server stops, the session ends and the log says why), then starts OpenCode on it with the first prompt.
 
 What a session on another harness can't do yet:
 
@@ -153,6 +153,8 @@ What a session on another harness can't do yet:
 - Use `allowedTools` and `disallowedTools`, or hand over to a fresh
   conversation at `clearAt`.
 - Run the commander or the strategist. They stay on Claude Code.
+- Use `tools: "commands"`: `legion handoff`, `legion note`, `legion done` and
+  the other tool commands don't exist yet.
 
 ## The strategist
 

@@ -441,8 +441,9 @@ mod tests {
         assert_eq!(filled.args[0], "-c");
         let script = &filled.args[1];
         assert!(script.contains("opencode serve --port 4242 ") && script.contains("server=http://127.0.0.1:4242\n"), "{script}");
-        assert!(script.contains(r#"--model "spark-fast/qwen3" --agent legion --prompt "$1""#), "{script}");
-        assert_eq!(filled.args[2..], ["sh".to_string(), "Say \"hi\"; $(no)".to_string()], "the prompt is an argument, never part of the script");
+        assert!(script.contains(r#"--model "$2" --agent legion --prompt "$1""#), "{script}");
+        assert!(!script.contains("qwen3") && !script.contains("spark-fast"), "names from legion.json never become shell: {script}");
+        assert_eq!(filled.args[2..], ["sh".to_string(), "Say \"hi\"; $(no)".to_string(), "spark-fast/qwen3".to_string()], "the prompt and model are arguments");
         let config: Value = serde_json::from_str(filled.config_file.as_deref().unwrap()).unwrap();
         assert_eq!(config["agents"]["legion"]["system"], "{file:/p/d-builder.md}");
         assert_eq!(config["mcp"]["servers"]["legion"]["command"], serde_json::json!(["/bin/legion", "mcp"]));

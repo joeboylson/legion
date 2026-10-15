@@ -15,7 +15,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use crate::{
     constants::{
         ADDON_PERMISSION_MODE_ENV, ADDON_SESSION_ENV, ADDON_SOCKET_ENV, AUTOCOMPACT_PERCENT_ENV,
-        CHILD_SESSION_MARKERS, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
+        CHILD_SESSION_MARKERS, ENDED_SCREEN_DRAIN_LIMIT, HINDSIGHT_NO_CAPTURE, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES, TERMINAL_READ_BUFFER_BYTES, TERMINAL_ROWS,
         TERMINAL_TYPE,
     },
     context_handover::{autocompact_percent, HandoverPhase},
@@ -203,6 +203,14 @@ fn session_command(daemon: &Daemon, request: &SpawnRequest, session_id: &str) ->
     command
 }
 
+/// A session with no add-on says why it ended only on its screen: its last line.
+fn ended_with_last_line(how_it_ended: String, screen: &str) -> String {
+    match screen.lines().rev().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => format!("{how_it_ended}: {line}"),
+        None => how_it_ended,
+    }
+}
+
 /// Starts a session. Its terminal is read, and its end noticed, on threads
 /// of their own. The caller must not hold the daemon's lock.
 pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<SessionInfo, String> {
@@ -246,6 +254,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         _terminal: terminal.master,
     };
     let info = session.info();
+    let reports_itself = session.reports_itself;
     let running = RunningSession { deployment: info.deployment.clone(), position: info.position.clone(), mission: info.mission, part: info.part, session_id: session_id.clone() };
     {
         let mut state = daemon.state.lock().unwrap();
@@ -261,6 +270,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
     // Keep reading the terminal, or claude blocks once its buffer fills.
     let reading_daemon = daemon.clone();
     let reading_session_id = session_id.clone();
+    let (screen_drained, screen_drained_signal) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
         let mut buffer = [0u8; TERMINAL_READ_BUFFER_BYTES];
         while let Ok(read_count) = output.read(&mut buffer) {
@@ -271,6 +281,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
                 session.screen.process(&buffer[..read_count]);
             }
         }
+        let _ = screen_drained.send(());
     });
 
     let waiting_daemon = daemon.clone();
@@ -279,6 +290,9 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             Ok(status) => format!("exit status {}", status.exit_code()),
             Err(error) => error.to_string(),
         };
+        if reports_itself {
+            let _ = screen_drained_signal.recv_timeout(ENDED_SCREEN_DRAIN_LIMIT);
+        }
         let ended_session = {
             let mut state = waiting_daemon.state.lock().unwrap();
             if !waiting_daemon.is_shutting_down.load(Ordering::SeqCst) {
@@ -291,6 +305,10 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
             state.sessions.remove(&session_id)
         };
         if let Some(session) = ended_session {
+            let how_it_ended = match session.reports_itself {
+                true => ended_with_last_line(how_it_ended, &session.screen_text()),
+                false => how_it_ended,
+            };
             waiting_daemon.handle_session_end(&session, &how_it_ended);
         }
     });
@@ -300,6 +318,13 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ended_session_without_an_add_on_gives_its_last_line() {
+        let screen = "Starting\nLegion's tools didn't connect to OpenCode in 60 seconds: refused\n  \n";
+        assert_eq!(ended_with_last_line("exit status 1".into(), screen), "exit status 1: Legion's tools didn't connect to OpenCode in 60 seconds: refused");
+        assert_eq!(ended_with_last_line("exit status 0".into(), " \n"), "exit status 0");
+    }
 
     #[test]
     fn what_scrolls_off_the_top_is_kept_in_order() {
