@@ -241,6 +241,56 @@ HOME. The model listed, from inside OpenCode: `legion_ask`,
 `legion_toolbox`. `legion_missions` reached the test legiond and returned
 `no deployment "test"`, because no deployment was made.
 
+## Permission rules (mission 23)
+
+How OpenCode v2.0.25 decides, read from the binary and then run on a throwaway
+Legion with a Spark model:
+
+- A tool call is an **action** and one or more **resources**. The list is the
+  agent's `permissions`; the **last** rule whose action and resource both match
+  decides. A call that matches nothing is `ask`, which waits for a person, so a
+  restricted action needs a deny of its own first.
+- A rule's action and resource are patterns: `*` is anything, `?` one
+  character, and a pattern ending in ` *` also matches the bare command
+  (`git log *` matches `git log` and `git log -5`, not `git logfoo`).
+- If any one resource of a call matches a `deny`, the call is refused. An
+  `ask` on any resource asks.
+- Actions: `edit` for the edit, write and patch tools (the resource is the file
+  path), `shell` (not `bash`), `read`, `glob`, `grep`, `list`, `webfetch`,
+  `websearch`, `subagent`, `skill`, `question`, `external_directory`. An MCP
+  tool is an action named `<server>_<tool>`, resource `*`: Legion's are
+  `legion_<tool>`, so `legion_*` is all of them.
+- `shell` checks each command in the line (the line is parsed, so `a | b` and
+  `$(c)` are three resources). `cd` isn't one. A command with a redirect is
+  checked whole, as `cat a > b`, so `cat *` allows it: a command allow-list
+  also needs `{"action": "shell", "resource": "*>*", "effect": "deny"}`.
+- The built-in `plan` agent is `edit * deny` plus an allow for its own plan
+  folder.
+
+Legion's mapping from `operator.json` is in
+[docs/legion.md](../legion.md#tool-rules-on-opencode) and
+`crates/legiond/src/permission_rules.rs`. Read-only operator, as it lands in
+the config after the template's rules:
+
+```json
+{ "action": "shell", "resource": "*", "effect": "deny" },
+{ "action": "shell", "resource": "git log *", "effect": "allow" },
+{ "action": "shell", "resource": "git status *", "effect": "allow" },
+{ "action": "shell", "resource": "git rev-parse *", "effect": "allow" },
+{ "action": "shell", "resource": "git ls-remote *", "effect": "allow" },
+{ "action": "shell", "resource": "cat *", "effect": "allow" },
+{ "action": "shell", "resource": "ls *", "effect": "allow" },
+{ "action": "legion_*", "resource": "*", "effect": "allow" },
+{ "action": "shell", "resource": "*>*", "effect": "deny" },
+{ "action": "edit", "resource": "*", "effect": "deny" }
+```
+
+*Checked:* a throwaway Legion with this operator on spark-fast: `git log
+--oneline` ran; `echo hi > hello.txt`, `touch` and `pwd` were refused with
+"Permission denied: shell". The model was asked to write a file with its
+edit tool and said it had none: a tool whose action is denied for everything
+isn't offered to the model at all, as with `webfetch` above.
+
 ## Parallel tool calls
 
 OpenCode 2.0.25 has no named setting for them on `@ai-sdk/openai-compatible`.

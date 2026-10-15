@@ -49,6 +49,7 @@ mod opencode_steps;
 mod opencode_testing;
 mod opencode_watch;
 mod permission_answers;
+mod permission_rules;
 mod prompts;
 mod request_replays;
 mod deployment_commands;

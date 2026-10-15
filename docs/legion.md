@@ -83,8 +83,8 @@ Kept in git, so everyone working on the folder shares it.
 - `operators/<name>/operator.json` (all optional): `model` (a Claude
   model, or the name of one of the folder's `models`),
   `permissionMode`, `limit` (copies at once, default 1), `allowedTools`,
-  `disallowedTools`, `clearAt`. `allowedTools` and `disallowedTools` apply
-  only to Claude Code; `clearAt` also works on OpenCode (below).
+  `disallowedTools`, `clearAt`. `allowedTools`, `disallowedTools`,
+  `permissionMode` and `clearAt` also work on OpenCode (below).
 - `harnesses/<name>.json`: how to start a program other than Claude Code
   (below).
 - `pipelines/<name>.yaml`: `operators`, `first`, and `decisions`. Each
@@ -180,12 +180,57 @@ turn. A message is marked delivered only once the server has taken it. If the
 server is gone or refuses, the message stays undelivered, Legion logs why once,
 and it tries again the next second.
 
+### Tool rules on OpenCode
+
+`allowedTools`, `disallowedTools` and `permissionMode` in `operator.json` mean
+the same on OpenCode as on Claude Code. When legiond writes the session's
+config file, it turns them into rules and puts them at the end of
+`agents.legion.permissions`, after the template's own. OpenCode lets the last
+rule that matches decide, so an operator's deny wins.
+
+| Claude rule | OpenCode rule |
+| --- | --- |
+| `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | action `edit` (OpenCode checks edit, write and patch as this one action) |
+| `Bash` | action `shell`, any command |
+| `Bash(git log:*)` | action `shell`, resource `git log *` (`git log` and anything after it) |
+| `Bash(cat)` | action `shell`, resource `cat` exactly |
+| `Read`, `Glob`, `Grep`, `LS`, `WebFetch`, `WebSearch`, `Task` | `read`, `glob`, `grep`, `list`, `webfetch`, `websearch`, `subagent` |
+| `mcp__legion`, `mcp__legion__*`, `legion_*` | actions `legion_*` |
+| `mcp__legion__handoff`, `legion_handoff` | action `legion_handoff` |
+| `permissionMode: "plan"` | action `edit` denied |
+
+- Listing commands in `allowedTools` means only those commands: Legion denies
+  every other command first, and denies any command with a `>` in it, since
+  OpenCode checks `cat a > b` as one command that starts with `cat`. Listing
+  plain `Bash` leaves every command open.
+- A pipeline is checked one command at a time, and each must be allowed.
+- Other `permissionMode` values add nothing: the template already allows
+  everything it doesn't deny.
+- A rule Legion can't map, such as a path pattern (`Edit(src/**)`) or a tool
+  OpenCode doesn't have, stops the session from starting. The log names the
+  rule. So does a harness with no `agents.legion.permissions` list in its
+  config file.
+
+A read-only operator, for a question like "look but never write":
+
+```json
+{
+  "model": "spark-fast",
+  "allowedTools": [
+    "Bash(git log:*)", "Bash(git status:*)", "Bash(git rev-parse:*)",
+    "Bash(git ls-remote:*)", "Bash(cat:*)", "Bash(ls:*)", "mcp__legion"
+  ],
+  "disallowedTools": ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+}
+```
+
+On Claude Code the same file means what it always did.
+
 What a session on another harness can't do yet:
 
 - Say whether it's busy or idle, unless it runs a server Legion can ask, as
   OpenCode does. Without one it shows "can't see this session's state", and
   doesn't count against the machine's limit of busy sessions once started.
-- Use `allowedTools` and `disallowedTools`.
 - Run the commander or the strategist. They stay on Claude Code.
 - Use `tools: "commands"`: `legion handoff`, `legion note`, `legion done` and
   the other tool commands don't exist yet.

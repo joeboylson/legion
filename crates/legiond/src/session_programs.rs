@@ -8,6 +8,7 @@ use legion_proto::NAME;
 use crate::{
     harness::{fill, uses_blank, Blanks, FilledCommand, HarnessTemplate},
     opencode_server::{new_server, OpenCodeServer},
+    permission_rules::{add_to_config, opencode_permissions},
     session_arguments::{session_arguments, LaunchPlan},
 };
 
@@ -93,7 +94,9 @@ fn template_program(template: &HarnessTemplate, launch: &LaunchPlan, place: &Lau
     let config_file = template.config_file.as_ref().map(|_| place.config_file);
     let server = new_server(free_local_port()?)?;
     let blanks = template_blanks(launch, place, config_file, &server);
-    let filled = fill(template, &blanks)?;
+    let mut filled = fill(template, &blanks)?;
+    let rules = opencode_permissions(&launch.allowed_tools, &launch.disallowed_tools, launch.permission_mode)?;
+    filled.config_file = add_to_config(filled.config_file, rules, &template.name)?;
     write_session_file(place.tools_config_file, place.tools_config)?;
     if let (Some(path), Some(config)) = (config_file, &filled.config_file) {
         write_session_file(path, config)?;
@@ -176,6 +179,39 @@ mod tests {
         let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_file).unwrap()).unwrap();
         assert_eq!(config["base"], "http://spark:8002/v1");
         assert_eq!(config["legion"], serde_json::json!(["/bin/legion", "d1", "builder", "/s.sock", "/work", text(&prompt_file)]));
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    fn place_in<'a>(folder: &'a Path, prompt_file: &'a Path, tools_file: &'a Path, config_file: &'a Path) -> LaunchPlace<'a> {
+        LaunchPlace { deployment_id: "d1", tools_config: "{}", prompt_file, tools_config_file: tools_file, config_file, working_folder: folder, binary_folder: folder, socket_path: folder }
+    }
+
+    #[test]
+    fn an_operators_tool_rules_land_after_the_shipped_templates_defaults() {
+        let folder = scratch_folder();
+        let (prompt_file, tools_file, config_file) = (folder.join("p.md"), folder.join("t.json"), folder.join("c.json"));
+        let place = place_in(&folder, &prompt_file, &tools_file, &config_file);
+        let opencode: HarnessTemplate = serde_json::from_str(include_str!("../../../templates/harnesses/opencode.json")).unwrap();
+        let launch = LaunchPlan { allowed_tools: vec!["Bash(git log:*)".into()], disallowed_tools: vec!["Edit".into()], ..spark_plan(Some(opencode)) };
+        session_program(&launch, &place).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_file).unwrap()).unwrap();
+        let rules = config["agents"]["legion"]["permissions"].as_array().unwrap();
+        let ends = rules.iter().rev().take(4).rev().map(|rule| ["action", "resource", "effect"].map(|key| rule[key].as_str().unwrap()).join(" ")).collect::<Vec<_>>();
+        assert_eq!(rules[0], serde_json::json!({ "action": "*", "resource": "*", "effect": "allow" }));
+        assert_eq!(ends, ["shell * deny", "shell git log * allow", "shell *>* deny", "edit * deny"]);
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_rule_that_cant_be_mapped_stops_the_session_from_starting() {
+        let folder = scratch_folder();
+        let (prompt_file, tools_file, config_file) = (folder.join("p.md"), folder.join("t.json"), folder.join("c.json"));
+        let place = place_in(&folder, &prompt_file, &tools_file, &config_file);
+        let opencode: HarnessTemplate = serde_json::from_str(include_str!("../../../templates/harnesses/opencode.json")).unwrap();
+        let launch = LaunchPlan { disallowed_tools: vec!["Frobnicate".into()], ..spark_plan(Some(opencode)) };
+        let error = session_program(&launch, &place).err().unwrap();
+        assert!(error.contains("\"Frobnicate\""), "{error}");
+        assert!(!config_file.exists());
         std::fs::remove_dir_all(&folder).unwrap();
     }
 
