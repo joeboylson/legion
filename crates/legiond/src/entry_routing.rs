@@ -18,6 +18,10 @@ pub struct RoutingFacts {
     /// For a message to an operator's bare name: the copy working the
     /// sender's mission, when that's another copy.
     pub mission_copy: Option<String>,
+    /// For a message: the mission the receiving session works on. A message
+    /// that names none is stamped with it, so it can't reach a later session
+    /// of that position on another mission.
+    pub recipient_mission: Option<u32>,
 }
 
 /// An operator's bare name is one particular copy (`shipper`), often on
@@ -47,10 +51,10 @@ pub fn route_entry(entry: NewEntry, facts: RoutingFacts) -> Result<NewEntry, Str
     }
     match entry.kind {
         EntryKind::Message if entry.to.is_none() => Err("a message needs someone to go to".into()),
-        EntryKind::Message => Ok(match facts.mission_copy {
-            Some(copy) => NewEntry { to: Some(copy), ..entry },
-            None => entry,
-        }),
+        EntryKind::Message => {
+            let mission = entry.mission.or(facts.recipient_mission);
+            Ok(NewEntry { to: facts.mission_copy.or(entry.to), mission, ..entry })
+        }
         EntryKind::Answer => {
             let question_number = entry.answers.ok_or("an answer needs the question it answers")?;
             let (asker, question_mission) =
@@ -189,6 +193,17 @@ mod tests {
         message.to = Some("shipper".into());
         let facts = RoutingFacts { mission_copy: Some("shipper-2".into()), ..Default::default() };
         assert_eq!(route_entry(message, facts).unwrap().to.as_deref(), Some("shipper-2"));
+    }
+
+    #[test]
+    fn a_message_without_a_mission_takes_the_receiving_sessions() {
+        let facts = RoutingFacts { recipient_mission: Some(57), ..Default::default() };
+        let message = NewEntry { mission: None, to: Some("shipper".into()), ..new_entry(EntryKind::Message) };
+        assert_eq!(route_entry(message.clone(), facts).unwrap().mission, Some(57));
+        let named = NewEntry { mission: Some(3), ..message.clone() };
+        let facts = RoutingFacts { recipient_mission: Some(57), ..Default::default() };
+        assert_eq!(route_entry(named, facts).unwrap().mission, Some(3));
+        assert_eq!(route_entry(message, RoutingFacts::default()).unwrap().mission, None);
     }
 
     #[test]

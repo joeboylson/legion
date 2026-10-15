@@ -615,6 +615,16 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_session_on_another_mission_gets_nothing_the_position_left_behind() {
+        let store = store_with_deployment();
+        start(&store, "shipper", 57);
+        store.add_entry("r", "commander", &NewEntry { kind: EntryKind::Message, to: Some("shipper".into()), ..note("n") }).unwrap();
+        end(&store, "shipper", 57);
+        start(&store, "shipper", 58);
+        assert!(waiting(&store, "shipper", Some(58)).is_empty());
+    }
+
+    #[test]
     fn a_message_sent_before_the_first_session_starts_is_kept() {
         let store = store_with_deployment();
         let message = post(&store, "commander", EntryKind::Message, Some(57), Some("shipper"));
