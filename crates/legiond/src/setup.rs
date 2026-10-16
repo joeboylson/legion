@@ -128,6 +128,11 @@ pub struct Settings {
     /// unless enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategist: Option<StrategistSettings>,
+    /// The Claude model the commander runs on, such as `sonnet`. Claude
+    /// Code's own default when left out. The commander stays on Claude Code,
+    /// so this is never one of `models`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commander_model: Option<String>,
     /// Models operators can pick by name, each with the harness that runs it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelEntry>,

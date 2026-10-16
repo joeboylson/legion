@@ -78,7 +78,9 @@ Kept in git, so everyone working on the folder shares it.
 - `legion.json`: `name`; `check`, a command run on a mission's work when its
   branch is replayed onto a moved base branch (such as `npm test`);
   `permissionMode` for every session; `clearAt` (see below); `strategist`
-  (below); `models`, named models (see "Operators on other models" below).
+  (below); `commanderModel`, the Claude model the commander runs on (such
+  as `sonnet`; Claude Code's default when left out); `models`, named models
+  (see "Operators on other models" below).
 - `operators/<name>/definition.md`: the operator's job, in plain words.
 - `operators/<name>/operator.json` (all optional): `model` (a Claude
   model, or the name of one of the folder's `models`),

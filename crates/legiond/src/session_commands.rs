@@ -1,6 +1,7 @@
 //! Starting, stopping and looking into sessions.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -131,7 +132,8 @@ fn commander_launch(state: &State, folder_index: usize, deployment: &Deployment,
     let launch = LaunchPlan {
         position: COMMANDER.to_string(),
         system_prompt: commander_prompt(deployment, &pipeline_text, &copy_limits, &recent_postmortems, &read_callouts(&folder.path), &ToolNaming::claude()),
-        model_choice: model_choice(None, &settings.models),
+        // An empty model list keeps the name a Claude model, never a template harness.
+        model_choice: model_choice(settings.commander_model.as_deref(), &BTreeMap::new()),
         template: None,
         permission_mode: settings.permission_mode,
         allowed_tools: Vec::new(),
@@ -504,6 +506,12 @@ mod tests {
         let note = handoff_note_for("builder", &history);
         assert_eq!(note, Some("TASK 3: edit a.rb"));
         assert_eq!(operator_first_prompt(Some(2), note), "Start on mission 2. Your step, as it was handed to you:\n\nTASK 3: edit a.rb");
+    }
+
+    #[test]
+    fn the_commander_model_stays_on_claude_code_even_when_it_names_a_folder_model() {
+        let choice = model_choice(Some("spark-big"), &BTreeMap::new());
+        assert_eq!((choice.harness.as_str(), choice.model.as_deref()), (crate::model_choice::CLAUDE_CODE_HARNESS, Some("spark-big")));
     }
 
     #[test]
