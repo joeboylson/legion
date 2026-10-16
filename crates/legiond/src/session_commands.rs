@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use legion_proto::{role_of_position, Activity, Deployment, EntryKind, LogFilter, NewEntry, Reply, Role, SessionInfo, COMMANDER, STRATEGIST};
+use legion_proto::{role_of_position, Activity, Deployment, Entry, EntryKind, LogFilter, NewEntry, Reply, Role, SessionInfo, COMMANDER, STRATEGIST};
 
 use crate::{
     shared_tools::{shared_tools, shared_tools_folder},
@@ -94,10 +94,26 @@ fn part_checkout_for(state: &State, folder_index: usize, mission: Option<u32>, p
     Ok(Some(checkout))
 }
 
-fn operator_first_prompt(mission: Option<u32>) -> String {
-    match mission {
-        Some(number) => format!("Start on mission {number}."),
-        None => "Wait for the commander to send you a mission.".into(),
+/// The note of the mission's latest handoff, when that handoff names `operator`
+/// as next. The commander starts the next operator without sending the note,
+/// so it rides in the first prompt rather than a message that may land before
+/// the session listens.
+fn handoff_note_for<'a>(operator: &str, history: &'a [Entry]) -> Option<&'a str> {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.kind == EntryKind::Handoff)
+        .and_then(|entry| entry.text.strip_prefix("→ "))
+        .and_then(|text| text.split_once(": "))
+        .filter(|(next, _)| next.split(',').any(|name| name.trim() == operator))
+        .map(|(_, note)| note)
+}
+
+fn operator_first_prompt(mission: Option<u32>, handoff_note: Option<&str>) -> String {
+    match (mission, handoff_note) {
+        (Some(number), Some(note)) => format!("Start on mission {number}. Your step, as it was handed to you:\n\n{note}"),
+        (Some(number), None) => format!("Start on mission {number}."),
+        (None, _) => "Wait for the commander to send you a mission.".into(),
     }
 }
 
@@ -220,7 +236,10 @@ fn operator_launch(
         clear_at,
         allowed_tools: operator.config.allowed_tools,
         disallowed_tools: operator.config.disallowed_tools,
-        first_prompt: first_prompt.unwrap_or_else(|| operator_first_prompt(mission)),
+        first_prompt: first_prompt.unwrap_or_else(|| {
+            let handoff_note = mission_with_history.as_ref().and_then(|(_, _, history)| handoff_note_for(operator_name, history));
+            operator_first_prompt(mission, handoff_note)
+        }),
     })
 }
 
@@ -471,7 +490,31 @@ mod tests {
 
     #[test]
     fn an_operator_without_a_mission_waits() {
-        assert_eq!(operator_first_prompt(Some(2)), "Start on mission 2.");
-        assert!(operator_first_prompt(None).starts_with("Wait"));
+        assert_eq!(operator_first_prompt(Some(2), None), "Start on mission 2.");
+        assert!(operator_first_prompt(None, None).starts_with("Wait"));
+    }
+
+    fn handoff(id: i64, text: &str) -> Entry {
+        Entry { id, deployment: "d".into(), at_ms: id, mission: Some(2), from: "manager".into(), to: Some(COMMANDER.into()), kind: EntryKind::Handoff, text: text.into(), answers: None }
+    }
+
+    #[test]
+    fn the_first_prompt_carries_the_handoff_that_names_the_operator() {
+        let history = [handoff(1, "→ builder: old task"), handoff(2, "→ builder: TASK 3: edit a.rb")];
+        let note = handoff_note_for("builder", &history);
+        assert_eq!(note, Some("TASK 3: edit a.rb"));
+        assert_eq!(operator_first_prompt(Some(2), note), "Start on mission 2. Your step, as it was handed to you:\n\nTASK 3: edit a.rb");
+    }
+
+    #[test]
+    fn a_handoff_to_a_list_names_each_operator_in_it() {
+        assert_eq!(handoff_note_for("reviewer", &[handoff(1, "→ checker, reviewer: built")]), Some("built"));
+    }
+
+    #[test]
+    fn a_latest_handoff_to_someone_else_carries_nothing() {
+        let history = [handoff(1, "→ builder: task"), handoff(2, "→ manager: built")];
+        assert_eq!(handoff_note_for("builder", &history), None);
+        assert_eq!(handoff_note_for("builder-2", &[handoff(1, "→ builder: task")]), None);
     }
 }
