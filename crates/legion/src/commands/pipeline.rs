@@ -1,6 +1,6 @@
 //! `pipeline`: add, edit, remove or list the folder's pipelines.
 
-use legion_proto::{Command, FolderDetail, NAME, NO_PIPELINE};
+use legion_proto::{pipeline_yaml, Command, FolderDetail, NAME, NO_PIPELINE};
 
 use crate::{
     arguments::{Choice, PipelineAction, Route},
@@ -31,6 +31,17 @@ pub fn operator_items(detail: &FolderDetail) -> Vec<Item<String>> {
     detail.operators.iter().filter(|operator| operator.problem.is_none()).map(|operator| item(operator.name.clone(), &operator.name, summary(&operator.definition))).collect()
 }
 
+/// How work moves between the pipeline's operators, and who they are.
+fn ask_route_and_operators(ctx: &Context, route: Option<Route>, operators: Option<Vec<String>>, detail: &FolderDetail) -> Result<(Route, Vec<String>), String> {
+    let routes = Route::every().into_iter().map(|route| item(route, route.label(), "")).collect();
+    let route = ctx.ask.pick(route, "How should work move between its operators?", routes, "--route", "")?;
+    let operators = match route {
+        Route::Commander => ctx.ask.pick_many(operators, "Who's on it?", operator_items(detail), "--operators")?,
+        Route::InOrder => ctx.ask.pick_in_order(operators, operator_items(detail), "--operators")?,
+    };
+    Ok((route, operators))
+}
+
 pub async fn run(ctx: &mut Context, action: Option<PipelineAction>, inputs: PipelineInputs) -> Result<(), String> {
     let action = ctx.ask.action(action, "legion pipeline")?;
     let detail = ctx.folder().await?;
@@ -42,19 +53,29 @@ pub async fn run(ctx: &mut Context, action: Option<PipelineAction>, inputs: Pipe
         }
         PipelineAction::Add => {
             let name = ctx.ask.text(inputs.name, "Name the pipeline", "poems", "--name")?;
-            let routes = Route::every().into_iter().map(|route| item(route, route.label(), "")).collect();
-            let route = ctx.ask.pick(inputs.route, "How should work move between its operators?", routes, "--route", "")?;
-            let operators = match route {
-                Route::Commander => ctx.ask.pick_many(inputs.operators, "Who's on it?", operator_items(&detail), "--operators")?,
-                Route::InOrder => ctx.ask.pick_in_order(inputs.operators, operator_items(&detail), "--operators")?,
-            };
+            let (route, operators) = ask_route_and_operators(ctx, inputs.route, inputs.operators, &detail)?;
             show(&ctx.send(Command::PipelineAdd { folder, name, operators, in_order: route == Route::InOrder }).await?);
             Ok(())
         }
         PipelineAction::Edit => {
             let empty = format!("no pipeline files yet: add one with `{NAME} pipeline add`");
             let name = ctx.ask.pick(inputs.name, "Which pipeline?", file_pipeline_items(&detail), "--name", &empty)?;
-            open_in_editor(&std::path::Path::new(&folder).join(format!(".{NAME}/pipelines/{name}.yaml")))
+            let path = std::path::Path::new(&folder).join(format!(".{NAME}/pipelines/{name}.yaml"));
+            // An editor with no terminal to draw in waits forever, so without one
+            // the pipeline is rewritten from --route and --operators instead.
+            match (inputs.route, inputs.operators) {
+                (None, None) if ctx.ask.is_interactive() => open_in_editor(&path),
+                (None, None) => Err(format!("no terminal to open an editor in: rewrite it with --route and --operators, or edit {}", path.display())),
+                (route, operators) => {
+                    let (route, operators) = ask_route_and_operators(ctx, route, operators, &detail)?;
+                    if !ctx.ask.confirm(inputs.yes, &format!("Replace the {name} pipeline's file?"))? {
+                        return Ok(());
+                    }
+                    let text = pipeline_yaml(&operators, route == Route::InOrder);
+                    show(&ctx.send(Command::PipelineWrite { folder, name, text }).await?);
+                    Ok(())
+                }
+            }
         }
         PipelineAction::Remove => {
             let name = ctx.ask.pick(inputs.name, "Which pipeline?", file_pipeline_items(&detail), "--name", "no pipeline files to remove")?;

@@ -40,6 +40,24 @@ pub fn pipeline_label(name: &str) -> &str {
     }
 }
 
+/// A pipeline's file. In order, each operator passes to the next and the
+/// last finishes it; otherwise it has no decisions, and the commander picks.
+pub fn pipeline_yaml(operators: &[String], in_order: bool) -> String {
+    let team = format!("operators: [{}]\n", operators.join(", "));
+    if !in_order {
+        return format!("# No set order: with no decisions, every step goes back to the commander,\n# who picks who works on the mission next.\n{team}");
+    }
+    let steps: Vec<String> = operators
+        .iter()
+        .enumerate()
+        .map(|(index, operator)| {
+            let next = operators.get(index + 1).map_or(PIPELINE_END, String::as_str);
+            format!("  {operator}:\n    - condition: its step is done\n      next: {next}\n    - condition: blocked\n      next: {COMMANDER}\n")
+        })
+        .collect();
+    format!("# Each operator passes the mission to the next; the last one finishes it.\n{team}first: {}\ndecisions:\n{}", operators[0], steps.concat())
+}
+
 /// Where legiond keeps its data and its socket: `~/.local/share/<NAME>`.
 pub fn data_dir() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME")?;
