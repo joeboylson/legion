@@ -102,6 +102,8 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
             Err(refusal(AllowedTo::CommanderAndHuman, "start, stop or watch sessions, or finish or split missions"))
         }
         Command::MissionAdd { .. } => Err("only the admin creates missions; suggest one with the suggest tool".into()),
+        // The legion command looks its deployment up this way; a session is shown only its own.
+        Command::DeploymentList { .. } => Ok(None),
         Command::Key { .. } | Command::Input { .. } => Err(refusal(AllowedTo::HumanOnly, "type into a session")),
         Command::FolderAdd { .. }
         | Command::FolderList
@@ -116,7 +118,6 @@ pub fn run_a_session_command_targets(role: Role, command: &Command) -> Result<Op
         | Command::OperatorDefine { .. }
         | Command::PipelineWrite { .. }
         | Command::DeploymentStart { .. }
-        | Command::DeploymentList { .. }
         | Command::DeploymentClose { .. }
         | Command::DeploymentRename { .. }
         | Command::DeploymentRepipe { .. }
@@ -194,6 +195,13 @@ mod tests {
     #[test]
     fn ping_targets_no_deployment() {
         assert_eq!(run_a_session_command_targets(Role::Operator, &Command::Ping), Ok(None));
+    }
+
+    #[test]
+    fn sessions_may_look_their_deployment_up() {
+        let list = Command::DeploymentList { folder: Some("f".into()) };
+        assert_eq!(run_a_session_command_targets(Role::Commander, &list), Ok(None));
+        assert_eq!(run_a_session_command_targets(Role::Operator, &list), Ok(None));
     }
 
     #[test]

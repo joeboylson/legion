@@ -42,13 +42,15 @@ impl Daemon {
         Ok(Reply::Deployment { deployment })
     }
 
-    pub fn list_deployments(&self, folder_key: Option<&str>) -> Reply {
+    /// The deployments, in one folder or all; `only` narrows them to one ID.
+    pub fn list_deployments(&self, folder_key: Option<&str>, only: Option<&str>) -> Reply {
         let state = self.state.lock().unwrap();
         let deployments = state
             .folders
             .iter()
             .filter(|folder| folder_key.is_none_or(|key| folder.is_named(key)))
             .flat_map(|folder| folder.deployments.iter().cloned())
+            .filter(|deployment| only.is_none_or(|id| deployment.id == id))
             .collect();
         Reply::Deployments { deployments }
     }

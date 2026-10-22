@@ -318,6 +318,7 @@ impl Daemon {
             Command::FolderRemove { folder } => self.remove_folder(&folder),
             Command::FolderRead { folder } => self.describe_folder(&folder),
             Command::OperatorAdd { folder, name, definition, limit } => self.add_operator_to_folder(&folder, &name, &definition, limit),
+        let own_deployment = caller.as_ref().map(|session_caller| session_caller.deployment.clone());
             Command::OperatorRemove { folder, name } => self.remove_operator_from_folder(&folder, &name),
             Command::PipelineAdd { folder, name, operators, in_order } => self.add_pipeline_to_folder(&folder, &name, &operators, in_order),
             Command::SettingsSet { folder, check, permission_mode } => self.set_folder_settings(&folder, check, permission_mode),
@@ -326,7 +327,7 @@ impl Daemon {
             Command::PipelineWrite { folder, name, text } => self.write_pipeline_in_folder(&folder, &name, &text),
             Command::PipelineRemove { folder, name } => self.remove_pipeline_from_folder(&folder, &name),
             Command::DeploymentStart { folder, pipeline, name } => self.start_deployment(&folder, &pipeline, name),
-            Command::DeploymentList { folder } => Ok(self.list_deployments(folder.as_deref())),
+            Command::DeploymentList { folder } => Ok(self.list_deployments(folder.as_deref(), own_deployment.as_deref())),
             Command::DeploymentClose { deployment } => self.close_deployment(&deployment),
             Command::DeploymentRename { deployment, name } => self.rename_deployment(&deployment, &name),
             Command::DeploymentDelete { deployment } => self.delete_deployment(&deployment),
