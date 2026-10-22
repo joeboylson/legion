@@ -40,15 +40,19 @@ Report it now: handoff, part_done, done or blocked for where the mission stands,
 /// What happens to a turn an operator ended without reporting.
 #[derive(Debug, PartialEq)]
 pub enum UnreportedTurn {
-    /// The first time: it's sent back to report through its tools.
+    /// It still holds its mission: it's sent back once to report through its tools.
     SendBack(String),
-    /// It was sent back already and still didn't: the commander gets what it wrote.
+    /// It handed its step on already (most such turns just acknowledge a
+    /// message), or was sent back and still didn't report: the commander gets what it wrote.
     Forward(String),
 }
 
-pub fn unreported_turn_action(position: &str, kinds_added_this_turn: &[EntryKind], final_answer: &str, was_sent_back: bool) -> Option<UnreportedTurn> {
+pub fn unreported_turn_action(position: &str, kinds_added_this_turn: &[EntryKind], final_answer: &str, holds_mission: bool, was_sent_back: bool) -> Option<UnreportedTurn> {
     let forwarded = unreported_turn_message(position, kinds_added_this_turn, final_answer)?;
-    Some(if was_sent_back { UnreportedTurn::Forward(forwarded) } else { UnreportedTurn::SendBack(REPORT_FIRST.into()) })
+    Some(match holds_mission && !was_sent_back {
+        true => UnreportedTurn::SendBack(REPORT_FIRST.into()),
+        false => UnreportedTurn::Forward(forwarded),
+    })
 }
 
 #[cfg(test)]
@@ -81,10 +85,16 @@ mod tests {
 
     #[test]
     fn an_unreported_turn_is_sent_back_once_then_passed_on() {
-        assert_eq!(unreported_turn_action("planner", &[], "Plan written.", false), Some(UnreportedTurn::SendBack(REPORT_FIRST.into())));
-        let forwarded = unreported_turn_action("planner", &[], "Plan written.", true);
+        assert_eq!(unreported_turn_action("planner", &[], "Plan written.", true, false), Some(UnreportedTurn::SendBack(REPORT_FIRST.into())));
+        let forwarded = unreported_turn_action("planner", &[], "Plan written.", true, true);
         assert!(matches!(forwarded, Some(UnreportedTurn::Forward(text)) if text.ends_with("Plan written.")));
-        assert_eq!(unreported_turn_action("planner", &[EntryKind::Handoff], "Handed off.", true), None);
+        assert_eq!(unreported_turn_action("planner", &[EntryKind::Handoff], "Handed off.", true, true), None);
+    }
+
+    #[test]
+    fn an_operator_that_handed_its_step_on_isnt_sent_back() {
+        let acknowledged = unreported_turn_action("planner", &[], "Got the new test rule.", false, false);
+        assert!(matches!(acknowledged, Some(UnreportedTurn::Forward(text)) if text.ends_with("Got the new test rule.")));
     }
 
     #[test]

@@ -366,8 +366,9 @@ tool's first comment line.
 - **Usage limits.** A session at its limit carries on once it resets.
 - **Reports sessions stuck before they start** (likely a "trust this
   folder?" question). An operator that ends a turn without reporting
-  through its tools is sent back to report; if it still doesn't, the
-  commander gets what it wrote on screen.
+  through its tools, while it still holds its mission, is sent back to
+  report. Otherwise, or if it still doesn't, the commander gets what it
+  wrote on screen.
 
 ## Where things live
 

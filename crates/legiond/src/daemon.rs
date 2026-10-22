@@ -260,23 +260,27 @@ impl Daemon {
 
     /// An operator that ends a turn without reporting anything through its
     /// tools may have left a question or a result on its screen, which no
-    /// one reads. Send it back to report; if it still doesn't, pass what it
-    /// wrote to the commander.
+    /// one reads. One that still holds its mission is sent back to report;
+    /// otherwise, or if it still doesn't, the commander gets what it wrote.
     fn handle_unreported_turn(&self, session_id: &str, info: &SessionInfo, turn_started_ms: i64, answer: &str) {
         let action = {
             let mut state = self.state.lock().unwrap();
             let Ok((folder_index, _)) = state.find_deployment(&info.deployment) else { return };
             let filter = legion_proto::LogFilter { position: Some(info.position.clone()), since_ms: Some(turn_started_ms), ..Default::default() };
-            let reported_kinds: Vec<_> = state.folders[folder_index]
-                .store
+            let store = &state.folders[folder_index].store;
+            let reported_kinds: Vec<_> = store
                 .entries(&info.deployment, &filter)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|entry| entry.from == info.position)
                 .map(|entry| entry.kind)
                 .collect();
+            let holds_mission = info
+                .mission
+                .and_then(|number| store.mission(&info.deployment, number).ok())
+                .is_some_and(|mission| mission.holder.as_deref() == Some(info.position.as_str()));
             let Some(session) = state.sessions.get_mut(session_id) else { return };
-            let action = unreported_turn_action(&info.position, &reported_kinds, answer, session.was_sent_back_to_report);
+            let action = unreported_turn_action(&info.position, &reported_kinds, answer, holds_mission, session.was_sent_back_to_report);
             session.was_sent_back_to_report = matches!(action, Some(UnreportedTurn::SendBack(_)));
             action
         };
