@@ -33,6 +33,24 @@ pub fn unreported_turn_message(position: &str, kinds_added_this_turn: &[EntryKin
     Some(format!("{position} ended its turn without reporting through its tools, and wrote this on its screen:\n{answer}"))
 }
 
+/// What an operator hears the first time it ends a turn without reporting.
+pub const REPORT_FIRST: &str = "You ended your turn without reporting through your Legion tools, so no one has seen it. \
+Report it now: handoff, part_done, done or blocked for where the mission stands, ask for a question, send for anything else. Don't redo the work.";
+
+/// What happens to a turn an operator ended without reporting.
+#[derive(Debug, PartialEq)]
+pub enum UnreportedTurn {
+    /// The first time: it's sent back to report through its tools.
+    SendBack(String),
+    /// It was sent back already and still didn't: the commander gets what it wrote.
+    Forward(String),
+}
+
+pub fn unreported_turn_action(position: &str, kinds_added_this_turn: &[EntryKind], final_answer: &str, was_sent_back: bool) -> Option<UnreportedTurn> {
+    let forwarded = unreported_turn_message(position, kinds_added_this_turn, final_answer)?;
+    Some(if was_sent_back { UnreportedTurn::Forward(forwarded) } else { UnreportedTurn::SendBack(REPORT_FIRST.into()) })
+}
+
 #[cfg(test)]
 mod tests {
     use legion_proto::{COMMANDER, STRATEGIST};
@@ -59,6 +77,14 @@ mod tests {
         let message = unreported_turn_message("planner", &[], "Should it be HTML or React?").unwrap();
         assert!(message.starts_with("planner ended its turn without reporting"));
         assert!(message.ends_with("Should it be HTML or React?"));
+    }
+
+    #[test]
+    fn an_unreported_turn_is_sent_back_once_then_passed_on() {
+        assert_eq!(unreported_turn_action("planner", &[], "Plan written.", false), Some(UnreportedTurn::SendBack(REPORT_FIRST.into())));
+        let forwarded = unreported_turn_action("planner", &[], "Plan written.", true);
+        assert!(matches!(forwarded, Some(UnreportedTurn::Forward(text)) if text.ends_with("Plan written.")));
+        assert_eq!(unreported_turn_action("planner", &[EntryKind::Handoff], "Handed off.", true), None);
     }
 
     #[test]

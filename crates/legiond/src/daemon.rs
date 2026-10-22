@@ -16,7 +16,7 @@ use crate::{
     access::run_a_session_command_targets,
     channels::ChannelManager,
     activity_entries::entry_for_activity_change,
-    unreported_turns::{is_announcements_only, next_turn_is_announcements_only, unreported_turn_message},
+    unreported_turns::{is_announcements_only, next_turn_is_announcements_only, unreported_turn_action, UnreportedTurn},
     constants::{EVENT_BUFFER_SIZE, KNOWN_ADDON_VERSIONS, RESTARTED_FRESH_REASON},
     entry_routing::delivery_text,
     folder_state::{read_folder_registry, FolderState},
@@ -226,7 +226,7 @@ impl Daemon {
             // The turn that wrote the note is the handover itself, not news.
             None => {
                 if let Some((turn_started_ms, answer)) = finished_turn {
-                    self.forward_unreported_turn(&info, turn_started_ms, &answer);
+                    self.handle_unreported_turn(session_id, &info, turn_started_ms, &answer);
                 }
             }
         }
@@ -260,23 +260,32 @@ impl Daemon {
 
     /// An operator that ends a turn without reporting anything through its
     /// tools may have left a question or a result on its screen, which no
-    /// one reads. Pass what it wrote to the commander.
-    fn forward_unreported_turn(&self, info: &SessionInfo, turn_started_ms: i64, answer: &str) {
-        let reported_kinds = {
-            let state = self.state.lock().unwrap();
+    /// one reads. Send it back to report; if it still doesn't, pass what it
+    /// wrote to the commander.
+    fn handle_unreported_turn(&self, session_id: &str, info: &SessionInfo, turn_started_ms: i64, answer: &str) {
+        let action = {
+            let mut state = self.state.lock().unwrap();
             let Ok((folder_index, _)) = state.find_deployment(&info.deployment) else { return };
             let filter = legion_proto::LogFilter { position: Some(info.position.clone()), since_ms: Some(turn_started_ms), ..Default::default() };
-            state.folders[folder_index]
+            let reported_kinds: Vec<_> = state.folders[folder_index]
                 .store
                 .entries(&info.deployment, &filter)
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|entry| entry.from == info.position)
                 .map(|entry| entry.kind)
-                .collect::<Vec<_>>()
+                .collect();
+            let Some(session) = state.sessions.get_mut(session_id) else { return };
+            let action = unreported_turn_action(&info.position, &reported_kinds, answer, session.was_sent_back_to_report);
+            session.was_sent_back_to_report = matches!(action, Some(UnreportedTurn::SendBack(_)));
+            action
         };
-        let Some(text) = unreported_turn_message(&info.position, &reported_kinds, answer) else { return };
-        let entry = NewEntry { kind: legion_proto::EntryKind::Message, mission: info.mission, to: Some(legion_proto::COMMANDER.into()), text, answers: None };
+        let (to, text) = match action {
+            None => return,
+            Some(UnreportedTurn::SendBack(text)) => (info.position.clone(), text),
+            Some(UnreportedTurn::Forward(text)) => (legion_proto::COMMANDER.into(), text),
+        };
+        let entry = NewEntry { kind: legion_proto::EntryKind::Message, mission: info.mission, to: Some(to), text, answers: None };
         if let Err(error) = self.post_entry(&info.deployment, LEGION, entry) {
             eprintln!("{LEGION}d: {error}");
         }
@@ -309,6 +318,7 @@ impl Daemon {
         if let Some(session_caller) = &caller {
             self.check_session_may_send(session_caller, &command)?;
         }
+        let own_deployment = caller.as_ref().map(|session_caller| session_caller.deployment.clone());
         let author = caller.map(|session_caller| session_caller.position).unwrap_or_else(|| HUMAN.into());
         match command {
             Command::Ping => Ok(Reply::Pong { version: env!("CARGO_PKG_VERSION").into() }),
@@ -318,7 +328,6 @@ impl Daemon {
             Command::FolderRemove { folder } => self.remove_folder(&folder),
             Command::FolderRead { folder } => self.describe_folder(&folder),
             Command::OperatorAdd { folder, name, definition, limit } => self.add_operator_to_folder(&folder, &name, &definition, limit),
-        let own_deployment = caller.as_ref().map(|session_caller| session_caller.deployment.clone());
             Command::OperatorRemove { folder, name } => self.remove_operator_from_folder(&folder, &name),
             Command::PipelineAdd { folder, name, operators, in_order } => self.add_pipeline_to_folder(&folder, &name, &operators, in_order),
             Command::SettingsSet { folder, check, permission_mode } => self.set_folder_settings(&folder, check, permission_mode),

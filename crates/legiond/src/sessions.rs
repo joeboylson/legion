@@ -75,6 +75,9 @@ pub struct Session {
     pub next_turn_answers_announcements: Option<bool>,
     /// Its current turn only answers heads-ups, so what it writes needn't reach the commander.
     pub is_answering_announcements: bool,
+    /// It ended a turn without reporting and was sent back to report; a second
+    /// such turn goes to the commander instead.
+    pub was_sent_back_to_report: bool,
     pub screen: vt100::Parser,
     input: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -298,6 +301,7 @@ pub fn spawn_session(daemon: &Arc<Daemon>, request: SpawnRequest) -> Result<Sess
         is_reported_stuck: false,
         next_turn_answers_announcements: None,
         is_answering_announcements: false,
+        was_sent_back_to_report: false,
         screen: vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, TERMINAL_HISTORY_LINES),
         input,
         killer,
