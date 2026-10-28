@@ -40,6 +40,21 @@ pub fn copy_on_mission(to: &str, mission: Option<u32>, sessions: &[(String, Opti
         .map(|(position, _)| position.clone())
 }
 
+/// An operator's handoff, done or blocked report that names no mission is
+/// about the mission its session holds. Claude sometimes drops the mission
+/// argument, so Legion fills it in rather than turn the report down, and
+/// says so in the entry.
+pub fn fill_in_held_mission(entry: NewEntry, held_mission: Option<u32>) -> NewEntry {
+    let is_report = matches!(entry.kind, EntryKind::Handoff | EntryKind::Done | EntryKind::Blocked);
+    match (entry.mission, held_mission) {
+        (None, Some(held)) if is_report => {
+            let text = format!("{}\n({NAME}: no mission was given, so this is about mission {held}, the one this session holds.)", entry.text);
+            NewEntry { mission: Some(held), text, ..entry }
+        }
+        _ => entry,
+    }
+}
+
 /// Fills in who an entry goes to, or says why it can't be added.
 pub fn route_entry(entry: NewEntry, facts: RoutingFacts) -> Result<NewEntry, String> {
     let needs_mission = matches!(
@@ -122,6 +137,25 @@ mod tests {
     fn reports_need_a_mission() {
         let without_mission = NewEntry { mission: None, ..new_entry(EntryKind::Handoff) };
         assert!(route_entry(without_mission, RoutingFacts::default()).is_err());
+    }
+
+    #[test]
+    fn a_report_without_a_mission_is_about_the_held_one() {
+        let without_mission = NewEntry { mission: None, ..new_entry(EntryKind::Done) };
+        let filled = fill_in_held_mission(without_mission, Some(62));
+        assert_eq!(filled.mission, Some(62));
+        assert!(filled.text.starts_with("t\n") && filled.text.contains("mission 62"));
+        assert!(route_entry(filled, RoutingFacts::default()).is_ok());
+    }
+
+    #[test]
+    fn a_given_mission_or_another_kind_is_left_alone() {
+        let given = fill_in_held_mission(new_entry(EntryKind::Handoff), Some(9));
+        assert_eq!((given.mission, given.text.as_str()), (Some(1), "t"));
+        let pause = fill_in_held_mission(NewEntry { mission: None, ..new_entry(EntryKind::Paused) }, Some(9));
+        assert_eq!(pause.mission, None);
+        let no_session = fill_in_held_mission(NewEntry { mission: None, ..new_entry(EntryKind::Blocked) }, None);
+        assert_eq!(no_session.mission, None);
     }
 
     #[test]

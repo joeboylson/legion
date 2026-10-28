@@ -4,7 +4,7 @@
 
 use legion_proto::{
     tools::{command_for_tool_call, tool_listing, tools_for_position},
-    ENV_POSITION, ENV_DEPLOYMENT, NAME,
+    Command, EntryKind, NewEntry, ENV_POSITION, ENV_DEPLOYMENT, NAME,
 };
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -32,6 +32,9 @@ pub enum Handling {
     Reply(Value),
     /// A tool call to send to legiond; the reply goes back under `id`.
     CallTool { id: Value, command: legion_proto::Command },
+    /// A tool call turned down before it reached legiond. `record` says what
+    /// arrived, so the deployment log shows why.
+    Refused { reply: Value, record: String },
     /// Notifications need no answer.
     Nothing,
 }
@@ -69,7 +72,7 @@ pub fn handle_message(message: &Value, deployment: &str, position: &str) -> Hand
             let arguments = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
             match command_for_tool_call(tool_name, &arguments, deployment, position) {
                 Ok(command) => Handling::CallTool { id, command },
-                Err(problem) => Handling::Reply(tool_result(&id, &problem, true)),
+                Err(problem) => Handling::Refused { reply: tool_result(&id, &problem, true), record: refusal_record(tool_name, &problem, &params) },
             }
         }
         unknown => Handling::Reply(error_message(&id, METHOD_NOT_FOUND, &format!("no method {unknown}"))),
@@ -80,6 +83,22 @@ fn time_limit_for(command: &legion_proto::Command) -> Duration {
     match command {
         legion_proto::Command::MissionFinish { .. } => FINISH_CALL_TIME_LIMIT,
         _ => TOOL_CALL_TIME_LIMIT,
+    }
+}
+
+/// How a turned-down tool call reads in the log: the reason, then the call's
+/// params exactly as Claude sent them.
+fn refusal_record(tool_name: &str, problem: &str, params: &Value) -> String {
+    format!("{NAME} mcp turned down a {tool_name} call ({problem}). What arrived: {params}")
+}
+
+/// Writes a turned-down call to stderr and the deployment log. A failure here
+/// only loses the record, so it isn't passed on.
+async fn record_refusal(client: &mut Client, deployment: &str, record: String) {
+    eprintln!("{record}");
+    let entry = NewEntry { kind: EntryKind::Note, mission: None, to: None, text: record, answers: None };
+    if let Err(problem) = client.ask_within(Command::Post { deployment: deployment.to_string(), entry }, TOOL_CALL_TIME_LIMIT).await {
+        eprintln!("couldn't log the turned-down call: {problem}");
     }
 }
 
@@ -108,6 +127,10 @@ async fn serve_over(input: impl AsyncBufRead + Unpin, mut output: impl AsyncWrit
         let response = match handling {
             Handling::Nothing => continue,
             Handling::Reply(response) => response,
+            Handling::Refused { reply, record } => {
+                record_refusal(&mut client, deployment, record).await;
+                reply
+            }
             Handling::CallTool { id, command } => match client.ask_within(command.clone(), time_limit_for(&command)).await {
                 Ok(reply) => tool_result(&id, &reply_text(&reply), false),
                 Err(problem) => tool_result(&id, &problem, true),
@@ -185,9 +208,11 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_call_comes_back_as_a_tool_error() {
-        let response = reply(handle_message(&request("tools/call", json!({ "name": "start", "arguments": {} })), "r", "builder"));
-        assert_eq!(response["result"]["isError"], true);
+    fn a_bad_call_comes_back_as_a_tool_error_with_what_arrived() {
+        let call = handle_message(&request("tools/call", json!({ "name": "send", "arguments": { "text": "hi" } })), "r", "builder");
+        let Handling::Refused { reply, record } = call else { panic!("expected a refusal, got {call:?}") };
+        assert_eq!(reply["result"]["isError"], true);
+        assert!(record.contains("send call (to is missing)") && record.contains(r#""text":"hi""#), "{record}");
     }
 
     #[test]

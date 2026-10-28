@@ -330,17 +330,19 @@ pub fn command_for_tool_call(name: &str, arguments: &Value, deployment: &str, po
         "flag_decision" => post(&deployment, EntryKind::Decision, mission_number(arguments, "mission")?, None, text_argument(arguments, "decision")?),
         "share_tool" => Command::ToolShare { deployment, file: text_argument(arguments, "file")?, summary: text_argument(arguments, "summary")? },
         "suggest" => post(&deployment, EntryKind::Suggestion, None, None, text_argument(arguments, "text")?),
+        // A report with no mission goes on without one: legiond fills in the
+        // mission the caller's session holds.
         "handoff" => {
             let (next, note) = (text_argument(arguments, "next")?, text_argument(arguments, "note")?);
-            let mission = Some(required_mission(arguments)?);
+            let mission = mission_number(arguments, "mission")?;
             // The table ends at done, so a handoff there is the done tool.
             if next.trim().eq_ignore_ascii_case(PIPELINE_END) {
                 return Ok(post(&deployment, EntryKind::Done, mission, None, note));
             }
             post(&deployment, EntryKind::Handoff, mission, None, format!("→ {next}: {note}"))
         }
-        "done" => post(&deployment, EntryKind::Done, Some(required_mission(arguments)?), None, text_argument(arguments, "summary")?),
-        "blocked" => post(&deployment, EntryKind::Blocked, Some(required_mission(arguments)?), None, text_argument(arguments, "reason")?),
+        "done" => post(&deployment, EntryKind::Done, mission_number(arguments, "mission")?, None, text_argument(arguments, "summary")?),
+        "blocked" => post(&deployment, EntryKind::Blocked, mission_number(arguments, "mission")?, None, text_argument(arguments, "reason")?),
         "start" => Command::SessionStart {
             deployment,
             operator: text_argument(arguments, "operator")?,
@@ -453,6 +455,16 @@ mod tests {
     fn missing_or_wrong_arguments_are_named() {
         assert_eq!(command_for_tool_call("send", &json!({ "text": "hi" }), "deployment", "builder").unwrap_err(), "to is missing");
         assert!(command_for_tool_call("done", &json!({ "mission": "two", "summary": "s" }), "deployment", "builder").unwrap_err().contains("whole number"));
+    }
+
+    #[test]
+    fn a_report_without_a_mission_is_left_for_legiond_to_fill_in() {
+        for (tool, text_name) in [("done", "summary"), ("blocked", "reason")] {
+            let Command::Post { entry, .. } = command_for_tool_call(tool, &json!({ text_name: "t" }), "deployment", "builder").unwrap() else { panic!() };
+            assert_eq!(entry.mission, None, "{tool}");
+        }
+        let handoff = command_for_tool_call("handoff", &json!({ "next": "reviewer", "note": "n" }), "deployment", "builder");
+        assert!(matches!(handoff, Ok(Command::Post { entry, .. }) if entry.mission.is_none()));
     }
 
     #[test]
