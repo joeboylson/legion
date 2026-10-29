@@ -14,6 +14,7 @@ use crate::{
     context_handover::{fresh_start_prompt, HandoverPhase},
     constants::{DEPLOYMENT_CLOSED_REASON, LEGIOND_STOPPED_REASON, MISSION_FINISHED_REASON, SECONDS_PER_MINUTE, COMMANDER_RESTART_GAP_MS, DEFAULT_OPERATOR_COPY_LIMIT, MAX_WORKAROUND_ATTEMPTS, SESSION_START_GRACE},
     daemon::Daemon,
+    handoff_route::handoff_parts,
     naming::operator_of_position,
     sessions::Session,
     store::now_ms,
@@ -224,8 +225,19 @@ impl Daemon {
                         .into_iter()
                         .map(|mission| {
                             let handoffs = LogFilter { mission: Some(mission.number), kinds: Some(vec![EntryKind::Handoff]), ..Default::default() };
-                            let handed_off_at_ms = folder.store.entries(deployment_id, &handoffs).ok().and_then(|entries| entries.last().map(|entry| entry.at_ms));
+                            let latest_handoff = folder.store.entries(deployment_id, &handoffs).ok().and_then(|entries| entries.last().cloned());
+                            let handed_off_at_ms = latest_handoff.as_ref().map(|entry| entry.at_ms);
+                            let next_operators: Vec<String> = latest_handoff
+                                .as_ref()
+                                .and_then(|entry| handoff_parts(&entry.text))
+                                .map(|(next, _)| next.into_iter().map(String::from).collect())
+                                .unwrap_or_default();
+                            let is_handed_to_running = deployment_sessions.iter().any(|session| {
+                                !session.is_stopping() && next_operators.iter().any(|next| next == operator_of_position(&session.position))
+                            });
                             MissionView {
+                                handed_to: (!next_operators.is_empty()).then(|| next_operators.join(", ")),
+                                is_handed_to_running,
                                 number: mission.number,
                                 status: mission.status,
                                 handed_off_at_ms,

@@ -281,7 +281,8 @@ impl Daemon {
                 .is_some_and(|mission| mission.holder.as_deref() == Some(info.position.as_str()));
             let Some(session) = state.sessions.get_mut(session_id) else { return };
             let action = unreported_turn_action(&info.position, &reported_kinds, answer, holds_mission, session.was_sent_back_to_report);
-            session.was_sent_back_to_report = matches!(action, Some(UnreportedTurn::SendBack(_)));
+            // Once per session: a holder that's sent back and later goes quiet again is usually waiting.
+            session.was_sent_back_to_report |= matches!(action, Some(UnreportedTurn::SendBack(_)));
             action
         };
         let (to, text) = match action {

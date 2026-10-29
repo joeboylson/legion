@@ -289,7 +289,11 @@ once per 10 minutes).
    Legion moves the base branch up, replaying the commits if the base has
    moved on. If they clash, the mission goes back to its builder to fix just
    the clash, then finishes with no new round of checks. When it's
-   finished, Legion ends the mission's sessions.
+   finished, Legion ends the mission's sessions. The one exception is in a
+   folder without git: a session whose operator has another mission handed
+   off to it, with no one on that mission, is moved onto it and told to
+   carry on, so a copy given a batch finishes the batch. An operator can't
+   hand a mission off to itself; it keeps going instead.
 
 A big step can be **split into parts** (`split`, commander only). Each part
 gets its own checkout branched from the mission's; a copy of the operator
@@ -343,6 +347,8 @@ tool's first comment line.
   commander is asked to read that operator's screen.
 - **Points out stalled work** to an idle commander: a handoff no one picked
   up after 30 seconds, or a waiting mission whose first operator has room.
+  It names who the handoff went to and whether that operator is running,
+  and points the handoff out again if that operator stops running.
 - **Makes room.** When every copy of an operator is taken and one is idle,
   starting it again ends the idle one. It won't start a second copy on a
   mission or part one already holds; it says to message that one instead.
@@ -367,8 +373,8 @@ tool's first comment line.
 - **Reports sessions stuck before they start** (likely a "trust this
   folder?" question). An operator that ends a turn without reporting
   through its tools, while it still holds its mission, is sent back to
-  report. Otherwise, or if it still doesn't, the commander gets what it
-  wrote on screen.
+  report, once per session. Otherwise the commander gets what it wrote on
+  screen.
 
 ## Where things live
 

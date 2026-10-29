@@ -27,6 +27,7 @@ mod folder_details;
 mod folder_state;
 mod git;
 mod harness;
+mod handoff_route;
 mod ids;
 mod lean_prompt;
 mod log_commands;

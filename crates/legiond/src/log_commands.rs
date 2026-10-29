@@ -5,11 +5,15 @@ use legion_proto::{EntryKind, LogFilter, MissionStatus, NewEntry, Reply};
 use crate::{
     daemon::Daemon,
     entry_routing::{copy_on_mission, fill_in_held_mission, route_entry, RoutingFacts},
+    handoff_route::is_handoff_to_self,
     opencode_turn_end::ends_the_turn,
 };
 
 impl Daemon {
     pub fn post_from_caller(&self, deployment_key: &str, author: &str, entry: NewEntry) -> Result<Reply, String> {
+        if entry.kind == EntryKind::Handoff && is_handoff_to_self(author, &entry.text) {
+            return Err("that hands the mission to yourself, which starts no one: keep going on it, and hand off once your step is done".into());
+        }
         let mut unreachable = None;
         let (deployment_id, routed) = {
             let state = self.state.lock().unwrap();

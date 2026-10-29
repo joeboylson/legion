@@ -75,8 +75,8 @@ pub struct Session {
     pub next_turn_answers_announcements: Option<bool>,
     /// Its current turn only answers heads-ups, so what it writes needn't reach the commander.
     pub is_answering_announcements: bool,
-    /// It ended a turn without reporting and was sent back to report; a second
-    /// such turn goes to the commander instead.
+    /// It ended a turn without reporting and was sent back to report; every
+    /// later such turn in this session goes to the commander instead.
     pub was_sent_back_to_report: bool,
     pub screen: vt100::Parser,
     input: Box<dyn Write + Send>,

@@ -2,15 +2,17 @@
 
 use std::fs;
 
-use legion_proto::{EntryKind, MissionStatus, NewEntry, Reply, COMMANDER, HUMAN, LEGION, STRATEGIST};
+use legion_proto::{EntryKind, LogFilter, MissionStatus, NewEntry, Reply, SessionInfo, COMMANDER, HUMAN, LEGION, STRATEGIST};
 
 use crate::{
     constants::MISSIONS_FOLDER_NAME,
-    daemon::Daemon,
+    daemon::{Daemon, State},
     git::{finish_mission_branch, FinishOutcome},
+    handoff_route::{handoff_parts, waiting_mission_for_each, HandedOffMission},
     naming::mission_slug,
     session_lifecycle::end_mission_sessions,
     setup::read_settings,
+    store::RunningSession,
 };
 
 /// The file a mission is written to: its number and its title.
@@ -58,6 +60,67 @@ pub fn finish_entry(outcome: FinishOutcome, mission: u32, branch: &str, base: &s
         }
     };
     NewEntry { kind, mission: Some(mission), to, text, answers: None }
+}
+
+/// What a session hears when it's moved onto a mission queued behind the one it finished.
+pub fn carry_on_text(finished: u32, next: u32, handoff_note: Option<&str>) -> String {
+    let handed = handoff_note.map(|note| format!(" It was handed to you as:\n\n{note}")).unwrap_or_default();
+    format!("Mission {finished} is finished. Carry on with mission {next}; you're on it now.{handed}")
+}
+
+/// A session moved onto a waiting mission, and what to tell it.
+struct CarryOn {
+    info: SessionInfo,
+    message: NewEntry,
+}
+
+/// Moves each session on the finished mission onto a mission handed off to
+/// its operator that no one is on, instead of ending it: a copy given a batch
+/// would otherwise strand the rest of it. Only where finishing removed no
+/// worktree, since a moved session stays in its folder.
+fn carry_on_with_waiting_work(state: &mut State, folder_index: usize, deployment_id: &str, finished: u32) -> Result<Vec<CarryOn>, String> {
+    let store = &state.folders[folder_index].store;
+    let is_live_on = |mission: u32| {
+        state.sessions.values().any(|session| session.deployment == deployment_id && session.mission == Some(mission) && !session.is_stopping())
+    };
+    let latest_handoff = |mission: u32| -> Result<Option<String>, String> {
+        let handoffs = LogFilter { mission: Some(mission), kinds: Some(vec![EntryKind::Handoff]), ..Default::default() };
+        Ok(store.entries(deployment_id, &handoffs)?.pop().map(|entry| entry.text))
+    };
+    let missions: Vec<HandedOffMission> = store
+        .missions(deployment_id)?
+        .into_iter()
+        .filter(|mission| mission.status == MissionStatus::HandedOff)
+        .map(|mission| Ok(HandedOffMission { number: mission.number, status: mission.status, latest_handoff: latest_handoff(mission.number)?, has_session: is_live_on(mission.number) }))
+        .collect::<Result<_, String>>()?;
+    // A part has its own checkout of the finished mission, so it has nothing to carry on with.
+    let finishing: Vec<String> = state
+        .sessions
+        .values()
+        .filter(|session| session.deployment == deployment_id && session.mission == Some(finished) && session.part.is_none() && !session.is_stopping())
+        .map(|session| session.position.clone())
+        .collect();
+    let finishing_positions: Vec<&str> = finishing.iter().map(String::as_str).collect();
+    let moves = waiting_mission_for_each(&finishing_positions, &missions);
+    let note_of = |mission: u32| missions.iter().find(|waiting| waiting.number == mission).and_then(|waiting| waiting.latest_handoff.clone());
+    moves
+        .into_iter()
+        .map(|(position, next)| {
+            let (session_id, session) = state
+                .sessions
+                .iter_mut()
+                .find(|(_, session)| session.deployment == deployment_id && session.position == position)
+                .ok_or_else(|| format!("{position} isn't running"))?;
+            session.mission = Some(next);
+            let info = session.info();
+            let running = RunningSession { deployment: info.deployment.clone(), position: info.position.clone(), mission: info.mission, part: info.part, session_id: session_id.clone() };
+            state.folders[folder_index].store.record_running_session(&running)?;
+            let handoff = note_of(next);
+            let note = handoff.as_deref().and_then(handoff_parts).map(|(_, note)| note);
+            let message = NewEntry { kind: EntryKind::Message, mission: Some(next), to: Some(position.to_string()), text: carry_on_text(finished, next, note), answers: None };
+            Ok(CarryOn { info, message })
+        })
+        .collect()
 }
 
 /// The log entry for a mission marked done by someone other than its operator.
@@ -118,7 +181,7 @@ impl Daemon {
     }
 
     pub fn finish_mission(&self, deployment_key: &str, number: u32) -> Result<Reply, String> {
-        let (deployment_id, entry, has_strategist) = {
+        let (deployment_id, entry, has_strategist, carried_on) = {
             let mut guard = self.state.lock().unwrap();
             // Through one borrow, so its folders and sessions can be used apart.
             let state = &mut *guard;
@@ -129,6 +192,7 @@ impl Daemon {
                 return Err(format!("mission {number} isn't done yet"));
             }
             let worktree = folder.store.worktree(number)?.filter(|worktree| !worktree.is_removed);
+            let has_worktree = worktree.is_some();
             // A folder that isn't a git repo gives a mission no branch of its
             // own: its work lands elsewhere (pull requests in other repos), so
             // finishing only closes the mission.
@@ -145,14 +209,22 @@ impl Daemon {
                 }
             };
             let has_strategist = is_finished && state.running_positions(&deployment.id).iter().any(|position| position == STRATEGIST);
+            let carried_on = match (is_finished, has_worktree) {
+                (true, false) => carry_on_with_waiting_work(state, folder_index, &deployment.id, number)?,
+                _ => Vec::new(),
+            };
             if is_finished {
                 // Operators stay idle between handoffs in case the work comes
                 // back; once it's finished, nothing will.
                 end_mission_sessions(&mut state.sessions, &deployment.id, number)?;
             }
-            (deployment.id, entry, has_strategist)
+            (deployment.id, entry, has_strategist, carried_on)
         };
         let finished = self.post_entry(&deployment_id, LEGION, entry)?;
+        carried_on.into_iter().try_for_each(|carry_on| {
+            self.announce_session(&carry_on.info);
+            self.post_entry(&deployment_id, LEGION, carry_on.message).map(|_| ())
+        })?;
         if has_strategist {
             let request = NewEntry { kind: EntryKind::Message, mission: Some(number), to: Some(STRATEGIST.into()), text: postmortem_request(number), answers: None };
             self.post_entry(&deployment_id, LEGION, request)?;
@@ -164,6 +236,13 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_carrying_on_hears_which_mission_and_its_handoff() {
+        let text = carry_on_text(103, 104, Some("reviewed: merge it"));
+        assert!(text.starts_with("Mission 103 is finished. Carry on with mission 104; you're on it now."));
+        assert!(text.ends_with("It was handed to you as:\n\nreviewed: merge it"));
+    }
 
     #[test]
     fn the_strategist_is_asked_for_a_postmortem_of_the_mission() {

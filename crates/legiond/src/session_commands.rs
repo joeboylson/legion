@@ -16,6 +16,7 @@ use crate::{
     daemon::{Daemon, State},
     entry_filter::briefing_history,
     git::{create_worktree, current_branch, is_git_repo},
+    handoff_route::handoff_parts,
     naming::{choose_position, copy_positions, idle_copy_to_free, operator_of_position},
     permission_answers::answers_permission_question,
     callouts::{callouts_path, read_callouts},
@@ -104,9 +105,8 @@ fn handoff_note_for<'a>(operator: &str, history: &'a [Entry]) -> Option<&'a str>
         .iter()
         .rev()
         .find(|entry| entry.kind == EntryKind::Handoff)
-        .and_then(|entry| entry.text.strip_prefix("→ "))
-        .and_then(|text| text.split_once(": "))
-        .filter(|(next, _)| next.split(',').any(|name| name.trim() == operator))
+        .and_then(|entry| handoff_parts(&entry.text))
+        .filter(|(next, _)| next.contains(&operator))
         .map(|(_, note)| note)
 }
 
